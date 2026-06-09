@@ -214,6 +214,19 @@ final channelCanvasProvider = FutureProvider.family<ChannelCanvas, String>((
   );
 });
 
+/// Channel-scoped kind:5 deletion tags. The `h` tag lets channel-scoped
+/// subscriptions observe the delete; the `e` tag points at the target event.
+@visibleForTesting
+List<List<String>> buildDeleteMessageTags({
+  required String channelId,
+  required String eventId,
+}) {
+  return [
+    ['h', channelId],
+    ['e', eventId],
+  ];
+}
+
 class ChannelActions {
   final Ref _ref;
   final RelaySessionNotifier _session;
@@ -438,13 +451,14 @@ class ChannelActions {
     );
   }
 
-  Future<void> deleteMessage(String eventId) async {
+  Future<void> deleteMessage({
+    required String channelId,
+    required String eventId,
+  }) async {
     await _signedEventRelay.submit(
       kind: EventKind.deletion,
       content: '',
-      tags: [
-        ['e', eventId],
-      ],
+      tags: buildDeleteMessageTags(channelId: channelId, eventId: eventId),
     );
   }
 

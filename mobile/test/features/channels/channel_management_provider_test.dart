@@ -84,4 +84,18 @@ void main() {
     expect(details.ttlDeadline, isNotNull);
     expect(details.ttlDeadline!.isUtc, isTrue);
   });
+
+  group('buildDeleteMessageTags', () {
+    test('emits both channel h tag and target e tag', () {
+      final tags = buildDeleteMessageTags(
+        channelId: 'c8c629ae-d35c-44fa-bc39-f6c1816756cc',
+        eventId: 'abc123',
+      );
+
+      expect(tags, [
+        ['h', 'c8c629ae-d35c-44fa-bc39-f6c1816756cc'],
+        ['e', 'abc123'],
+      ]);
+    });
+  });
 }
