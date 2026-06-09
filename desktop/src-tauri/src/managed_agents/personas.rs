@@ -952,6 +952,95 @@ pub struct PackSummary {
     pub path: PathBuf,
 }
 
+/// Re-read pack directories and update persona records whose source content
+/// has changed. Runs on launch so pack edits on disk propagate without
+/// manual intervention.
+pub fn sync_pack_personas(app: &AppHandle) -> Result<(), String> {
+    let mut records = load_personas(app)?;
+    let packs = packs_dir(app)?;
+
+    if !packs.exists() {
+        return Ok(());
+    }
+
+    let mut changed = false;
+
+    for record in records.iter_mut() {
+        let pack_id = match &record.source_pack {
+            Some(id) => id.clone(),
+            None => continue,
+        };
+        let slug = match &record.source_pack_persona_slug {
+            Some(s) => s.clone(),
+            None => continue,
+        };
+
+        // Find the pack directory whose resolved ID matches
+        let pack_dir_entries =
+            fs::read_dir(&packs).map_err(|e| format!("failed to read packs dir: {e}"))?;
+
+        let mut found = false;
+        for entry in pack_dir_entries {
+            let entry = entry.map_err(|e| format!("dir entry error: {e}"))?;
+            let dir = entry.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            let resolved = match sprout_persona::resolve::resolve_pack(&dir) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            if resolved.id != pack_id {
+                continue;
+            }
+
+            // Found the matching pack — find the persona by slug
+            if let Some(persona) = resolved.personas.iter().find(|p| p.name == slug) {
+                let mut record_changed = false;
+
+                if record.system_prompt != persona.system_prompt {
+                    record.system_prompt = persona.system_prompt.clone();
+                    record_changed = true;
+                }
+                if record.model != persona.model {
+                    record.model = persona.model.clone();
+                    record_changed = true;
+                }
+                if record.avatar_url != persona.avatar {
+                    record.avatar_url = persona.avatar.clone();
+                    record_changed = true;
+                }
+                if record.display_name != persona.display_name {
+                    record.display_name = persona.display_name.clone();
+                    record_changed = true;
+                }
+
+                if record_changed {
+                    record.updated_at = now_iso();
+                    changed = true;
+                    eprintln!(
+                        "sprout-desktop: sync-pack-personas: updated {:?} from pack {:?}",
+                        record.display_name, pack_id
+                    );
+                }
+            }
+            found = true;
+            break;
+        }
+
+        if !found {
+            // Pack directory no longer exists or doesn't resolve — skip silently
+            continue;
+        }
+    }
+
+    if changed {
+        save_personas(app, &records)?;
+    }
+
+    Ok(())
+}
+
 pub fn load_personas(app: &AppHandle) -> Result<Vec<PersonaRecord>, String> {
     let path = personas_store_path(app)?;
     let now = now_iso();

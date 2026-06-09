@@ -524,6 +524,10 @@ pub fn run() {
             migration::reconcile_provider_mcp_commands(&app_handle);
             migration::migrate_persona_provider_to_runtime(&app_handle);
 
+            if let Err(e) = managed_agents::sync_pack_personas(&app_handle) {
+                eprintln!("sprout-desktop: sync-pack-personas: {e}");
+            }
+
             // Resolve persisted identity key (env var → file → generate+save).
             // This is fatal — the app should not start with an ephemeral identity
             // that will be lost on restart, as that silently breaks channel
