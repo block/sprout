@@ -52,9 +52,9 @@ pub struct TaskMeta {
     pub channel_id: Option<Uuid>,
     /// Clone of batch for Queue mode panic recovery.
     pub recoverable_batch: Option<FlushBatch>,
-    /// Cancel signal for the in-flight prompt task.
-    /// `None` for heartbeat tasks (not cancellable) and after signal is consumed.
-    pub cancel_tx: Option<tokio::sync::oneshot::Sender<CancelMode>>,
+    /// Control signal for the in-flight prompt task.
+    /// `None` for heartbeat tasks (not controllable) and after signal is consumed.
+    pub control_tx: Option<tokio::sync::oneshot::Sender<ControlSignal>>,
 }
 
 /// Agent-level model capabilities. Populated on first session creation.
@@ -159,13 +159,16 @@ pub enum PromptSource {
     Heartbeat,
 }
 
-/// How an in-flight channel turn should be cancelled.
+/// Control signal for an in-flight channel turn.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CancelMode {
+pub enum ControlSignal {
     /// Stop the current turn and drop its triggering batch.
-    Stop,
+    Cancel,
     /// Stop the current turn and requeue its triggering batch for a merged re-prompt.
     Interrupt,
+    /// Stop the current turn and drop its triggering batch. The session is
+    /// invalidated just like cancel; the next turn creates a fresh session.
+    Rotate,
 }
 
 /// Outcome of a prompt task.
@@ -609,7 +612,7 @@ pub async fn run_prompt_task(
     prompt_text: Option<String>,
     ctx: Arc<PromptContext>,
     result_tx: mpsc::UnboundedSender<PromptResult>,
-    cancel_rx: Option<tokio::sync::oneshot::Receiver<CancelMode>>,
+    control_rx: Option<tokio::sync::oneshot::Receiver<ControlSignal>>,
 ) {
     // ── Determine source and resolve/create session ───────────────────────
 
@@ -1008,11 +1011,11 @@ pub async fn run_prompt_task(
         None => vec![prompt_text.as_str()],
     };
 
-    // ── Cancel-aware prompt dispatch ──────────────────────────────────────
-    // When cancel_rx is Some (channel tasks), wrap the prompt in select! so
-    // the main loop can interrupt it. Heartbeats (cancel_rx=None) take the
-    // simple await path — they are not cancellable.
-    let prompt_result = match cancel_rx {
+    // ── Control-aware prompt dispatch ─────────────────────────────────────
+    // When control_rx is Some (channel tasks), wrap the prompt in select! so
+    // the main loop can cancel, interrupt, or rotate it. Heartbeats
+    // (control_rx=None) take the simple await path — they are not controllable.
+    let prompt_result = match control_rx {
         None => {
             // Heartbeat / non-cancellable path.
             agent
@@ -1035,8 +1038,8 @@ pub async fn run_prompt_task(
                     ctx.max_turn_duration,
                 ) => result,
                 mode = rx => {
-                    let cancel_mode = mode.unwrap_or(CancelMode::Stop);
-                    // Cancel signal received. Guard against Race 1: the turn may
+                    let control_signal = mode.unwrap_or(ControlSignal::Cancel);
+                    // Control signal received. Guard against Race 1: the turn may
                     // have completed naturally just as cancel fired.
                     if agent.acp.has_in_flight_prompt() {
                         // Prompt is genuinely in-flight — cancel it.
@@ -1051,9 +1054,9 @@ pub async fn run_prompt_task(
                             Ok(stop_reason) => {
                                 log_stop_reason(&source, &stop_reason);
                                 agent.state.invalidate(&source);
-                                let retry_batch = match cancel_mode {
-                                    CancelMode::Interrupt => requeue_batch_if_queue(&ctx, batch),
-                                    CancelMode::Stop => None,
+                                let retry_batch = match control_signal {
+                                    ControlSignal::Interrupt => requeue_batch_if_queue(&ctx, batch),
+                                    ControlSignal::Cancel | ControlSignal::Rotate => None,
                                 };
                                 let _ = result_tx.send(PromptResult {
                                     agent,
@@ -1065,9 +1068,9 @@ pub async fn run_prompt_task(
                             }
                             Err(AcpError::AgentExited) => {
                                 agent.state.invalidate_all();
-                                let retry_batch = match cancel_mode {
-                                    CancelMode::Interrupt => requeue_batch_if_queue(&ctx, batch),
-                                    CancelMode::Stop => None,
+                                let retry_batch = match control_signal {
+                                    ControlSignal::Interrupt => requeue_batch_if_queue(&ctx, batch),
+                                    ControlSignal::Cancel | ControlSignal::Rotate => None,
                                 };
                                 let _ = result_tx.send(PromptResult {
                                     agent,
@@ -1080,9 +1083,9 @@ pub async fn run_prompt_task(
                             Err(AcpError::IdleTimeout(_) | AcpError::HardTimeout) => {
                                 // Cancel drain timed out — agent state uncertain.
                                 agent.state.invalidate(&source);
-                                let retry_batch = match cancel_mode {
-                                    CancelMode::Interrupt => requeue_batch_if_queue(&ctx, batch),
-                                    CancelMode::Stop => None,
+                                let retry_batch = match control_signal {
+                                    ControlSignal::Interrupt => requeue_batch_if_queue(&ctx, batch),
+                                    ControlSignal::Cancel | ControlSignal::Rotate => None,
                                 };
                                 let _ = result_tx.send(PromptResult {
                                     agent,
@@ -1094,9 +1097,9 @@ pub async fn run_prompt_task(
                             }
                             Err(e) => {
                                 agent.state.invalidate(&source);
-                                let retry_batch = match cancel_mode {
-                                    CancelMode::Interrupt => requeue_batch_if_queue(&ctx, batch),
-                                    CancelMode::Stop => None,
+                                let retry_batch = match control_signal {
+                                    ControlSignal::Interrupt => requeue_batch_if_queue(&ctx, batch),
+                                    ControlSignal::Cancel | ControlSignal::Rotate => None,
                                 };
                                 let _ = result_tx.send(PromptResult {
                                     agent,
