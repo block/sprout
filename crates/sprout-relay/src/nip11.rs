@@ -59,21 +59,24 @@ pub struct RelayLimitation {
     /// Minimum proof-of-work difficulty required for events.
     pub min_pow_difficulty: Option<u32>,
     /// Whether NIP-42 authentication is required before subscribing or
-    /// publishing events.
+    /// publishing events. False only when unauthenticated reads are enabled for
+    /// the configured public channel allowlist; all writes still require auth.
     pub auth_required: bool,
     /// Whether payment is required to use the relay.
     pub payment_required: bool,
-    /// Whether writes are restricted to authorized pubkeys.
+    /// Whether writes are restricted to authorized pubkeys. Always true: public
+    /// readability never grants EVENT/write permission.
     pub restricted_writes: bool,
 }
 
 /// Canonical `RelayLimitation` advertised by this relay.
 ///
-/// `auth_required` is always `true`: the REQ, EVENT, and COUNT handlers
-/// unconditionally reject connections that are not in
-/// `AuthState::Authenticated`. This is independent of the REST API token
-/// toggle (`config.require_auth_token`).
-fn relay_limitation() -> RelayLimitation {
+/// Build the relay limitation block.
+///
+/// `auth_required` is false when public-readable channels are configured because
+/// unauthenticated REQ/COUNT are allowed for that constrained channel allowlist.
+/// EVENT/write paths remain authenticated-only via `restricted_writes=true`.
+fn relay_limitation(public_read_enabled: bool) -> RelayLimitation {
     RelayLimitation {
         max_message_length: Some(MAX_FRAME_BYTES as u64),
         max_subscriptions: Some(1024),
@@ -81,7 +84,7 @@ fn relay_limitation() -> RelayLimitation {
         max_limit: Some(10_000),
         max_subid_length: Some(256),
         min_pow_difficulty: None,
-        auth_required: true,
+        auth_required: !public_read_enabled,
         payment_required: false,
         restricted_writes: true,
     }
@@ -102,7 +105,11 @@ impl RelayInfo {
     /// gates on NIP-43 events — i.e. has a stable key AND enforces
     /// membership. NIP-43 events are verified against `self`, so it is a
     /// programmer error to advertise NIP-43 without a `relay_self`.
-    pub fn build(relay_self: Option<&str>, advertise_nip43: bool) -> Self {
+    pub fn build(
+        relay_self: Option<&str>,
+        advertise_nip43: bool,
+        public_read_enabled: bool,
+    ) -> Self {
         debug_assert!(
             !advertise_nip43 || relay_self.is_some(),
             "advertise_nip43=true requires relay_self=Some — NIP-43 events are verified against `self`"
@@ -121,7 +128,7 @@ impl RelayInfo {
             supported_nips,
             software: "https://github.com/block/sprout".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
-            limitation: Some(relay_limitation()),
+            limitation: Some(relay_limitation(public_read_enabled)),
             relay_self: relay_self.map(|s| s.to_string()),
         }
     }
@@ -131,8 +138,12 @@ impl RelayInfo {
 pub async fn relay_info_handler(
     axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>,
 ) -> axum::response::Json<RelayInfo> {
-    let (relay_self, advertise_nip43) = nip11_facts(&state);
-    axum::response::Json(RelayInfo::build(relay_self.as_deref(), advertise_nip43))
+    let (relay_self, advertise_nip43, public_read_enabled) = nip11_facts(&state);
+    axum::response::Json(RelayInfo::build(
+        relay_self.as_deref(),
+        advertise_nip43,
+        public_read_enabled,
+    ))
 }
 
 /// Derives the two NIP-11 facts that depend on runtime config:
@@ -147,11 +158,12 @@ pub async fn relay_info_handler(
 ///
 /// Centralised so the content-negotiated root handler and the dedicated
 /// `/info` endpoint can't drift apart.
-pub(crate) fn nip11_facts(state: &crate::state::AppState) -> (Option<String>, bool) {
+pub(crate) fn nip11_facts(state: &crate::state::AppState) -> (Option<String>, bool, bool) {
     let has_stable_key = state.config.relay_private_key.is_some();
     let relay_self = has_stable_key.then(|| state.relay_keypair.public_key().to_hex());
     let advertise_nip43 = has_stable_key && state.config.require_relay_membership;
-    (relay_self, advertise_nip43)
+    let public_read_enabled = !state.config.public_readable_channels.is_empty();
+    (relay_self, advertise_nip43, public_read_enabled)
 }
 
 #[cfg(test)]
@@ -185,7 +197,12 @@ mod tests {
         // REQ, EVENT, and COUNT all unconditionally require
         // `AuthState::Authenticated` (see `crates/sprout-relay/src/handlers/`),
         // so the NIP-11 doc must advertise it.
-        assert!(relay_limitation().auth_required);
+        assert!(relay_limitation(false).auth_required);
+    }
+
+    #[test]
+    fn auth_required_is_advertised_false_when_public_read_enabled() {
+        assert!(!relay_limitation(true).auth_required);
     }
 
     #[test]
@@ -214,7 +231,7 @@ mod tests {
     /// Open relay, ephemeral key — both `self` and NIP-43 are absent.
     #[test]
     fn build_open_relay_ephemeral_key_omits_self_and_nip43() {
-        let info = RelayInfo::build(None, false);
+        let info = RelayInfo::build(None, false, false);
         assert!(info.relay_self.is_none());
         assert!(!info.supported_nips.contains(&NIP_RELAY_MEMBERSHIP));
     }
@@ -227,7 +244,7 @@ mod tests {
     #[test]
     fn build_open_relay_stable_key_advertises_self_but_not_nip43() {
         let pk = "0000000000000000000000000000000000000000000000000000000000000001";
-        let info = RelayInfo::build(Some(pk), false);
+        let info = RelayInfo::build(Some(pk), false, false);
         assert_eq!(info.relay_self.as_deref(), Some(pk));
         assert!(!info.supported_nips.contains(&NIP_RELAY_MEMBERSHIP));
     }
@@ -236,7 +253,7 @@ mod tests {
     #[test]
     fn build_membership_relay_advertises_self_and_nip43() {
         let pk = "0000000000000000000000000000000000000000000000000000000000000001";
-        let info = RelayInfo::build(Some(pk), true);
+        let info = RelayInfo::build(Some(pk), true, false);
         assert_eq!(info.relay_self.as_deref(), Some(pk));
         assert!(info.supported_nips.contains(&NIP_RELAY_MEMBERSHIP));
     }
@@ -247,6 +264,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "advertise_nip43=true requires relay_self=Some")]
     fn build_nip43_without_self_panics_in_debug() {
-        let _ = RelayInfo::build(None, true);
+        let _ = RelayInfo::build(None, true, false);
     }
 }

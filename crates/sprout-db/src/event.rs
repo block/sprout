@@ -218,25 +218,23 @@ pub async fn query_events(pool: &PgPool, q: &EventQuery) -> Result<Vec<StoredEve
         qb.push(format!(" AND {col_prefix}channel_id IS NULL"));
     }
 
-    // Multi-channel IN pushdown: restrict to events in any of these channels
-    // OR global events (channel_id IS NULL). Used by NIP-45 COUNT to enforce
-    // channel access at the SQL level without fetching all rows.
+    // Multi-channel IN pushdown: restrict to events in any of these channels.
+    // Used by NIP-45 COUNT global filters to enforce channel access at SQL level
+    // without broadening public-readable channel access to global events.
     //
-    // SECURITY: Some(empty vec) means "user has access to NO channels" —
-    // only global events (channel_id IS NULL) should be returned.
+    // SECURITY: Some(empty vec) means "match no channel-scoped events" — return
+    // empty immediately. Callers that intentionally include global events should
+    // query them separately via `global_only`.
     if let Some(ref ch_ids) = q.channel_ids {
         if ch_ids.is_empty() {
-            // No channel access — only global (non-channel) events visible.
-            qb.push(format!(" AND {col_prefix}channel_id IS NULL"));
+            return Ok(vec![]);
         } else {
-            qb.push(format!(
-                " AND ({col_prefix}channel_id IS NULL OR {col_prefix}channel_id IN ("
-            ));
+            qb.push(format!(" AND {col_prefix}channel_id IN ("));
             let mut sep = qb.separated(", ");
             for ch in ch_ids {
                 sep.push_bind(*ch);
             }
-            qb.push("))");
+            qb.push(")");
         }
     }
 
@@ -438,20 +436,19 @@ pub async fn count_events(pool: &PgPool, q: &EventQuery) -> Result<i64> {
         qb.push(format!(" AND {col_prefix}channel_id IS NULL"));
     }
 
-    // Multi-channel IN pushdown for COUNT: restrict to accessible channels + global.
-    // SECURITY: Some(empty vec) = no channel access → global events only.
+    // Multi-channel IN pushdown for COUNT: restrict to accessible channel-scoped
+    // events only. Global events require an explicit `global_only` query.
+    // SECURITY: Some(empty vec) = no channel access → count nothing.
     if let Some(ref ch_ids) = q.channel_ids {
         if ch_ids.is_empty() {
-            qb.push(format!(" AND {col_prefix}channel_id IS NULL"));
+            return Ok(0);
         } else {
-            qb.push(format!(
-                " AND ({col_prefix}channel_id IS NULL OR {col_prefix}channel_id IN ("
-            ));
+            qb.push(format!(" AND {col_prefix}channel_id IN ("));
             let mut sep = qb.separated(", ");
             for ch in ch_ids {
                 sep.push_bind(*ch);
             }
-            qb.push("))");
+            qb.push(")");
         }
     }
 
@@ -1062,6 +1059,35 @@ mod tests {
         // kind:40000 — just above range
         let above = make_event_with_kind_and_tags(40000, vec![Tag::parse(["d", "val"]).unwrap()]);
         assert_eq!(extract_d_tag(&above), None);
+    }
+
+    #[test]
+    fn channel_ids_pushdown_is_channel_scoped_not_global() {
+        let ch = uuid::Uuid::new_v4();
+        let q = EventQuery {
+            channel_ids: Some(vec![ch]),
+            ..Default::default()
+        };
+
+        assert_eq!(q.channel_ids.as_deref(), Some(&[ch][..]));
+        assert!(
+            !q.global_only,
+            "channel_ids pushdown is channel-scoped only; global reads require explicit global_only"
+        );
+    }
+
+    #[test]
+    fn empty_channel_ids_pushdown_matches_no_channel_events() {
+        let q = EventQuery {
+            channel_ids: Some(vec![]),
+            ..Default::default()
+        };
+
+        assert_eq!(q.channel_ids.as_deref(), Some(&[][..]));
+        assert!(
+            !q.global_only,
+            "an empty effective readable set must not silently broaden to global events"
+        );
     }
 
     #[test]

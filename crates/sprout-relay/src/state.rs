@@ -445,6 +445,35 @@ impl AppState {
         self.accessible_channels_cache.invalidate_all();
     }
 
+    /// Resolve configured public-readable channels to live, non-deleted channel IDs.
+    ///
+    /// DB errors fail closed by returning the error to the caller; invalid UUIDs are
+    /// already dropped during config parsing.
+    pub async fn public_readable_channel_ids(&self) -> Result<Vec<Uuid>, sprout_db::DbError> {
+        self.db
+            .filter_live_channel_ids(&self.config.public_readable_channels)
+            .await
+    }
+
+    /// Get the effective channel read set for an authenticated caller.
+    ///
+    /// This is the single source of truth for authenticated reads: normal
+    /// membership/open-channel access, optionally narrowed by an API-token channel
+    /// allowlist, unioned with the relay's live public-readable channel policy.
+    pub async fn effective_readable_channel_ids(
+        &self,
+        pubkey: &[u8],
+        token_channel_ids: Option<&[Uuid]>,
+    ) -> Result<Vec<Uuid>, sprout_db::DbError> {
+        let mut ids = self.get_accessible_channel_ids_cached(pubkey).await?;
+        if let Some(allowed) = token_channel_ids {
+            ids.retain(|channel_id| allowed.contains(channel_id));
+        }
+        let public_readable = self.public_readable_channel_ids().await?;
+        extend_unique_channel_ids(&mut ids, &public_readable);
+        Ok(ids)
+    }
+
     /// Get accessible channel IDs with a 10-second cache. Falls back to DB on miss.
     pub async fn get_accessible_channel_ids_cached(
         &self,
@@ -459,6 +488,15 @@ impl AppState {
         let result = self.db.get_accessible_channel_ids(pubkey).await?;
         self.accessible_channels_cache.insert(key, result.clone());
         Ok(result)
+    }
+}
+
+/// Extend a channel-id set while preserving order and avoiding duplicates.
+pub(crate) fn extend_unique_channel_ids(channels: &mut Vec<Uuid>, extra: &[Uuid]) {
+    for id in extra {
+        if !channels.contains(id) {
+            channels.push(*id);
+        }
     }
 }
 

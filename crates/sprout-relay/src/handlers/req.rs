@@ -36,7 +36,8 @@ pub async fn handle_req(
     conn: Arc<ConnectionState>,
     state: Arc<AppState>,
 ) {
-    let (conn_id, pubkey_bytes, token_channel_ids) = {
+    let conn_id = conn.conn_id;
+    let (pubkey_bytes, token_channel_ids) = {
         let auth = conn.auth_state.read().await;
         match &*auth {
             AuthState::Authenticated(ctx) => {
@@ -49,46 +50,69 @@ pub async fn handle_req(
                     return;
                 }
 
-                let pk_bytes = ctx.pubkey.to_bytes().to_vec();
-
-                let subs = conn.subscriptions.lock().await;
-                if !subs.contains_key(&sub_id) && subs.len() >= MAX_SUBSCRIPTIONS {
-                    conn.send(RelayMessage::closed(
-                        &sub_id,
-                        "error: too many subscriptions",
-                    ));
-                    return;
-                }
-
-                (conn.conn_id, pk_bytes, ctx.channel_ids.clone())
+                (
+                    Some(ctx.pubkey.to_bytes().to_vec()),
+                    ctx.channel_ids.clone(),
+                )
             }
-            _ => {
-                conn.send(RelayMessage::notice(
-                    "auth-required: authenticate before subscribing",
-                ));
-                conn.send(RelayMessage::closed(
-                    &sub_id,
-                    "auth-required: not authenticated",
-                ));
-                return;
-            }
+            _ => (None, None),
         }
     };
 
-    let mut accessible_channels = match state.get_accessible_channel_ids_cached(&pubkey_bytes).await
-    {
-        Ok(ids) => ids,
-        Err(e) => {
-            warn!(conn_id = %conn_id, "Failed to get accessible channels: {e}");
-            conn.send(RelayMessage::closed(&sub_id, "error: database error"));
-            return;
-        }
-    };
-    if let Some(allowed) = token_channel_ids.as_deref() {
-        accessible_channels.retain(|channel_id| allowed.contains(channel_id));
+    let subs = conn.subscriptions.lock().await;
+    if !subs.contains_key(&sub_id) && subs.len() >= MAX_SUBSCRIPTIONS {
+        conn.send(RelayMessage::closed(
+            &sub_id,
+            "error: too many subscriptions",
+        ));
+        return;
     }
+    drop(subs);
 
     let channel_id = extract_channel_id_from_filters(&filters);
+
+    let (accessible_channels, include_global) = if let Some(pubkey_bytes) = pubkey_bytes.as_deref()
+    {
+        let ids = match state
+            .effective_readable_channel_ids(pubkey_bytes, token_channel_ids.as_deref())
+            .await
+        {
+            Ok(ids) => ids,
+            Err(e) => {
+                warn!(conn_id = %conn_id, "Failed to get effective readable channels: {e}");
+                conn.send(RelayMessage::closed(&sub_id, "error: database error"));
+                return;
+            }
+        };
+        (ids, token_channel_ids.is_none())
+    } else {
+        let public_readable_channels = match state.public_readable_channel_ids().await {
+            Ok(ids) => ids,
+            Err(e) => {
+                warn!(conn_id = %conn_id, "Failed to resolve public-readable channels: {e}");
+                conn.send(RelayMessage::closed(&sub_id, "error: database error"));
+                return;
+            }
+        };
+        if public_readable_channels.is_empty() {
+            conn.send(RelayMessage::notice(
+                "auth-required: authenticate before subscribing",
+            ));
+            conn.send(RelayMessage::closed(
+                &sub_id,
+                "auth-required: not authenticated",
+            ));
+            return;
+        }
+        if channel_id.is_none() {
+            conn.send(RelayMessage::closed(
+                &sub_id,
+                "restricted: public reads require #h channel scope",
+            ));
+            return;
+        }
+        (public_readable_channels, false)
+    };
 
     // ── #p / engram gating for globally-stored sensitive kinds ───────────────
     // Applied BEFORE the NIP-50 search branch so that an authenticated member
@@ -100,7 +124,14 @@ pub async fn handle_req(
     // channel-scoped subs can never receive globally-stored events because of
     // the fan_out() invariant in subscription.rs.
     if channel_id.is_none() {
-        let authed_pubkey_hex = hex::encode(&pubkey_bytes);
+        let Some(pubkey_bytes) = pubkey_bytes.as_deref() else {
+            conn.send(RelayMessage::closed(
+                &sub_id,
+                "restricted: public reads require #h channel scope",
+            ));
+            return;
+        };
+        let authed_pubkey_hex = hex::encode(pubkey_bytes);
         if !p_gated_filters_authorized(&filters, &authed_pubkey_hex) {
             conn.send(RelayMessage::closed(
                 &sub_id,
@@ -135,7 +166,7 @@ pub async fn handle_req(
             &sub_id,
             &filters,
             &accessible_channels,
-            token_channel_ids.is_none(),
+            include_global,
             &conn,
             &state,
         )
@@ -454,12 +485,7 @@ async fn handle_search_req(
 /// Convert a single NIP-01 filter into an [`EventQuery`] for the database.
 ///
 /// Public wrapper for use by the HTTP bridge and COUNT handler.
-/// Resolves accessible channels for the given pubkey and builds the query.
-pub async fn build_event_query_from_filter(
-    filter: &Filter,
-    _pubkey_bytes: &[u8],
-    _state: &AppState,
-) -> EventQuery {
+pub fn build_event_query_from_filter(filter: &Filter) -> EventQuery {
     let channel_id = extract_channel_id_from_filter(filter);
     filter_to_query_params(filter, channel_id)
 }
@@ -944,6 +970,46 @@ mod tests {
         assert!(
             build_search_channel_scope_filter(&[], false).is_none(),
             "restricted tokens must not fall back to global search results"
+        );
+    }
+
+    #[test]
+    fn public_viewer_search_scope_excludes_global_results() {
+        let public_channel = uuid::Uuid::new_v4();
+
+        let scope = build_search_channel_scope_filter(&[public_channel], false)
+            .expect("public viewer should search configured channel");
+
+        assert_eq!(scope, format!("channel_id:=[{public_channel}]"));
+        assert!(
+            !scope.contains("__global__"),
+            "anonymous public reads must not include global search hits"
+        );
+    }
+
+    #[test]
+    fn extend_unique_unions_public_readable_channels_without_duplicates() {
+        let member_channel = uuid::Uuid::new_v4();
+        let shared_channel = uuid::Uuid::new_v4();
+        let public_only = uuid::Uuid::new_v4();
+        let mut channels = vec![member_channel, shared_channel];
+
+        crate::state::extend_unique_channel_ids(&mut channels, &[shared_channel, public_only]);
+
+        assert_eq!(channels, vec![member_channel, shared_channel, public_only]);
+    }
+
+    #[test]
+    fn non_allowlisted_non_member_channel_filter_matches_nothing() {
+        let non_allowlisted = uuid::Uuid::new_v4();
+        let other_readable = uuid::Uuid::new_v4();
+        let filter = filter_with_channel(non_allowlisted);
+
+        let per_filter_channel = extract_channel_id_from_filter(&filter);
+        assert_eq!(per_filter_channel, Some(non_allowlisted));
+        assert!(
+            ![other_readable].contains(&non_allowlisted),
+            "handler must reject #h filters outside the effective readable set"
         );
     }
 

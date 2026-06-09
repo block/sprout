@@ -316,6 +316,7 @@ pub async fn decrement_reply_count(
 /// - `cursor` -- if `Some(ts_bytes)`, returns replies with `event_created_at`
 ///   strictly after the timestamp encoded in `ts_bytes`. The bytes must be an
 ///   8-byte big-endian i64 Unix timestamp in seconds.
+/// - `channel_id` -- if `Some`, returns only replies in that channel.
 /// - `limit` -- maximum rows returned (caller should cap this).
 pub async fn get_thread_replies(
     pool: &PgPool,
@@ -323,6 +324,7 @@ pub async fn get_thread_replies(
     depth_limit: Option<u32>,
     limit: u32,
     cursor: Option<&[u8]>,
+    channel_id: Option<Uuid>,
 ) -> Result<Vec<ThreadReply>> {
     // Decode cursor bytes -> DateTime<Utc> for the keyset condition.
     let cursor_ts: Option<DateTime<Utc>> = match cursor {
@@ -367,6 +369,10 @@ pub async fn get_thread_replies(
         sql.push_str(&format!(" AND tm.event_created_at > ${param_idx}"));
         param_idx += 1;
     }
+    if channel_id.is_some() {
+        sql.push_str(&format!(" AND tm.channel_id = ${param_idx}"));
+        param_idx += 1;
+    }
 
     sql.push_str(&format!(
         " ORDER BY tm.event_created_at ASC LIMIT ${param_idx}"
@@ -379,6 +385,9 @@ pub async fn get_thread_replies(
     }
     if let Some(ts) = cursor_ts {
         q = q.bind(ts);
+    }
+    if let Some(ch_id) = channel_id {
+        q = q.bind(ch_id);
     }
     q = q.bind(limit as i32);
 

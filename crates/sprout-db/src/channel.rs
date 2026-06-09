@@ -542,6 +542,34 @@ pub async fn get_members_bulk(pool: &PgPool, channel_ids: &[Uuid]) -> Result<Vec
     rows.into_iter().map(row_to_member_record).collect()
 }
 
+/// Return the subset of `channel_ids` that refer to live, non-deleted channels.
+///
+/// This intentionally checks only channel existence/liveness, not membership. Callers use it
+/// for relay-level public-readable policy after parsing the configured allowlist.
+pub async fn filter_live_channel_ids(pool: &PgPool, channel_ids: &[Uuid]) -> Result<Vec<Uuid>> {
+    if channel_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let rows = sqlx::query(
+        r#"
+        SELECT id
+        FROM channels
+        WHERE id = ANY($1) AND deleted_at IS NULL
+        "#,
+    )
+    .bind(channel_ids)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|r| {
+            let id: Uuid = r.try_get("id")?;
+            Ok(id)
+        })
+        .collect()
+}
+
 /// Get all channel IDs accessible to a pubkey.
 ///
 /// Includes channels where the pubkey is an active member AND all open channels.
@@ -1201,6 +1229,46 @@ mod tests {
 
     fn random_pubkey() -> Vec<u8> {
         Keys::generate().public_key().to_bytes().to_vec()
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn test_filter_live_channel_ids_excludes_deleted_and_missing_channels() {
+        let pool = setup_pool().await;
+        let owner_pk = random_pubkey();
+        ensure_user(&pool, &owner_pk).await.expect("ensure owner");
+
+        let live = create_channel(
+            &pool,
+            &format!("test-public-live-{}", Uuid::new_v4()),
+            ChannelType::Stream,
+            ChannelVisibility::Private,
+            None,
+            &owner_pk,
+            None,
+        )
+        .await
+        .expect("create live channel");
+        let deleted = create_channel(
+            &pool,
+            &format!("test-public-deleted-{}", Uuid::new_v4()),
+            ChannelType::Stream,
+            ChannelVisibility::Private,
+            None,
+            &owner_pk,
+            None,
+        )
+        .await
+        .expect("create deleted channel");
+        soft_delete_channel(&pool, deleted.id)
+            .await
+            .expect("soft delete channel");
+
+        let result = filter_live_channel_ids(&pool, &[live.id, deleted.id, Uuid::new_v4()])
+            .await
+            .expect("filter live channel ids");
+
+        assert_eq!(result, vec![live.id]);
     }
 
     /// Agent owner (non-admin) can remove their own bot from a channel.

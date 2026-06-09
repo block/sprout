@@ -258,9 +258,9 @@ pub async fn query_events(
         ));
     }
 
-    // Get channels this user can access — same enforcement as WS REQ handler.
+    // Effective authenticated read set = normal access ∪ live public-readable allowlist.
     let accessible_channels = state
-        .get_accessible_channel_ids_cached(&pubkey_bytes)
+        .effective_readable_channel_ids(&pubkey_bytes, None)
         .await
         .map_err(|e| internal_error(&format!("channel access lookup: {e}")))?;
 
@@ -365,11 +365,17 @@ pub async fn query_events(
             _ => continue,
         };
 
-        if let Some(ch_id) = extract_channel_from_filter(filter) {
-            if !accessible_channels.contains(&ch_id) {
-                handled.insert(idx);
-                continue;
-            }
+        let Some(ch_id) = extract_channel_from_filter(filter) else {
+            handled.insert(idx);
+            continue;
+        };
+        // Bridge is authenticated-only today, so `accessible_channels` is already the
+        // effective read set. If unauthenticated/public bridge reads are added later,
+        // they must resolve the same live public allowlist before this access check;
+        // never fall back to unscoped thread expansion for `depth_limit`.
+        if !accessible_channels.contains(&ch_id) {
+            handled.insert(idx);
+            continue;
         }
 
         let limit = filter
@@ -378,7 +384,7 @@ pub async fn query_events(
             .min(BRIDGE_THREAD_MAX_LIMIT as usize) as u32;
         let thread_replies = state
             .db
-            .get_thread_replies(&root_bytes, Some(depth), limit, None)
+            .get_thread_replies(&root_bytes, Some(depth), limit, None, Some(ch_id))
             .await
             .map_err(|e| internal_error(&format!("thread query error: {e}")))?;
 
@@ -415,9 +421,7 @@ pub async fn query_events(
             }
         }
 
-        let mut query =
-            crate::handlers::req::build_event_query_from_filter(filter, &pubkey_bytes, &state)
-                .await;
+        let mut query = crate::handlers::req::build_event_query_from_filter(filter);
 
         if let Some(bid) = extract_before_id(raw) {
             if query.until.is_none() {
@@ -495,9 +499,9 @@ pub async fn count_events(
         ));
     }
 
-    // Get channels this user can access.
+    // Effective authenticated read set = normal access ∪ live public-readable allowlist.
     let accessible_channels = state
-        .get_accessible_channel_ids_cached(&pubkey_bytes)
+        .effective_readable_channel_ids(&pubkey_bytes, None)
         .await
         .map_err(|e| internal_error(&format!("channel access lookup: {e}")))?;
 
@@ -509,9 +513,7 @@ pub async fn count_events(
                 continue; // Skip filters targeting inaccessible channels.
             }
             // Channel is accessible — count with pushability check.
-            let query =
-                crate::handlers::req::build_event_query_from_filter(filter, &pubkey_bytes, &state)
-                    .await;
+            let query = crate::handlers::req::build_event_query_from_filter(filter);
             if crate::handlers::req::filter_fully_pushable(filter) {
                 match state.db.count_events(&query).await {
                     Ok(n) => total += n as u64,
@@ -541,9 +543,7 @@ pub async fn count_events(
         } else {
             // No channel filter — use SQL-level channel_ids pushdown to count
             // only events in accessible channels (+ global events).
-            let mut query =
-                crate::handlers::req::build_event_query_from_filter(filter, &pubkey_bytes, &state)
-                    .await;
+            let mut query = crate::handlers::req::build_event_query_from_filter(filter);
             query.channel_ids = Some(accessible_channels.to_vec());
 
             if crate::handlers::req::filter_fully_pushable(filter) {
@@ -1180,6 +1180,26 @@ mod tests {
     fn extract_feed_types_non_array() {
         let raw = serde_json::json!({ "feed_types": "mentions" });
         assert!(extract_feed_types(&raw).is_none());
+    }
+
+    #[test]
+    fn depth_limited_thread_filter_without_channel_is_not_channel_accessible() {
+        let filter = nostr::Filter::new().event(nostr::EventId::from_slice(&[1u8; 32]).unwrap());
+
+        assert!(
+            extract_channel_from_filter(&filter).is_none(),
+            "depth_limit bridge path must fail closed unless caller supplies #h"
+        );
+    }
+
+    #[test]
+    fn depth_limited_thread_filter_with_channel_extracts_channel() {
+        let ch = uuid::Uuid::new_v4();
+        let filter = nostr::Filter::new()
+            .event(nostr::EventId::from_slice(&[1u8; 32]).unwrap())
+            .custom_tag(SingleLetterTag::lowercase(Alphabet::H), ch.to_string());
+
+        assert_eq!(extract_channel_from_filter(&filter), Some(ch));
     }
 
     #[test]

@@ -92,6 +92,15 @@ pub struct Config {
     /// Media storage configuration (S3/MinIO).
     pub media: sprout_media::MediaConfig,
 
+    /// Comma-separated channel UUIDs that are readable without channel membership.
+    ///
+    /// Public-readable channels are a read-only relay policy: they expand REQ/COUNT/query
+    /// access only after being validated as live, non-deleted channels by the DB. They never
+    /// grant write, upload, admin, or membership privileges. Invalid UUIDs fail closed by
+    /// being ignored.
+    /// Set via `SPROUT_PUBLIC_READABLE_CHANNELS`.
+    pub public_readable_channels: Vec<uuid::Uuid>,
+
     /// Optional override for ephemeral channel TTL (in seconds).
     /// When set, any channel created with a TTL tag will use this value instead
     /// of the client-provided one. Useful for testing ephemeral expiry quickly.
@@ -119,6 +128,22 @@ pub struct Config {
     /// When set, the relay serves the SPA from this directory for browser requests.
     /// When unset, no static file serving happens (relay behaves as before).
     pub web_dir: Option<std::path::PathBuf>,
+}
+
+fn parse_public_readable_channels() -> Vec<uuid::Uuid> {
+    std::env::var("SPROUT_PUBLIC_READABLE_CHANNELS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| match s.parse::<uuid::Uuid>() {
+            Ok(id) if id != uuid::Uuid::nil() => Some(id),
+            _ => {
+                warn!(channel_id = %s, "Ignoring invalid SPROUT_PUBLIC_READABLE_CHANNELS entry");
+                None
+            }
+        })
+        .collect()
 }
 
 impl Config {
@@ -277,6 +302,8 @@ impl Config {
                 }),
         };
 
+        let public_readable_channels = parse_public_readable_channels();
+
         let ephemeral_ttl_override = std::env::var("SPROUT_EPHEMERAL_TTL_OVERRIDE")
             .ok()
             .and_then(|v| v.parse::<i32>().ok())
@@ -376,6 +403,7 @@ impl Config {
             relay_owner_pubkey,
             allow_nip_oa_auth,
             media,
+            public_readable_channels,
             ephemeral_ttl_override,
             git_repo_path,
             git_max_pack_bytes,
@@ -421,6 +449,26 @@ mod tests {
             !config.allow_nip_oa_auth,
             "allow_nip_oa_auth should default to false"
         );
+        assert!(
+            config.public_readable_channels.is_empty(),
+            "public_readable_channels should default empty"
+        );
+    }
+
+    #[test]
+    fn public_readable_channels_parses_valid_uuids_and_ignores_invalid_entries() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let valid_a = uuid::Uuid::new_v4();
+        let valid_b = uuid::Uuid::new_v4();
+        std::env::set_var(
+            "SPROUT_PUBLIC_READABLE_CHANNELS",
+            format!(" {valid_a},not-a-uuid,00000000-0000-0000-0000-000000000000,{valid_b} "),
+        );
+
+        let config = Config::from_env().expect("config");
+        std::env::remove_var("SPROUT_PUBLIC_READABLE_CHANNELS");
+
+        assert_eq!(config.public_readable_channels, vec![valid_a, valid_b]);
     }
 
     #[test]

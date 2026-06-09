@@ -29,47 +29,71 @@ pub async fn handle_count(
     conn: Arc<ConnectionState>,
     state: Arc<AppState>,
 ) {
-    // Require auth
     let pubkey_bytes = {
         let auth = conn.auth_state.read().await;
         match &*auth {
-            AuthState::Authenticated(ctx) => ctx.pubkey.to_bytes().to_vec(),
-            _ => {
-                conn.send(RelayMessage::closed(
-                    &sub_id,
-                    "auth-required: not authenticated",
-                ));
-                return;
-            }
+            AuthState::Authenticated(ctx) => Some(ctx.pubkey.to_bytes().to_vec()),
+            _ => None,
         }
     };
 
-    // P-gated kinds (gift wraps, member notifications, observer frames) require
-    // the caller's own pubkey in the #p tag — same enforcement as WS REQ handler.
-    let authed_pubkey_hex = hex::encode(&pubkey_bytes);
-    if !super::req::p_gated_filters_authorized(&filters, &authed_pubkey_hex) {
-        conn.send(RelayMessage::closed(
-            &sub_id,
-            "restricted: p-gated kinds require #p tag matching your pubkey",
-        ));
-        return;
-    }
-    if !super::req::engram_filters_authorized(&filters, &authed_pubkey_hex) {
-        conn.send(RelayMessage::closed(
-            &sub_id,
-            "restricted: agent-engram reads require authors=[self] or #p=[self]",
-        ));
-        return;
-    }
-
-    // Get channels this user can access — same enforcement as WS REQ handler.
-    let accessible_channels = match state.get_accessible_channel_ids_cached(&pubkey_bytes).await {
-        Ok(ids) => ids,
-        Err(e) => {
-            warn!(sub_id = %sub_id, "Failed to get accessible channels: {e}");
-            conn.send(RelayMessage::closed(&sub_id, "error: database error"));
+    let accessible_channels = if let Some(pubkey_bytes) = pubkey_bytes.as_deref() {
+        // P-gated kinds (gift wraps, member notifications, observer frames) require
+        // the caller's own pubkey in the #p tag — same enforcement as WS REQ handler.
+        let authed_pubkey_hex = hex::encode(pubkey_bytes);
+        if !super::req::p_gated_filters_authorized(&filters, &authed_pubkey_hex) {
+            conn.send(RelayMessage::closed(
+                &sub_id,
+                "restricted: p-gated kinds require #p tag matching your pubkey",
+            ));
             return;
         }
+        if !super::req::engram_filters_authorized(&filters, &authed_pubkey_hex) {
+            conn.send(RelayMessage::closed(
+                &sub_id,
+                "restricted: agent-engram reads require authors=[self] or #p=[self]",
+            ));
+            return;
+        }
+
+        match state
+            .effective_readable_channel_ids(pubkey_bytes, None)
+            .await
+        {
+            Ok(ids) => ids,
+            Err(e) => {
+                warn!(sub_id = %sub_id, "Failed to get effective readable channels: {e}");
+                conn.send(RelayMessage::closed(&sub_id, "error: database error"));
+                return;
+            }
+        }
+    } else {
+        let public_readable_channels = match state.public_readable_channel_ids().await {
+            Ok(ids) => ids,
+            Err(e) => {
+                warn!(sub_id = %sub_id, "Failed to resolve public-readable channels: {e}");
+                conn.send(RelayMessage::closed(&sub_id, "error: database error"));
+                return;
+            }
+        };
+        if public_readable_channels.is_empty() {
+            conn.send(RelayMessage::closed(
+                &sub_id,
+                "auth-required: not authenticated",
+            ));
+            return;
+        }
+        if filters
+            .iter()
+            .any(|filter| extract_channel_from_filter(filter).is_none())
+        {
+            conn.send(RelayMessage::closed(
+                &sub_id,
+                "restricted: public counts require #h channel scope",
+            ));
+            return;
+        }
+        public_readable_channels
     };
 
     // For each filter, count matching events with channel access enforcement.
@@ -81,8 +105,7 @@ pub async fn handle_count(
                 continue; // Skip filters targeting inaccessible channels.
             }
             // Channel is accessible — count with pushability check.
-            let query =
-                super::req::build_event_query_from_filter(filter, &pubkey_bytes, &state).await;
+            let query = super::req::build_event_query_from_filter(filter);
             if super::req::filter_fully_pushable(filter) {
                 match state.db.count_events(&query).await {
                     Ok(n) => total += n as u64,
@@ -118,8 +141,7 @@ pub async fn handle_count(
             // If the filter has generic tags beyond what SQL can push down
             // (#h, #p single, #d single, #e), we must fall back to
             // query + post-filter to avoid overcounting.
-            let mut query =
-                super::req::build_event_query_from_filter(filter, &pubkey_bytes, &state).await;
+            let mut query = super::req::build_event_query_from_filter(filter);
             query.channel_ids = Some(accessible_channels.to_vec());
 
             if super::req::filter_fully_pushable(filter) {

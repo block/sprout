@@ -872,6 +872,29 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_global_sub_does_not_fanout_public_channel_events() {
+        // Public-readable channels extend explicit channel reads only. An authenticated
+        // non-member's global subscription is still registered as channel_id=None, so
+        // fan-out must not deliver channel-scoped events from the public allowlist.
+        let registry = SubscriptionRegistry::new();
+        let conn_id = Uuid::new_v4();
+        let public_channel = Uuid::new_v4();
+
+        registry.register(
+            conn_id,
+            "global_public_reader".to_string(),
+            vec![Filter::new().kind(Kind::TextNote)],
+            None,
+        );
+
+        let public_channel_event = make_stored_event(Kind::TextNote, Some(public_channel));
+        assert!(
+            registry.fan_out(&public_channel_event).is_empty(),
+            "global authenticated subscriptions must not receive public allowlist channel events"
+        );
+    }
+
+    #[test]
     fn test_empty_kinds_array_remove_is_noop() {
         // Removing a kinds:[] subscription should not panic or corrupt the index.
         let registry = SubscriptionRegistry::new();

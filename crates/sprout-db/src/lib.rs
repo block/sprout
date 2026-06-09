@@ -442,6 +442,11 @@ impl Db {
         channel::get_accessible_channel_ids(&self.pool, pubkey).await
     }
 
+    /// Return the subset of channel IDs that exist and have not been soft-deleted.
+    pub async fn filter_live_channel_ids(&self, channel_ids: &[Uuid]) -> Result<Vec<Uuid>> {
+        channel::filter_live_channel_ids(&self.pool, channel_ids).await
+    }
+
     /// Lists channels, optionally filtered by visibility.
     pub async fn list_channels(
         &self,
@@ -695,8 +700,17 @@ impl Db {
         depth_limit: Option<u32>,
         limit: u32,
         cursor: Option<&[u8]>,
+        channel_id: Option<Uuid>,
     ) -> Result<Vec<thread::ThreadReply>> {
-        thread::get_thread_replies(&self.pool, root_event_id, depth_limit, limit, cursor).await
+        thread::get_thread_replies(
+            &self.pool,
+            root_event_id,
+            depth_limit,
+            limit,
+            cursor,
+            channel_id,
+        )
+        .await
     }
 
     /// Fetch aggregated thread stats.
