@@ -699,13 +699,17 @@ struct ProfileReconcileData {
     private_key_nsec: String,
     name: String,
     relay_url: String,
-    /// Expected avatar URL for the published profile. Resolved at start from the
-    /// record's persisted `avatar_url` (the exact URL published at creation),
-    /// falling back to persona/command derivation only for pre-existing records
-    /// that have no stored value — so old records still self-heal without
-    /// regressing a user-overridden avatar.
+    /// Expected avatar URL for the published profile. `None` for legacy records
+    /// that predate the `avatar_url` field — these will be backfilled from the
+    /// relay's existing kind:0 profile on first reconciliation.
     avatar_url: Option<String>,
     auth_tag: Option<String>,
+    /// The agent's pubkey (hex). Needed to update the persisted record during
+    /// avatar backfill migration.
+    pubkey: String,
+    /// The agent's command (e.g. "goose"). Used as fallback when no profile
+    /// exists on the relay during avatar backfill.
+    agent_command: String,
 }
 
 #[tauri::command]
@@ -745,14 +749,14 @@ pub async fn start_managed_agent(
 
         let record = find_managed_agent_mut(&mut records, &pubkey)?;
 
-        let expected_avatar = reconcile_avatar(record.avatar_url.as_deref(), &record.agent_command);
-
         let reconcile = ProfileReconcileData {
             private_key_nsec: record.private_key_nsec.clone(),
             name: record.name.clone(),
             relay_url: record.relay_url.clone(),
-            avatar_url: expected_avatar,
+            avatar_url: record.avatar_url.clone(),
             auth_tag: record.auth_tag.clone(),
+            pubkey: record.pubkey.clone(),
+            agent_command: record.agent_command.clone(),
         };
 
         let target = if record.backend == BackendKind::Local {
@@ -812,7 +816,8 @@ pub async fn start_managed_agent(
     // ── Profile reconciliation (fire-and-forget) ────────────────────────────
     // On successful start, spawn a background task to ensure the agent's kind:0
     // profile is published on the relay. This self-heals cases where the initial
-    // profile sync at creation time failed silently.
+    // profile sync at creation time failed silently. For legacy records (pre-PR-921)
+    // with no persisted avatar, this also backfills the avatar from the relay.
     if result.is_ok() {
         let reconcile_pubkey = pubkey.clone();
         let reconcile_app = app.clone();
@@ -820,7 +825,8 @@ pub async fn start_managed_agent(
             use tauri::Manager;
             let state = reconcile_app.state::<AppState>();
             if let Err(e) =
-                reconcile_agent_profile(&state, &reconcile_pubkey, &reconcile_data).await
+                reconcile_agent_profile(&state, &reconcile_app, &reconcile_pubkey, &reconcile_data)
+                    .await
             {
                 eprintln!(
                     "sprout-desktop: profile reconciliation failed for agent {reconcile_pubkey}: {e}"
@@ -838,23 +844,58 @@ pub async fn start_managed_agent(
 /// or stale (display_name or picture mismatch). This is fire-and-forget — errors
 /// are returned to the caller for logging but never block agent startup.
 ///
+/// For legacy records (pre-PR-921) where `avatar_url` is `None`, this function
+/// backfills the avatar from the relay's existing kind:0 profile (or falls back
+/// to the command-derived icon) and persists the updated record. After backfill,
+/// normal reconciliation proceeds.
+///
 /// Query and publish both target the agent's stored `relay_url` so that, under
 /// an active workspace relay override, reconciliation reads and writes the same
 /// relay the agent's profile actually lives on.
 async fn reconcile_agent_profile(
     state: &AppState,
+    app: &AppHandle,
     agent_pubkey: &str,
     data: &ProfileReconcileData,
 ) -> Result<(), String> {
     use crate::relay::{query_agent_profile, sync_managed_agent_profile};
 
-    // Compare against the avatar persisted at creation time — never re-derive it.
-    let expected_avatar = data.avatar_url.as_deref();
-
-    // Query the same relay the profile is published to (the stored relay_url).
+    // Query the relay for the agent's existing kind:0 profile.
     let existing = query_agent_profile(state, &data.relay_url, agent_pubkey).await?;
 
-    if !profile_needs_sync(existing.as_ref(), &data.name, expected_avatar) {
+    // Resolve the expected avatar — backfilling from the relay for legacy records.
+    let expected_avatar = match data.avatar_url.as_deref() {
+        Some(url) => url.to_string(),
+        None => {
+            // Legacy record: backfill from relay profile or fall back to command icon.
+            let backfilled = existing
+                .as_ref()
+                .and_then(|info| info.picture.clone())
+                .or_else(|| managed_agent_avatar_url(&data.agent_command))
+                .unwrap_or_default();
+
+            // Persist the backfilled avatar so this migration only runs once.
+            if !backfilled.is_empty() {
+                let _store_guard = state
+                    .managed_agents_store_lock
+                    .lock()
+                    .map_err(|e| e.to_string())?;
+                let mut records = load_managed_agents(app)?;
+                if let Some(record) = records.iter_mut().find(|r| r.pubkey == data.pubkey) {
+                    record.avatar_url = Some(backfilled.clone());
+                    save_managed_agents(app, &records)?;
+                }
+            }
+
+            backfilled
+        }
+    };
+
+    if expected_avatar.is_empty() {
+        return Ok(());
+    }
+
+    if !profile_needs_sync(existing.as_ref(), &data.name, Some(&expected_avatar)) {
         return Ok(());
     }
 
@@ -866,7 +907,7 @@ async fn reconcile_agent_profile(
         &data.relay_url,
         &agent_keys,
         &data.name,
-        expected_avatar,
+        Some(&expected_avatar),
         data.auth_tag.as_deref(),
     )
     .await
@@ -887,18 +928,6 @@ fn profile_needs_sync(
             let picture_matches = info.picture.as_deref() == expected_avatar;
             !name_matches || !picture_matches
         }
-    }
-}
-
-/// Resolve the avatar a managed agent's profile should reconcile against.
-/// Stored value (persisted at creation) wins; legacy records that predate the
-/// field (`stored == None`) fall back to the command-based derivation — the
-/// same source the create path used. Persona config is never consulted: doing
-/// so diverges from what was published and overwrites user intent on restart.
-fn reconcile_avatar(stored: Option<&str>, agent_command: &str) -> Option<String> {
-    match stored {
-        Some(url) => Some(url.to_string()),
-        None => managed_agent_avatar_url(agent_command),
     }
 }
 
@@ -1180,28 +1209,5 @@ mod tests {
     fn profile_needs_sync_when_expected_avatar_absent_but_published() {
         let existing = profile(Some("Duncan"), Some("https://x/a.png"));
         assert!(profile_needs_sync(Some(&existing), "Duncan", None));
-    }
-
-    /// Legacy records (`avatar_url: None`) must reconcile against
-    /// `managed_agent_avatar_url(agent_command)` — never persona config —
-    /// matching what the original create path published.
-    #[test]
-    fn reconcile_avatar_legacy_record_uses_command_not_persona() {
-        let resolved = reconcile_avatar(None, "goose");
-
-        assert_eq!(resolved, managed_agent_avatar_url("goose"));
-        assert!(
-            resolved.is_some(),
-            "goose command should have a known avatar"
-        );
-    }
-
-    /// New records persist their avatar at creation; the stored value is used
-    /// verbatim, never falling back to command derivation.
-    #[test]
-    fn reconcile_avatar_stored_value_wins() {
-        let resolved = reconcile_avatar(Some("https://custom/avatar.png"), "goose");
-
-        assert_eq!(resolved.as_deref(), Some("https://custom/avatar.png"));
     }
 }
