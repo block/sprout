@@ -7,10 +7,10 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use sprout_core::kind::{
-    event_kind_u32, is_parameterized_replaceable, KIND_AGENT_PROFILE, KIND_GIT_REPO_ANNOUNCEMENT,
-    KIND_IA_ARCHIVED, KIND_IA_ARCHIVED_LIST, KIND_IA_UNARCHIVED, KIND_MEMBER_ADDED_NOTIFICATION,
-    KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_GROUP_ADMINS, KIND_NIP29_GROUP_MEMBERS,
-    KIND_NIP29_GROUP_METADATA, KIND_NIP43_MEMBERSHIP_LIST, KIND_REACTION,
+    event_kind_u32, is_parameterized_replaceable, KIND_AGENT_PROFILE, KIND_DM_VISIBILITY,
+    KIND_GIT_REPO_ANNOUNCEMENT, KIND_IA_ARCHIVED, KIND_IA_ARCHIVED_LIST, KIND_IA_UNARCHIVED,
+    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_GROUP_ADMINS,
+    KIND_NIP29_GROUP_MEMBERS, KIND_NIP29_GROUP_METADATA, KIND_NIP43_MEMBERSHIP_LIST, KIND_REACTION,
 };
 use sprout_db::channel::MemberRole;
 
@@ -2324,6 +2324,85 @@ pub async fn publish_nipia_archival_list(state: &Arc<AppState>) -> anyhow::Resul
     info!(
         archived_count = archived.len(),
         "NIP-IA archived identities list published"
+    );
+    Ok(())
+}
+
+/// NIP-DV: publish the relay-signed, per-viewer DM visibility snapshot for
+/// `viewer`. The event is parameterized-replaceable (`d` = viewer pubkey) and
+/// carries one `h` tag per DM the viewer currently has hidden. Called after any
+/// hide (41012) or unhide (41010 that clears `hidden_at`); the latest event is
+/// always the authoritative hidden set, so no client-side delta merge is needed.
+pub async fn publish_dm_visibility_snapshot(
+    state: &Arc<AppState>,
+    viewer: &[u8],
+) -> anyhow::Result<()> {
+    let viewer_hex = hex::encode(viewer);
+    let hidden = state.db.list_hidden_dms(viewer).await?;
+    let relay_pubkey_hex = state.relay_keypair.public_key().to_hex();
+
+    let mut tags: Vec<Tag> = Vec::with_capacity(hidden.len() + 2);
+    tags.push(
+        Tag::parse(["d", &viewer_hex])
+            .map_err(|e| anyhow::anyhow!("failed to build d tag: {e}"))?,
+    );
+    // `p` = viewer so the relay's `#p`-gated read path scopes the snapshot to
+    // its owner; no one else may query another viewer's hidden-DM set.
+    tags.push(
+        Tag::parse(["p", &viewer_hex])
+            .map_err(|e| anyhow::anyhow!("failed to build p tag: {e}"))?,
+    );
+    for channel_id in &hidden {
+        tags.push(
+            Tag::parse(["h", &channel_id.to_string()])
+                .map_err(|e| anyhow::anyhow!("failed to build h tag: {e}"))?,
+        );
+    }
+
+    // Force created_at strictly past any prior snapshot for this viewer: a same-second
+    // replacement whose random event id sorts higher is rejected by stale-write
+    // protection, so a hide→re-open within one second could otherwise strand the stale
+    // snapshot. Same guard as emit_addressable_discovery_event.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let ts = {
+        let existing = state
+            .db
+            .query_events(&sprout_db::event::EventQuery {
+                kinds: Some(vec![KIND_DM_VISIBILITY as i32]),
+                pubkey: Some(state.relay_keypair.public_key().to_bytes().to_vec()),
+                d_tag: Some(viewer_hex.clone()),
+                limit: Some(1),
+                ..Default::default()
+            })
+            .await
+            .unwrap_or_default();
+        existing
+            .first()
+            .map(|e| (e.event.created_at.as_secs() + 1).max(now))
+            .unwrap_or(now)
+    };
+
+    let event = EventBuilder::new(Kind::Custom(KIND_DM_VISIBILITY as u16), "")
+        .tags(tags)
+        .custom_created_at(nostr::Timestamp::from(ts))
+        .sign_with_keys(&state.relay_keypair)
+        .map_err(|e| anyhow::anyhow!("failed to sign kind:{KIND_DM_VISIBILITY}: {e}"))?;
+
+    let (stored, was_inserted) = state
+        .db
+        .replace_parameterized_event(&event, &viewer_hex, None)
+        .await?;
+    if was_inserted {
+        dispatch_persistent_event(state, &stored, KIND_DM_VISIBILITY, &relay_pubkey_hex).await;
+    }
+
+    info!(
+        viewer = %viewer_hex,
+        hidden_count = hidden.len(),
+        "NIP-DV DM visibility snapshot published"
     );
     Ok(())
 }

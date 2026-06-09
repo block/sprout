@@ -26,9 +26,25 @@ import { useSystemColorScheme } from "@/shared/theme/useSystemColorScheme";
 import { Button } from "@/shared/ui/button";
 import { StepProgress } from "@/shared/ui/step-progress";
 
+const LOADING_TEXT = "Setting up your workspace...";
+
 function AppLoadingGate() {
   return (
-    <div className="sprout-startup-shell bg-neutral-50 dark:bg-neutral-950" />
+    <div
+      className="sprout-setup-loading-shell flex min-h-dvh flex-col items-center justify-center overflow-hidden px-6 py-10"
+      data-testid="app-loading-gate"
+      role="status"
+    >
+      <h1
+        aria-live="polite"
+        className="mt-6 text-center text-3xl font-semibold tracking-tight text-foreground"
+      >
+        <span className="sr-only">{LOADING_TEXT}</span>
+        <span aria-hidden="true" className="sprout-setup-loading-text">
+          {LOADING_TEXT}
+        </span>
+      </h1>
+    </div>
   );
 }
 
