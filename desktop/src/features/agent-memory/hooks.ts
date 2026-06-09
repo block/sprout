@@ -11,87 +11,6 @@ import { buildMemoryGraph, type MemoryGraph } from "./lib/buildMemoryGraph";
 export const agentMemoryQueryKey = (agentPubkey: string) =>
   ["agent-memory", agentPubkey.toLowerCase()] as const;
 
-// TODO: temporary mock for Memories UI work — remove before merge.
-const MOCK_AGENT_MEMORY: AgentMemoryListing = {
-  core: {
-    slug: "core",
-    body: `I am a mock agent used to flesh out the Memories panel.
-
-I prefer concise updates, explicit next steps, and visual polish before edge-case handling.
-
-See [[mem/preferences/ui-density]] and [[mem/projects/sprout-memory-viewer]] for details.
-
-A retired launch checklist used to live at [[mem/archive/deleted-launch-checklist]], but that memory was deleted after the plan changed.`,
-    eventId: "mock-core",
-    createdAt: 1_700_000_000,
-    outgoingRefs: [
-      "mem/preferences/ui-density",
-      "mem/projects/sprout-memory-viewer",
-      "mem/archive/deleted-launch-checklist",
-    ],
-  },
-  memories: [
-    {
-      slug: "mem/preferences/ui-density",
-      body: "Prefer compact lists with generous body text when expanded.\n\nNested ref: [[mem/working-style/review-loop]]",
-      eventId: "mock-ui-density",
-      createdAt: 1_700_000_100,
-      outgoingRefs: ["mem/working-style/review-loop"],
-    },
-    {
-      slug: "mem/working-style/review-loop",
-      body: "Ship small slices, screenshot the happy path, then iterate on empty/error states.",
-      eventId: "mock-review-loop",
-      createdAt: 1_700_000_200,
-      outgoingRefs: [],
-    },
-    {
-      slug: "mem/projects/sprout-memory-viewer",
-      body: "Building the IXI-7 read-only memory viewer in the profile panel.\n\nChild memory: [[mem/projects/sprout-memory-viewer/notes]]",
-      eventId: "mock-project",
-      createdAt: 1_700_000_300,
-      outgoingRefs: ["mem/projects/sprout-memory-viewer/notes"],
-    },
-    {
-      slug: "mem/projects/sprout-memory-viewer/notes",
-      body: "Tree should auto-expand core. Everything else collapsed with a one-line preview.",
-      eventId: "mock-project-notes",
-      createdAt: 1_700_000_400,
-      outgoingRefs: [],
-    },
-    {
-      slug: "mem/people/alice",
-      body: "Alice prefers async updates in #design.",
-      eventId: "mock-alice",
-      createdAt: 1_700_000_500,
-      outgoingRefs: [],
-    },
-    {
-      slug: "mem/people/bob",
-      body: "Bob reviews PRs quickly but wants screenshots.",
-      eventId: "mock-bob",
-      createdAt: 1_700_000_600,
-      outgoingRefs: ["mem/people/alice"],
-    },
-    {
-      slug: "mem/scratch/todo",
-      body: "",
-      eventId: "mock-empty",
-      createdAt: 1_700_000_700,
-      outgoingRefs: [],
-    },
-    {
-      slug: "mem/orphan/unreferenced",
-      body: "This orphaned note is not reachable from core. It still points at [[mem/research/old-panel-sketches]], a deleted design scratchpad from an earlier pass.",
-      eventId: "mock-orphan",
-      createdAt: 1_700_000_800,
-      outgoingRefs: ["mem/research/old-panel-sketches"],
-    },
-  ],
-  truncated: true,
-  fetchedAt: Math.floor(Date.now() / 1000),
-};
-
 /**
  * Synchronous gate: does this desktop manage the agent? Used by the profile
  * panel to hide the Memory section entirely for non-owners.
@@ -149,10 +68,7 @@ export function useAgentMemoryQuery(
   return useQuery<AgentMemoryListing>({
     enabled,
     queryKey: agentMemoryQueryKey(agentPubkey ?? ""),
-    queryFn: () =>
-      import.meta.env.DEV
-        ? Promise.resolve(MOCK_AGENT_MEMORY)
-        : getAgentMemory(agentPubkey as string),
+    queryFn: () => getAgentMemory(agentPubkey as string),
     staleTime: 30_000,
   });
 }

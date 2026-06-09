@@ -14,6 +14,7 @@ import {
   Fingerprint,
   Hash,
   MessageSquare,
+  Pencil,
   Server,
   Terminal,
   UserMinus,
@@ -62,12 +63,14 @@ async function copyToClipboard(value: string, label?: string) {
 export type ProfileSummaryViewProps = {
   archiveMutation: ReturnType<typeof useArchiveIdentityMutation>;
   canArchive: boolean;
+  canEditAgent: boolean;
   canViewActivity: boolean;
   channelCount: number;
   channelsLoading: boolean;
   displayName: string;
   followMutation: ReturnType<typeof useFollowMutation>;
   handleArchive: () => void;
+  handleEditAgent: () => void;
   handleMessage: () => void;
   handleOpenActivity: () => void;
   handleUnarchive: () => void;
@@ -79,6 +82,8 @@ export type ProfileSummaryViewProps = {
   managedAgent: ManagedAgent | undefined;
   memoriesLoading: boolean;
   memoryCount: number | undefined;
+  ownerDisplayName: string | null;
+  ownerHandle: string | null;
   onOpenChannels: () => void;
   onOpenMemories: () => void;
   onOpenDm?: (pubkeys: string[]) => void;
@@ -94,12 +99,14 @@ export type ProfileSummaryViewProps = {
 export function ProfileSummaryView({
   archiveMutation,
   canArchive,
+  canEditAgent,
   canViewActivity,
   channelCount,
   channelsLoading,
   displayName,
   followMutation,
   handleArchive,
+  handleEditAgent,
   handleMessage,
   handleOpenActivity,
   handleUnarchive,
@@ -111,6 +118,8 @@ export function ProfileSummaryView({
   managedAgent,
   memoriesLoading,
   memoryCount,
+  ownerDisplayName,
+  ownerHandle,
   onOpenChannels,
   onOpenMemories,
   onOpenDm,
@@ -129,7 +138,14 @@ export function ProfileSummaryView({
       relayAgent,
       isBot,
     }),
-    ...(isOwner === true ? buildOwnerFields({ managedAgent, relayAgent }) : []),
+    ...(isOwner === true
+      ? buildOwnerFields({
+          managedAgent,
+          ownerDisplayName,
+          ownerHandle,
+          relayAgent,
+        })
+      : []),
   ];
 
   const showMemoriesIngress = isOwner === true;
@@ -149,7 +165,9 @@ export function ProfileSummaryView({
 
       {!isSelf ? (
         <ProfilePrimaryActions
+          canEditAgent={canEditAgent}
           followMutation={followMutation}
+          onEditAgent={handleEditAgent}
           isFollowing={isFollowing}
           onMessage={onOpenDm ? handleMessage : undefined}
           pubkey={pubkey}
@@ -385,30 +403,27 @@ function ProfileHeroDescription({ about }: { about: string }) {
 // ── Primary actions ──────────────────────────────────────────────────────────
 
 function ProfilePrimaryActions({
+  canEditAgent,
   followMutation,
   isFollowing,
+  onEditAgent,
   onMessage,
   pubkey,
   unfollowMutation,
 }: {
+  canEditAgent: boolean;
   followMutation: ReturnType<typeof useFollowMutation>;
   isFollowing: boolean;
+  onEditAgent: () => void;
   onMessage?: () => void;
   pubkey: string;
   unfollowMutation: ReturnType<typeof useUnfollowMutation>;
 }) {
   return (
     <div className="flex items-start justify-center gap-8">
-      {onMessage ? (
-        <ProfileQuickAction
-          icon={MessageSquare}
-          label="Message"
-          onClick={onMessage}
-          testId="user-profile-message"
-        />
-      ) : null}
       {isFollowing ? (
         <ProfileQuickAction
+          active
           disabled={unfollowMutation.isPending}
           icon={UserMinus}
           label="Unfollow"
@@ -436,17 +451,35 @@ function ProfilePrimaryActions({
           }
         />
       )}
+      {onMessage ? (
+        <ProfileQuickAction
+          icon={MessageSquare}
+          label="Message"
+          onClick={onMessage}
+          testId="user-profile-message"
+        />
+      ) : null}
+      {canEditAgent ? (
+        <ProfileQuickAction
+          icon={Pencil}
+          label="Edit"
+          onClick={onEditAgent}
+          testId="user-profile-edit-agent"
+        />
+      ) : null}
     </div>
   );
 }
 
 function ProfileQuickAction({
+  active,
   disabled,
   icon: Icon,
   label,
   onClick,
   testId,
 }: {
+  active?: boolean;
   disabled?: boolean;
   icon: LucideIcon;
   label: string;
@@ -461,10 +494,24 @@ function ProfileQuickAction({
       onClick={onClick}
       type="button"
     >
-      <span className="flex h-14 w-14 items-center justify-center rounded-full bg-muted/60 text-foreground transition-colors hover:bg-muted/80">
+      <span
+        className={cn(
+          "flex h-14 w-14 items-center justify-center rounded-full transition-colors",
+          active
+            ? "bg-foreground text-background hover:bg-foreground/90"
+            : "bg-muted/60 text-foreground hover:bg-muted/80",
+        )}
+      >
         <Icon className="h-5 w-5" />
       </span>
-      <span className="text-xs text-muted-foreground">{label}</span>
+      <span
+        className={cn(
+          "text-xs",
+          active ? "text-foreground" : "text-muted-foreground",
+        )}
+      >
+        {label}
+      </span>
     </button>
   );
 }
@@ -535,12 +582,26 @@ function buildPublicFields({
 
 function buildOwnerFields({
   managedAgent,
+  ownerDisplayName,
+  ownerHandle,
   relayAgent,
 }: {
   managedAgent: ManagedAgent | undefined;
+  ownerDisplayName: string | null;
+  ownerHandle: string | null;
   relayAgent: RelayAgent | undefined;
 }): ProfileField[] {
   const fields: ProfileField[] = [];
+
+  if (ownerDisplayName) {
+    fields.push({
+      copyValue: ownerHandle ?? undefined,
+      displayValue: ownerDisplayName,
+      icon: UserRound,
+      label: "Owned by",
+      testId: "user-profile-owned-by",
+    });
+  }
 
   if (managedAgent?.agentCommand) {
     fields.push({
@@ -563,8 +624,8 @@ function buildOwnerFields({
   if (managedAgent) {
     fields.push({
       displayValue: managedAgent.status
-        .replaceAll("_", " ")
-        .replace(/\b\w/g, (char) => char.toUpperCase()),
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (char: string) => char.toUpperCase()),
       icon: Activity,
       label: "Status",
       testId: "user-profile-agent-status",
@@ -620,8 +681,8 @@ function buildOwnerFields({
       testId: "user-profile-start-on-launch",
     });
     fields.push({
-      displayValue: managedAgent.respondTo.replaceAll("-", " "),
-      icon: UserRound,
+      displayValue: managedAgent.respondTo.replace(/-/g, " "),
+      icon: MessageSquare,
       label: "Respond to",
       testId: "user-profile-respond-to",
     });
@@ -641,10 +702,35 @@ function buildOwnerFields({
 }
 
 function ProfileFieldGroup({ fields }: { fields: ProfileField[] }) {
+  const publicKeyLabel = "Public key";
+  const ownedByLabel = "Owned by";
+  const statusLabel = "Status";
+  const orderedFields = [
+    ...fields.filter((field) => field.label === publicKeyLabel),
+    ...fields.filter((field) => field.label === ownedByLabel),
+    ...fields.filter(
+      (field) =>
+        field.label !== publicKeyLabel &&
+        field.label !== ownedByLabel &&
+        field.copyValue,
+    ),
+    ...fields.filter((field) => field.label === statusLabel),
+    ...fields.filter((field) => {
+      if (
+        field.label === publicKeyLabel ||
+        field.label === ownedByLabel ||
+        field.label === statusLabel
+      ) {
+        return false;
+      }
+      return !field.copyValue;
+    }),
+  ];
+
   return (
     <section>
       <div className="overflow-hidden rounded-2xl bg-muted/20">
-        {fields.map((field) => (
+        {orderedFields.map((field) => (
           <ProfileFieldRow field={field} key={field.testId ?? field.label} />
         ))}
       </div>

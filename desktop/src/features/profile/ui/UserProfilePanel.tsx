@@ -12,6 +12,7 @@ import {
   useRelayAgentsQuery,
   useManagedAgentsQuery,
 } from "@/features/agents/hooks";
+import { EditAgentDialog } from "@/features/agents/ui/EditAgentDialog";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import {
   useArchiveIdentityMutation,
@@ -23,6 +24,7 @@ import { usePresenceQuery } from "@/features/presence/hooks";
 import {
   useContactListQuery,
   useFollowMutation,
+  useProfileQuery,
   useUnfollowMutation,
   useUserProfileQuery,
 } from "@/features/profile/hooks";
@@ -133,8 +135,10 @@ export function UserProfilePanel({
   useEscapeKey(onClose, isOverlay || isSinglePanelView);
 
   const [view, setView] = React.useState<ProfilePanelView>("summary");
+  const [editAgentOpen, setEditAgentOpen] = React.useState(false);
 
   const profileQuery = useUserProfileQuery(pubkey);
+  const currentProfileQuery = useProfileQuery(currentPubkey !== undefined);
 
   // Batch avatar prefetch seeds kind:0 summaries without `about`; refetch on open
   // so the hero can show the full profile description from relay.
@@ -175,6 +179,7 @@ export function UserProfilePanel({
   );
   const isBot = Boolean(relayAgent || managedAgent);
   const isOwner = useIsManagedAgent(isBot ? pubkey : null);
+  const canEditAgent = isOwner === true && managedAgent !== undefined;
   const memoryQuery = useAgentMemoryQuery(pubkey, {
     enabled: isOwner === true,
   });
@@ -241,6 +246,10 @@ export function UserProfilePanel({
     onClose();
   }, [onClose, onOpenDm, pubkey]);
 
+  const handleEditAgent = React.useCallback(() => {
+    setEditAgentOpen(true);
+  }, []);
+
   const handleOpenActivity = React.useCallback(() => {
     onClose();
     onOpenAgentSession?.(pubkey);
@@ -254,6 +263,19 @@ export function UserProfilePanel({
   );
 
   const displayName = profile?.displayName ?? truncatePubkey(pubkey);
+  const ownerHandle = React.useMemo(() => {
+    if (currentPubkey === undefined) {
+      return null;
+    }
+
+    const currentProfile = currentProfileQuery.data;
+    return (
+      currentProfile?.nip05Handle?.trim() ||
+      currentProfile?.displayName?.trim() ||
+      truncatePubkey(currentPubkey)
+    );
+  }, [currentProfileQuery.data, currentPubkey]);
+  const ownerDisplayName = ownerHandle ? `${ownerHandle} (you)` : null;
   const panelTitle = VIEW_TITLES[view];
   const memoryCount = memoryQuery.data
     ? (memoryQuery.data.core ? 1 : 0) + memoryQuery.data.memories.length
@@ -399,12 +421,14 @@ export function UserProfilePanel({
           {view === "summary" ? (
             <ProfileSummaryView
               canArchive={canArchive}
+              canEditAgent={canEditAgent}
               canViewActivity={canViewActivity}
               channelCount={profileChannels.length}
               channelsLoading={channelsQuery.isLoading}
               displayName={displayName}
               followMutation={followMutation}
               handleArchive={handleArchive}
+              handleEditAgent={handleEditAgent}
               handleMessage={handleMessage}
               handleOpenActivity={handleOpenActivity}
               handleUnarchive={handleUnarchive}
@@ -416,6 +440,8 @@ export function UserProfilePanel({
               managedAgent={managedAgent}
               memoriesLoading={memoryQuery.isLoading}
               memoryCount={memoryCount}
+              ownerDisplayName={ownerDisplayName}
+              ownerHandle={ownerHandle}
               onOpenChannels={() => setView("channels")}
               onOpenMemories={() => setView("memories")}
               onOpenDm={onOpenDm}
@@ -443,6 +469,13 @@ export function UserProfilePanel({
           ) : null}
         </div>
       </aside>
+      {canEditAgent && managedAgent ? (
+        <EditAgentDialog
+          agent={managedAgent}
+          onOpenChange={setEditAgentOpen}
+          open={editAgentOpen}
+        />
+      ) : null}
     </>
   );
 }

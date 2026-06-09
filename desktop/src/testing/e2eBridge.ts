@@ -39,6 +39,7 @@ type E2eConfig = {
       acp?: MockCommandAvailability;
       mcp?: MockCommandAvailability;
     };
+    agentMemory?: RawAgentMemoryListing | Record<string, RawAgentMemoryListing>;
     profileReadDelayMs?: number;
     profileReadError?: string;
     profileUpdateError?: string;
@@ -341,6 +342,21 @@ type RawCreateManagedAgentResponse = {
 type RawManagedAgentLog = {
   content: string;
   log_path: string;
+};
+
+type RawEngramEntry = {
+  slug: string;
+  body: string;
+  eventId: string;
+  createdAt: number;
+  outgoingRefs: string[];
+};
+
+type RawAgentMemoryListing = {
+  core: RawEngramEntry | null;
+  memories: RawEngramEntry[];
+  truncated: boolean;
+  fetchedAt: number;
 };
 
 type RawCommandAvailability = {
@@ -801,6 +817,24 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
     respond_to_allowlist: agent.respond_to_allowlist
       ? [...agent.respond_to_allowlist]
       : [],
+  };
+}
+
+function cloneEngramEntry(entry: RawEngramEntry): RawEngramEntry {
+  return {
+    ...entry,
+    outgoingRefs: [...entry.outgoingRefs],
+  };
+}
+
+function cloneAgentMemoryListing(
+  listing: RawAgentMemoryListing,
+): RawAgentMemoryListing {
+  return {
+    core: listing.core ? cloneEngramEntry(listing.core) : null,
+    memories: listing.memories.map(cloneEngramEntry),
+    truncated: listing.truncated,
+    fetchedAt: listing.fetchedAt,
   };
 }
 
@@ -3916,6 +3950,59 @@ async function handleListManagedAgents(): Promise<RawManagedAgent[]> {
   return mockManagedAgents.map(cloneManagedAgent);
 }
 
+function isAgentMemoryListing(
+  value: RawAgentMemoryListing | Record<string, RawAgentMemoryListing>,
+): value is RawAgentMemoryListing {
+  return (
+    "memories" in value &&
+    Array.isArray(value.memories) &&
+    "truncated" in value &&
+    "fetchedAt" in value
+  );
+}
+
+async function handleGetAgentMemory(
+  args: { agentPubkey?: string },
+  config: E2eConfig | undefined,
+): Promise<RawAgentMemoryListing> {
+  const pubkey = args.agentPubkey?.toLowerCase();
+  if (!pubkey) {
+    throw new Error("mock get_agent_memory: missing agent pubkey");
+  }
+
+  const isManagedAgent = mockManagedAgents.some(
+    (agent) => agent.pubkey.toLowerCase() === pubkey,
+  );
+  if (!isManagedAgent) {
+    throw new Error(`mock get_agent_memory: unmanaged agent ${pubkey}`);
+  }
+
+  const configuredMemory = config?.mock?.agentMemory;
+  if (!configuredMemory) {
+    return {
+      core: null,
+      memories: [],
+      truncated: false,
+      fetchedAt: Math.floor(Date.now() / 1000),
+    };
+  }
+
+  if (isAgentMemoryListing(configuredMemory)) {
+    return cloneAgentMemoryListing(configuredMemory);
+  }
+
+  const listing =
+    configuredMemory[pubkey] ?? configuredMemory[args.agentPubkey ?? ""];
+  return listing
+    ? cloneAgentMemoryListing(listing)
+    : {
+        core: null,
+        memories: [],
+        truncated: false,
+        fetchedAt: Math.floor(Date.now() / 1000),
+      };
+}
+
 async function handleListPersonas(): Promise<RawPersona[]> {
   return mockPersonas.map((persona) => ({ ...persona }));
 }
@@ -4263,6 +4350,14 @@ async function handleCreateManagedAgent(args: {
   };
 
   mockManagedAgents.unshift(managedAgent);
+  applyMockDisplayName(pubkey, name);
+  mockProfiles.set(pubkey, {
+    pubkey,
+    display_name: name,
+    avatar_url: args.input.avatarUrl?.trim() || null,
+    about: args.input.systemPrompt?.trim() || null,
+    nip05_handle: null,
+  });
   syncMockRelayAgentsFromManagedAgents();
 
   return {
@@ -5542,6 +5637,11 @@ export function maybeInstallE2eTauriMocks() {
         return handleExportPersonaToJson(payload as { id: string });
       case "list_managed_agents":
         return handleListManagedAgents();
+      case "get_agent_memory":
+        return handleGetAgentMemory(
+          (payload as Parameters<typeof handleGetAgentMemory>[0]) ?? {},
+          activeConfig,
+        );
       case "create_managed_agent":
         return handleCreateManagedAgent(
           payload as Parameters<typeof handleCreateManagedAgent>[0],
