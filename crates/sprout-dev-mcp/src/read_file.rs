@@ -1,11 +1,8 @@
-use crate::paths::resolve_within;
 use crate::shell::SharedState;
 use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use std::path::PathBuf;
 
-const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
 const DEFAULT_LIMIT: usize = 2000;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -24,77 +21,7 @@ pub struct ReadFileParams {
 }
 
 pub fn run(state: &SharedState, p: ReadFileParams) -> Result<String, ErrorData> {
-    let workspace_root: PathBuf = match p.workdir.as_deref() {
-        Some(w) => PathBuf::from(w),
-        None => state.cwd.clone(),
-    };
-    let target = match resolve_within(&workspace_root, &p.path) {
-        Ok(t) => t,
-        Err(e) => return Err(ErrorData::invalid_params(e, None)),
-    };
-
-    let meta = match std::fs::metadata(&target) {
-        Ok(m) => m,
-        Err(e) => {
-            return Err(ErrorData::internal_error(
-                format!("cannot stat {}: {e}", target.display()),
-                None,
-            ));
-        }
-    };
-    if !meta.is_file() {
-        return Err(ErrorData::invalid_params(
-            format!("not a regular file: {}", target.display()),
-            None,
-        ));
-    }
-    if meta.len() > MAX_FILE_BYTES {
-        return Err(ErrorData::invalid_params(
-            format!(
-                "file too large: {} is {} bytes (limit {} bytes)",
-                target.display(),
-                meta.len(),
-                MAX_FILE_BYTES
-            ),
-            None,
-        ));
-    }
-
-    let file = match std::fs::File::open(&target) {
-        Ok(f) => f,
-        Err(e) => {
-            return Err(ErrorData::internal_error(
-                format!("cannot open {}: {e}", target.display()),
-                None,
-            ));
-        }
-    };
-    let mut buf = Vec::with_capacity(meta.len() as usize);
-    use std::io::Read;
-    match file.take(MAX_FILE_BYTES + 1).read_to_end(&mut buf) {
-        Ok(n) if n as u64 > MAX_FILE_BYTES => {
-            return Err(ErrorData::invalid_params(
-                format!("file grew past {} bytes during read", MAX_FILE_BYTES),
-                None,
-            ));
-        }
-        Ok(_) => {}
-        Err(e) => {
-            return Err(ErrorData::internal_error(
-                format!("cannot read {}: {e}", target.display()),
-                None,
-            ));
-        }
-    }
-    let content = match String::from_utf8(buf) {
-        Ok(s) => s,
-        Err(e) => {
-            return Err(ErrorData::internal_error(
-                format!("not valid UTF-8: {}: {e}", target.display()),
-                None,
-            ));
-        }
-    };
+    let (_target, content) = crate::paths::read_text_file(state, &p.path, p.workdir.as_deref())?;
 
     let all_lines: Vec<&str> = content.lines().collect();
     let total = all_lines.len();
@@ -109,6 +36,13 @@ pub fn run(state: &SharedState, p: ReadFileParams) -> Result<String, ErrorData> 
     let slice = &all_lines[offset.min(total)..];
     let slice = &slice[..slice.len().min(limit)];
 
+    if slice.is_empty() {
+        return Ok(format!(
+            "{} (no lines in range, file has {} lines)",
+            p.path, total
+        ));
+    }
+
     // 1-based line numbers in the output.
     let start_line = offset + 1;
     let end_line = offset + slice.len();
@@ -121,9 +55,6 @@ pub fn run(state: &SharedState, p: ReadFileParams) -> Result<String, ErrorData> 
         let line_number = offset + i + 1;
         out.push_str(&format!("{line_number}\t{line}\n"));
     }
-    // Remove the trailing newline added by the last iteration so the result
-    // has exactly one trailing newline (the format! above already ends with \n
-    // for the header, and each line pushes its own \n).
     Ok(out)
 }
 
@@ -218,7 +149,7 @@ mod tests {
     fn read_rejects_too_large() {
         let dir = tempdir().expect("tempdir");
         let f = dir.path().join("big.bin");
-        let big = vec![b'a'; (MAX_FILE_BYTES as usize) + 1024];
+        let big = vec![b'a'; (10 * 1024 * 1024_usize) + 1024];
         fs::write(&f, &big).expect("write");
         let state = make_state(dir.path());
         let p = ReadFileParams {
@@ -230,5 +161,55 @@ mod tests {
         let err = run(&state, p).unwrap_err();
         let msg = format!("{err:?}");
         assert!(msg.contains("too large"), "msg: {msg}");
+    }
+
+    #[test]
+    fn read_offset_past_end() {
+        let dir = tempdir().expect("tempdir");
+        let f = dir.path().join("short.txt");
+        fs::write(&f, "line1\nline2\n").expect("write");
+        let state = make_state(dir.path());
+        let p = ReadFileParams {
+            path: "short.txt".into(),
+            offset: Some(100),
+            limit: None,
+            workdir: Some(dir.path().display().to_string()),
+        };
+        let out = run(&state, p).expect("ok");
+        assert!(out.contains("no lines in range"), "out: {out}");
+        assert!(out.contains("file has 2 lines"), "out: {out}");
+    }
+
+    #[test]
+    fn read_limit_zero() {
+        let dir = tempdir().expect("tempdir");
+        let f = dir.path().join("some.txt");
+        fs::write(&f, "line1\nline2\n").expect("write");
+        let state = make_state(dir.path());
+        let p = ReadFileParams {
+            path: "some.txt".into(),
+            offset: None,
+            limit: Some(0),
+            workdir: Some(dir.path().display().to_string()),
+        };
+        let out = run(&state, p).expect("ok");
+        assert!(out.contains("no lines in range"), "out: {out}");
+    }
+
+    #[test]
+    fn read_file_without_trailing_newline() {
+        let dir = tempdir().expect("tempdir");
+        let f = dir.path().join("notrail.txt");
+        fs::write(&f, "line1\nline2\nline3").expect("write");
+        let state = make_state(dir.path());
+        let p = ReadFileParams {
+            path: "notrail.txt".into(),
+            offset: None,
+            limit: None,
+            workdir: Some(dir.path().display().to_string()),
+        };
+        let out = run(&state, p).expect("ok");
+        assert!(out.contains("lines 1-3 of 3"), "out: {out}");
+        assert!(out.contains("3\tline3"), "out: {out}");
     }
 }
