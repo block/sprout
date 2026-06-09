@@ -202,7 +202,7 @@ impl AcpClient {
             // Callers MUST still call shutdown().await for guaranteed cleanup.
             .kill_on_drop(true);
 
-        // Per-persona env vars (e.g., GOOSE_PROVIDER, GOOSE_MODEL).
+        // Per-persona env vars (e.g., GOOSE_PROVIDER, SPROUT_AGENT_PROVIDER).
         // Only injected if not already set in parent env (operator precedence).
         for (key, value) in extra_env {
             if std::env::var(key).is_err() {

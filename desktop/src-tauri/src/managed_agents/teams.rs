@@ -331,6 +331,7 @@ mod tests {
             system_prompt: prompt.to_string(),
             runtime: None,
             model: None,
+            provider: None,
             name_pool: Vec::new(),
             is_builtin: false,
             is_active: true,

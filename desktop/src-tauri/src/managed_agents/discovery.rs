@@ -11,7 +11,8 @@ pub(crate) struct KnownAcpRuntime {
     pub commands: &'static [&'static str],
     pub aliases: &'static [&'static str],
     pub avatar_url: &'static str,
-    /// MCP server binary for this runtime, or `None` for no MCP server.
+    /// Legacy MCP server binary field. Vestigial — all agents now use sprout CLI
+    /// directly. Will be removed when runtime discovery is simplified.
     pub mcp_command: Option<&'static str>,
     /// Whether to enable MCP hook tools (`_Stop`, `_PostCompact`) for this agent.
     pub mcp_hooks: bool,
@@ -32,11 +33,13 @@ pub(crate) struct KnownAcpRuntime {
     /// pointing to the canonical `.agents/skills/sprout-cli`. `None` → this
     /// runtime reads the canonical path directly or has no skill support.
     pub skill_dir: Option<&'static str>,
+    /// Whether this runtime handles model switching via ACP protocol natively.
+    /// Currently unused — env var injection runs unconditionally regardless of
+    /// this value. Retained as scaffolding for when ACP model switching matures.
+    #[allow(dead_code)]
     pub supports_acp_model_switching: bool,
     pub model_env_var: Option<&'static str>,
-    #[allow(dead_code)]
     pub provider_env_var: Option<&'static str>,
-    #[allow(dead_code)]
     pub provider_locked: bool,
     pub default_env: &'static [(&'static str, &'static str)],
 }
@@ -149,7 +152,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         adapter_install_hint: "",
         skill_dir: None,
         supports_acp_model_switching: true,
-        model_env_var: None,
+        model_env_var: Some("SPROUT_AGENT_MODEL"),
         provider_env_var: Some("SPROUT_AGENT_PROVIDER"),
         provider_locked: false,
         default_env: &[],

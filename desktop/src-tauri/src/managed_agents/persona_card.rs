@@ -15,6 +15,7 @@ pub struct ParsedPersonaPreview {
     pub avatar_data_url: Option<String>,
     pub runtime: Option<String>,
     pub model: Option<String>,
+    pub provider: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub name_pool: Vec<String>,
     pub source_file: String,
@@ -82,6 +83,7 @@ pub fn parse_png_persona(png_bytes: &[u8]) -> Result<ParsedPersonaPreview, Strin
         avatar_data_url,
         runtime: fields.runtime,
         model: fields.model,
+        provider: fields.provider,
         name_pool: fields.name_pool,
         source_file: String::new(),
     })
@@ -101,6 +103,7 @@ struct SproutPersonaFields {
     avatar_url: Option<String>,
     runtime: Option<String>,
     model: Option<String>,
+    provider: Option<String>,
     name_pool: Vec<String>,
 }
 
@@ -149,6 +152,15 @@ fn extract_sprout_fields(v: &Value) -> Result<SproutPersonaFields, String> {
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
+    // "llmProvider" is the LLM inference provider (e.g. "databricks", "anthropic").
+    // Distinct from "runtime" (the ACP harness) and from the legacy "provider" key
+    // (which mapped to runtime for backward compat).
+    let provider = v
+        .get("llmProvider")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
     let name_pool = v
         .get("namePool")
         .and_then(|v| v.as_array())
@@ -166,6 +178,7 @@ fn extract_sprout_fields(v: &Value) -> Result<SproutPersonaFields, String> {
         avatar_url,
         runtime,
         model,
+        provider,
         name_pool,
     })
 }
@@ -210,6 +223,7 @@ fn parse_chara_payload(b64: &str) -> Result<SproutPersonaFields, String> {
         avatar_url: None,
         runtime: None,
         model: None,
+        provider: None,
         name_pool: Vec::new(),
     })
 }
@@ -228,6 +242,7 @@ pub fn parse_json_persona(json_bytes: &[u8]) -> Result<ParsedPersonaPreview, Str
         avatar_data_url: fields.avatar_url,
         runtime: fields.runtime,
         model: fields.model,
+        provider: fields.provider,
         name_pool: fields.name_pool,
         source_file: String::new(),
     })
@@ -239,6 +254,7 @@ pub fn encode_persona_json(
     avatar_url: Option<&str>,
     runtime: Option<&str>,
     model: Option<&str>,
+    provider: Option<&str>,
     name_pool: &[String],
 ) -> Result<Vec<u8>, String> {
     let mut map = serde_json::Map::new();
@@ -253,6 +269,9 @@ pub fn encode_persona_json(
     }
     if let Some(m) = model {
         map.insert("model".to_string(), serde_json::json!(m));
+    }
+    if let Some(p) = provider {
+        map.insert("llmProvider".to_string(), serde_json::json!(p));
     }
     if !name_pool.is_empty() {
         map.insert("namePool".to_string(), serde_json::json!(name_pool));
@@ -287,6 +306,7 @@ pub fn parse_md_persona(md_bytes: &[u8]) -> Result<ParsedPersonaPreview, String>
         avatar_data_url: None, // .persona.md avatars are paths, not data URIs
         runtime: config.runtime,
         model,
+        provider: None, // .persona.md format does not carry llmProvider
         name_pool: Vec::new(),
         source_file: String::new(),
     })
@@ -387,6 +407,7 @@ pub fn parse_zip_pack(zip_bytes: &[u8]) -> Result<ParsePersonaFilesResult, Strin
             avatar_data_url: None,
             runtime: p.runtime.clone(),
             model: p.model.clone(),
+            provider: None, // persona packs do not carry llmProvider
             name_pool: Vec::new(),
             source_file: format!("{} ({})", p.name, resolved.name),
         })
@@ -791,14 +812,13 @@ mod tests {
         assert!(err.contains("exceeds 100MB"));
     }
 
-    // --- JSON persona tests ---
-
     #[test]
     fn parse_json_round_trip() {
         let bytes = encode_persona_json(
             "Ada Lovelace",
             "You are Ada.",
             Some("https://example.com/ada.png"),
+            None,
             None,
             None,
             &[],
@@ -816,7 +836,8 @@ mod tests {
 
     #[test]
     fn parse_json_round_trip_no_avatar() {
-        let bytes = encode_persona_json("Bob", "You are Bob.", None, None, None, &[]).unwrap();
+        let bytes =
+            encode_persona_json("Bob", "You are Bob.", None, None, None, None, &[]).unwrap();
         let result = parse_json_persona(&bytes).unwrap();
         assert_eq!(result.display_name, "Bob");
         assert_eq!(result.system_prompt, "You are Bob.");
@@ -826,8 +847,16 @@ mod tests {
     #[test]
     fn parse_json_round_trip_data_uri_avatar() {
         let data_uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
-        let bytes = encode_persona_json("Carol", "You are Carol.", Some(data_uri), None, None, &[])
-            .unwrap();
+        let bytes = encode_persona_json(
+            "Carol",
+            "You are Carol.",
+            Some(data_uri),
+            None,
+            None,
+            None,
+            &[],
+        )
+        .unwrap();
         let result = parse_json_persona(&bytes).unwrap();
         assert_eq!(result.display_name, "Carol");
         assert_eq!(result.avatar_data_url.as_deref(), Some(data_uri));
@@ -841,6 +870,7 @@ mod tests {
             None,
             Some("goose"),
             Some("claude-sonnet-4"),
+            None,
             &[],
         )
         .unwrap();
@@ -854,7 +884,8 @@ mod tests {
 
     #[test]
     fn parse_json_round_trip_without_runtime_and_model() {
-        let bytes = encode_persona_json("Bob", "You are Bob.", None, None, None, &[]).unwrap();
+        let bytes =
+            encode_persona_json("Bob", "You are Bob.", None, None, None, None, &[]).unwrap();
         let result = parse_json_persona(&bytes).unwrap();
         assert_eq!(result.display_name, "Bob");
         assert!(result.runtime.is_none());
@@ -930,8 +961,8 @@ mod tests {
 
     #[test]
     fn parse_zip_with_json() {
-        let j1 = encode_persona_json("Alice", "Prompt A", None, None, None, &[]).unwrap();
-        let j2 = encode_persona_json("Bob", "Prompt B", None, None, None, &[]).unwrap();
+        let j1 = encode_persona_json("Alice", "Prompt A", None, None, None, None, &[]).unwrap();
+        let j2 = encode_persona_json("Bob", "Prompt B", None, None, None, None, &[]).unwrap();
         let zip = make_test_zip(&[("alice.persona.json", &j1), ("bob.persona.json", &j2)]);
         let result = parse_zip_personas(&zip).unwrap();
         assert_eq!(result.personas.len(), 2);
@@ -944,7 +975,7 @@ mod tests {
     fn parse_zip_mixed_png_and_json() {
         let png = make_test_persona_png("PngPersona", "PNG prompt");
         let json =
-            encode_persona_json("JsonPersona", "JSON prompt", None, None, None, &[]).unwrap();
+            encode_persona_json("JsonPersona", "JSON prompt", None, None, None, None, &[]).unwrap();
         let zip = make_test_zip(&[
             ("persona.png", &png),
             ("persona.json", &json),
@@ -961,8 +992,10 @@ mod tests {
 
     #[test]
     fn parse_zip_ignores_macos_resource_forks() {
-        let j1 = encode_persona_json("Frank", "You are Frank.", None, None, None, &[]).unwrap();
-        let j2 = encode_persona_json("Jackie", "You are Jackie.", None, None, None, &[]).unwrap();
+        let j1 =
+            encode_persona_json("Frank", "You are Frank.", None, None, None, None, &[]).unwrap();
+        let j2 =
+            encode_persona_json("Jackie", "You are Jackie.", None, None, None, None, &[]).unwrap();
         let zip = make_test_zip(&[
             ("frank-costanza.persona.json", &j1),
             ("jackie-chiles.persona.json", &j2),

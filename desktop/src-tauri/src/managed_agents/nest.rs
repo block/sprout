@@ -943,6 +943,7 @@ mod tests {
             system_prompt: String::new(),
             runtime: None,
             model: None,
+            provider: None,
             name_pool: vec![],
             is_builtin: false,
             is_active: true,

@@ -131,6 +131,23 @@ fn build_deploy_payload(
         crate::managed_agents::resolve_persona_env(app, record.persona_id.as_deref())?;
     let merged_env = crate::managed_agents::merged_user_env(&persona_env, &record.env_vars);
 
+    // Resolve effective model/provider from the persona's structured fields.
+    // Agent record's model takes precedence (user override via UI).
+    let (effective_model, effective_provider) = if let Some(ref pid) = record.persona_id {
+        let personas = load_personas(app).map_err(|e| {
+            format!("failed to load personas for deploy payload model resolution: {e}")
+        })?;
+        let persona = personas.iter().find(|p| p.id == *pid);
+        let model = record
+            .model
+            .clone()
+            .or_else(|| persona.and_then(|p| p.model.clone()));
+        let provider = persona.and_then(|p| p.provider.clone());
+        (model, provider)
+    } else {
+        (record.model.clone(), None)
+    };
+
     Ok(serde_json::json!({
         "name": &record.name,
         "relay_url": &record.relay_url,
@@ -139,7 +156,8 @@ fn build_deploy_payload(
         "agent_command": &record.agent_command,
         "agent_args": &record.agent_args,
         "system_prompt": &record.system_prompt,
-        "model": &record.model,
+        "model": effective_model,
+        "provider": effective_provider,
         "turn_timeout_seconds": record.turn_timeout_seconds,
         "idle_timeout_seconds": record.idle_timeout_seconds,
         "max_turn_duration_seconds": record.max_turn_duration_seconds,
