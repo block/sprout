@@ -520,12 +520,13 @@ pub fn run() {
             // this worktree's data directory. Must run before
             // restore_managed_agents_on_launch (which reads managed-agents.json).
             migration::sync_shared_agent_data(&app_handle);
-            migration::reconcile_persona_pack_paths(&app_handle);
+            migration::migrate_packs_to_teams(&app_handle);
+            migration::reconcile_persona_team_dirs(&app_handle);
             migration::reconcile_provider_mcp_commands(&app_handle);
             migration::migrate_persona_provider_to_runtime(&app_handle);
 
-            if let Err(e) = managed_agents::sync_pack_personas(&app_handle) {
-                eprintln!("sprout-desktop: sync-pack-personas: {e}");
+            if let Err(e) = managed_agents::sync_team_personas(&app_handle) {
+                eprintln!("sprout-desktop: sync-team-personas: {e}");
             }
 
             // Resolve persisted identity key (env var → file → generate+save).
@@ -734,13 +735,13 @@ pub fn run() {
             create_team,
             update_team,
             delete_team,
+            install_team_from_directory,
+            sync_team_directory,
+            pick_team_directory,
             export_team_to_json,
             parse_team_file,
             parse_persona_files,
             export_persona_to_json,
-            install_persona_pack,
-            uninstall_persona_pack,
-            list_persona_packs,
             get_channel_workflows,
             get_workflow,
             create_workflow,

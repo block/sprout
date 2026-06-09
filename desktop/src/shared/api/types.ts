@@ -474,8 +474,8 @@ export type AgentPersona = {
   namePool: string[];
   isBuiltIn: boolean;
   isActive: boolean;
-  /** Pack ID if this persona was imported from a persona pack. Pack personas are non-editable. */
-  sourcePack?: string | null;
+  /** Team ID if this persona was imported from a team directory. Team personas are non-editable. */
+  sourceTeam?: string | null;
   /** Environment variables injected for agents created from this persona.
    * Layered as: desktop parent env < persona envVars < agent envVars. */
   envVars: Record<string, string>;
@@ -513,6 +513,14 @@ export type AgentTeam = {
   description: string | null;
   personaIds: string[];
   isBuiltin: boolean;
+  /** Absolute path to the team's backing directory (if directory-backed). */
+  sourceDir: string | null;
+  /** Whether sourceDir is a symlink to an external directory. */
+  isSymlink: boolean;
+  /** Resolved symlink target path (for display). Only set when isSymlink is true. */
+  symlinkTarget: string | null;
+  /** Version from the team's plugin.json manifest. */
+  version: string | null;
   createdAt: string;
   updatedAt: string;
 };

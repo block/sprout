@@ -374,6 +374,10 @@ type RawTeam = {
   description: string | null;
   persona_ids: string[];
   is_builtin: boolean;
+  source_dir: string | null;
+  is_symlink: boolean;
+  symlink_target: string | null;
+  version: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -880,7 +884,50 @@ function resetMockPersonas() {
 }
 
 function resetMockTeams() {
-  mockTeams = [];
+  const now = new Date().toISOString();
+  mockTeams = [
+    {
+      id: "team-engineering-001",
+      name: "Engineering",
+      description: "Core engineering personas",
+      // Scout is intentionally excluded so the clean deselect flow has a
+      // built-in persona that is not pre-referenced by any default team.
+      persona_ids: ["builtin:solo", "builtin:kit"],
+      is_builtin: false,
+      source_dir: null,
+      is_symlink: false,
+      symlink_target: null,
+      version: null,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: "team-research-002",
+      name: "Research Agents",
+      description: "Directory-backed research team",
+      persona_ids: ["builtin:solo", "builtin:kit"],
+      is_builtin: false,
+      source_dir: "/Users/dev/agents/research",
+      is_symlink: false,
+      symlink_target: null,
+      version: "1.2.0",
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: "team-platform-003",
+      name: "Platform Tools",
+      description: "Symlinked platform team",
+      persona_ids: ["builtin:kit"],
+      is_builtin: false,
+      source_dir: "/Users/dev/agents/platform",
+      is_symlink: true,
+      symlink_target: "/opt/shared-teams/platform",
+      version: "2.0.1",
+      created_at: now,
+      updated_at: now,
+    },
+  ];
 }
 
 function getMockProfileByPubkey(pubkey: string): RawProfile | null {
@@ -4160,6 +4207,10 @@ async function handleCreateTeam(args: {
     description: args.input.description?.trim() || null,
     persona_ids: [...args.input.personaIds],
     is_builtin: false,
+    source_dir: null,
+    is_symlink: false,
+    symlink_target: null,
+    version: null,
     created_at: now,
     updated_at: now,
   };
@@ -4214,6 +4265,50 @@ async function handleExportTeamToJson(args: { id: string }): Promise<boolean> {
   }
 
   return true;
+}
+
+async function handlePickTeamDirectory(): Promise<string | null> {
+  return "/Users/dev/agents/new-team";
+}
+
+async function handleInstallTeamFromDirectory(args: {
+  path: string;
+  symlink: boolean;
+}): Promise<RawTeam> {
+  const now = new Date().toISOString();
+  const team: RawTeam = {
+    id: crypto.randomUUID(),
+    name: "Installed Team",
+    description: null,
+    persona_ids: [],
+    is_builtin: false,
+    source_dir: args.path,
+    is_symlink: args.symlink,
+    symlink_target: args.symlink ? args.path : null,
+    version: null,
+    created_at: now,
+    updated_at: now,
+  };
+  mockTeams.push(team);
+  return { ...team, persona_ids: [...team.persona_ids] };
+}
+
+async function handleSyncTeamDirectory(args: { teamId: string }): Promise<{
+  personas_added: string[];
+  personas_removed: string[];
+  personas_updated: string[];
+  metadata_changed: boolean;
+}> {
+  const team = mockTeams.find((candidate) => candidate.id === args.teamId);
+  if (!team) {
+    throw new Error(`Team ${args.teamId} not found.`);
+  }
+  return {
+    personas_added: [],
+    personas_removed: [],
+    personas_updated: [],
+    metadata_changed: false,
+  };
 }
 
 async function handleParseTeamFile(): Promise<{
@@ -5662,6 +5757,16 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "export_team_to_json":
         return handleExportTeamToJson(payload as { id: string });
+      case "pick_team_directory":
+        return handlePickTeamDirectory();
+      case "install_team_from_directory":
+        return handleInstallTeamFromDirectory(
+          payload as Parameters<typeof handleInstallTeamFromDirectory>[0],
+        );
+      case "sync_team_directory":
+        return handleSyncTeamDirectory(
+          payload as Parameters<typeof handleSyncTeamDirectory>[0],
+        );
       case "parse_team_file":
         return handleParseTeamFile();
       case "parse_persona_files":

@@ -913,10 +913,10 @@ pub fn spawn_agent_child(
             }
         }
     }
-    if let (Some(pack_path), Some(persona_name)) =
-        (&record.persona_pack_path, &record.persona_name_in_pack)
+    if let (Some(team_dir), Some(persona_name)) =
+        (&record.persona_team_dir, &record.persona_name_in_team)
     {
-        command.env("SPROUT_ACP_PERSONA_PACK", pack_path);
+        command.env("SPROUT_ACP_PERSONA_PACK", team_dir);
         command.env("SPROUT_ACP_PERSONA_NAME", persona_name);
     }
 
