@@ -163,6 +163,13 @@ pub struct ManagedAgentRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RelayMeshConfig {
     /// The served model id this agent routes to (e.g. "Qwen3").
+    ///
+    /// `alias` because this struct crosses two boundaries with different
+    /// casing conventions: the TS create request sends camelCase
+    /// (`relayMesh: { modelRef }` — `rename_all` on the request does not
+    /// recurse into nested structs), while persisted records use snake_case.
+    /// Serialization stays `model_ref` so saved records are stable.
+    #[serde(alias = "modelRef")]
     pub model_ref: String,
 }
 
@@ -764,5 +771,43 @@ mod tests {
         // (Allowlist mode requires ≥1 entry) is the caller's job.
         let result = validate_respond_to_allowlist(&[]).unwrap();
         assert!(result.is_empty());
+    }
+
+    use super::{CreateManagedAgentRequest, RelayMeshConfig};
+
+    /// Wire-shape test: the create request arrives from TS as camelCase
+    /// (`relayMesh: { modelRef }`). `rename_all = "camelCase"` on
+    /// `CreateManagedAgentRequest` does NOT recurse into nested structs, so
+    /// `RelayMeshConfig` needs its own `alias = "modelRef"`. This test pins
+    /// the exact JSON the frontend sends; if the alias is dropped, creating
+    /// a relay-mesh agent fails to deserialize at the Tauri boundary.
+    #[test]
+    fn create_request_deserializes_camel_case_relay_mesh() {
+        let request: CreateManagedAgentRequest = serde_json::from_str(
+            r#"{
+                "name": "mesh-agent",
+                "relayMesh": { "modelRef": "Qwen3" }
+            }"#,
+        )
+        .expect("camelCase relayMesh payload from TS should deserialize");
+        assert_eq!(
+            request.relay_mesh,
+            Some(RelayMeshConfig {
+                model_ref: "Qwen3".to_string()
+            })
+        );
+    }
+
+    /// Persisted records use snake_case; the camelCase alias must not break
+    /// the stored-record round trip.
+    #[test]
+    fn relay_mesh_config_round_trips_snake_case() {
+        let config = RelayMeshConfig {
+            model_ref: "Qwen3".to_string(),
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert_eq!(json, r#"{"model_ref":"Qwen3"}"#);
+        let back: RelayMeshConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, config);
     }
 }
