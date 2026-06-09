@@ -51,6 +51,7 @@ Agents commit under their own identity. The human operator signs off for account
 
 - **Author/Committer:** use the agent's own name and email. Configure repo-local or use `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL`/`GIT_COMMITTER_NAME`/`GIT_COMMITTER_EMAIL`. Format: `Agent-Name <agent-id@users.noreply.github.com>` (or relay-based email if no GitHub account exists for the agent).
 - **Human sign-off (required):** every commit MUST include a `Signed-off-by` trailer for the human operator who is responsible for the agent's work. Add via `git commit --trailer "Signed-off-by: Human Name <human@email>"`. One blank line must separate trailers from the commit body.
+- **Discovering the human's identity:** read `git config user.name` and `git config user.email` from the working repository. These reflect the human operator's configured identity for that repo (which may differ from their global config). Use these exact values for the `Signed-off-by` trailer. Do NOT hardcode, guess, or prompt for the email — the repo config is the source of truth.
 - **Signing:** if the agent has a registered signing key, sign commits. If not, commits will land unverified — this is acceptable until agent SSH keys are provisioned. Do NOT use the human's signing key.
 - **Verify before pushing:** `git log -1` should show the agent as author and the human's `Signed-off-by` trailer.
 
