@@ -120,6 +120,13 @@ export function UserProfilePanel({
   const [view, setView] = React.useState<ProfilePanelView>("summary");
 
   const profileQuery = useUserProfileQuery(pubkey);
+
+  // Batch avatar prefetch seeds kind:0 summaries without `about`; refetch on open
+  // so the hero can show the full profile description from relay.
+  React.useEffect(() => {
+    void profileQuery.refetch();
+  }, [profileQuery.refetch]);
+
   const relayAgentsQuery = useRelayAgentsQuery({ enabled: true });
   const managedAgentsQuery = useManagedAgentsQuery({ enabled: true });
   const channelsQuery = useChannelsQuery();

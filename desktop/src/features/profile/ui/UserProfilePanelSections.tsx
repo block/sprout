@@ -1,10 +1,13 @@
+import * as React from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   Activity,
   Archive,
   ArchiveRestore,
   Brain,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   Copy,
   Cpu,
   Fingerprint,
@@ -35,6 +38,7 @@ import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import { StatusEmoji } from "@/features/user-status/ui/StatusEmoji";
 import { BotIdenticon } from "@/features/messages/ui/BotIdenticon";
 import type { ManagedAgent, RelayAgent } from "@/shared/api/types";
+import { cn } from "@/shared/lib/cn";
 
 const RUNTIME_LABELS: Record<string, string> = {
   goose: "Goose",
@@ -127,8 +131,6 @@ export function ProfileSummaryView({
   const showChannelsIngress =
     channelsLoading || channelCount > 0 || isBot || relayAgent !== undefined;
 
-  const profileDescription = profile?.about?.trim() || null;
-
   return (
     <div className="flex flex-col gap-6 pt-4">
       <ProfileHero
@@ -139,10 +141,6 @@ export function ProfileSummaryView({
         profile={profile}
         userStatus={userStatus}
       />
-
-      {profileDescription ? (
-        <ProfileDescription about={profileDescription} />
-      ) : null}
 
       {!isSelf ? (
         <ProfilePrimaryActions
@@ -262,6 +260,13 @@ function ProfileHero({
           ) : null}
         </div>
 
+        {profile?.about?.trim() ? (
+          <ProfileHeroDescription
+            about={profile.about.trim()}
+            key={profile.about.trim()}
+          />
+        ) : null}
+
         {profile?.nip05Handle ? (
           <p className="text-sm text-muted-foreground">{profile.nip05Handle}</p>
         ) : null}
@@ -293,19 +298,76 @@ function ProfileHero({
   );
 }
 
-function ProfileDescription({ about }: { about: string }) {
+function ProfileHeroDescription({ about }: { about: string }) {
+  const [expanded, setExpanded] = React.useState(false);
+  const [isTruncated, setIsTruncated] = React.useState(false);
+  const textRef = React.useRef<HTMLParagraphElement>(null);
+
+  const measureTruncation = React.useCallback(() => {
+    const element = textRef.current;
+    if (!element || expanded) {
+      return;
+    }
+    setIsTruncated(element.scrollHeight > element.clientHeight + 1);
+  }, [expanded]);
+
+  React.useLayoutEffect(() => {
+    measureTruncation();
+  }, [measureTruncation]);
+
+  React.useEffect(() => {
+    const element = textRef.current;
+    if (!element) {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      measureTruncation();
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [measureTruncation]);
+
+  const toggleClassName =
+    "inline-flex items-center gap-0.5 text-xs font-medium text-muted-foreground opacity-60 transition-opacity hover:text-foreground hover:opacity-100";
+
   return (
-    <section
-      className="rounded-2xl border border-border/60 bg-muted/20 px-4 py-3"
-      data-testid="user-profile-description"
-    >
-      <h4 className="text-xs font-medium text-foreground">
-        Profile description
-      </h4>
-      <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
-        {about}
-      </p>
-    </section>
+    <div className="flex w-full flex-col items-center gap-0.5">
+      <div className="w-fit max-w-full px-2">
+        <p
+          className={cn(
+            "text-center whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground",
+            !expanded && "line-clamp-3",
+          )}
+          data-testid="user-profile-description"
+          ref={textRef}
+        >
+          {about}
+        </p>
+      </div>
+      {!expanded && isTruncated ? (
+        <button
+          className={toggleClassName}
+          data-testid="user-profile-description-toggle"
+          onClick={() => setExpanded(true)}
+          type="button"
+        >
+          more
+          <ChevronDown className="h-3 w-3" />
+        </button>
+      ) : null}
+      {expanded ? (
+        <button
+          className={toggleClassName}
+          data-testid="user-profile-description-toggle"
+          onClick={() => setExpanded(false)}
+          type="button"
+        >
+          less
+          <ChevronUp className="h-3 w-3" />
+        </button>
+      ) : null}
+    </div>
   );
 }
 
