@@ -151,9 +151,7 @@ export function formatTimelineMessages(
   }
   const deletedEventIds = new Set<string>();
   for (const event of events) {
-    // Both kind:5 (NIP-09) and kind:9005 (NIP-29 / Sprout-native) are
-    // deletion markers. Each carries the deletion target in an `e` tag.
-    // Authorship is enforced by the relay; we just mirror its decisions.
+    // Both kind:5 and kind:9005 are deletion markers; mirror the relay.
     if (
       event.kind !== KIND_DELETION &&
       event.kind !== KIND_NIP29_DELETE_EVENT

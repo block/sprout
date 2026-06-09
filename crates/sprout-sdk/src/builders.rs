@@ -353,14 +353,8 @@ pub fn build_delete_message(
 
 // ── Builder 7: build_delete_compat ───────────────────────────────────────────
 
-/// Build a NIP-09 compatible deletion event (kind 5).
-///
-/// The `h` tag is non-standard for NIP-09, but Sprout's channel subscription
-/// filter requires it (`{ kinds: [...], "#h": [channelId] }`) — without it the
-/// kind:5 never matches the subscription and clients never observe the
-/// deletion until a non-channel-scoped fetch backfills it. Extra tags are
-/// safe per NIP-09; the relay derives the deletion target from the `e` tag
-/// and validates author permissions independently of the `h` tag.
+/// Build a NIP-09 deletion event (kind 5). The `h` tag is non-standard for
+/// NIP-09 but is required so channel-scoped subscriptions observe the delete.
 pub fn build_delete_compat(
     channel_id: Uuid,
     target_event_id: nostr::EventId,

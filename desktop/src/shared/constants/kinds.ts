@@ -1,9 +1,8 @@
 export const KIND_DELETION = 5;
 export const KIND_REACTION = 7;
 export const KIND_STREAM_MESSAGE = 9;
-// NIP-29 group event deletion. The relay handles 9005 specifically: it
-// soft-deletes the target AND emits a kind:40099 system message. Treated as
-// a deletion marker alongside KIND_DELETION (kind:5).
+// Sprout-native deletion. The relay soft-deletes the target and emits a
+// kind:40099 system message. Treated as a deletion marker alongside kind:5.
 export const KIND_NIP29_DELETE_EVENT = 9005;
 export const KIND_STREAM_MESSAGE_V2 = 40002;
 export const KIND_STREAM_MESSAGE_EDIT = 40003;

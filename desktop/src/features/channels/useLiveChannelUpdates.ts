@@ -17,6 +17,8 @@ import {
 } from "@/shared/constants/kinds";
 import type { Channel, RelayEvent } from "@/shared/api/types";
 
+import { isDmNotifiableKind } from "./isDmNotifiableKind";
+
 export type UseLiveChannelUpdatesOptions = {
   currentPubkey?: string;
   onDmMessage?: (event: RelayEvent, channel: Channel) => void;
@@ -108,6 +110,11 @@ export function useLiveChannelUpdates(
   );
 
   const handleDmEvent = React.useEffectEvent((event: RelayEvent) => {
+    // Only human-visible message kinds should fire DM notifications.
+    if (!isDmNotifiableKind(event.kind)) {
+      return;
+    }
+
     // Suppress backlog events that predate our subscription — these are
     // historical replays, not live messages.
     if (event.created_at < dmSubscriptionStartedAtRef.current) {
