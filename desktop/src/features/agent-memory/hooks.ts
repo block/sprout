@@ -20,13 +20,14 @@ const MOCK_AGENT_MEMORY: AgentMemoryListing = {
 I prefer concise updates, explicit next steps, and visual polish before edge-case handling.
 
 See [[mem/preferences/ui-density]] and [[mem/projects/sprout-memory-viewer]] for details.
-Also referencing a deleted memory: [[mem/archive/deleted-plan]].`,
+
+A retired launch checklist used to live at [[mem/archive/deleted-launch-checklist]], but that memory was deleted after the plan changed.`,
     eventId: "mock-core",
     createdAt: 1_700_000_000,
     outgoingRefs: [
       "mem/preferences/ui-density",
       "mem/projects/sprout-memory-viewer",
-      "mem/archive/deleted-plan",
+      "mem/archive/deleted-launch-checklist",
     ],
   },
   memories: [
@@ -81,10 +82,10 @@ Also referencing a deleted memory: [[mem/archive/deleted-plan]].`,
     },
     {
       slug: "mem/orphan/unreferenced",
-      body: "This memory is not reachable from core — should appear under Unreferenced.",
+      body: "This orphaned note is not reachable from core. It still points at [[mem/research/old-panel-sketches]], a deleted design scratchpad from an earlier pass.",
       eventId: "mock-orphan",
       createdAt: 1_700_000_800,
-      outgoingRefs: ["mem/also-missing"],
+      outgoingRefs: ["mem/research/old-panel-sketches"],
     },
   ],
   truncated: true,

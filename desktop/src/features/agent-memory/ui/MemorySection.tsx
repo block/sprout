@@ -5,10 +5,7 @@ import {
   useAgentMemoryGraph,
   useIsManagedAgent,
 } from "@/features/agent-memory/hooks";
-import type {
-  DanglingRef,
-  MemoryTreeNode,
-} from "@/features/agent-memory/lib/buildMemoryGraph";
+import type { MemoryTreeNode } from "@/features/agent-memory/lib/buildMemoryGraph";
 import type { EngramEntry } from "@/shared/api/tauriEngrams";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
@@ -19,6 +16,9 @@ const MEMORY_LIST_PREVIEW_LIMIT = 3;
 
 const MEMORY_TRUNCATED_TOOLTIP =
   "This list may be incomplete — the relay returned the maximum number of memories.";
+
+const MEMORY_DANGLING_REF_TOOLTIP =
+  "This memory links to a slug that wasn't found in the loaded memory list.";
 
 /**
  * Memory section — IXI-7 phase 1 read-only viewer.
@@ -36,7 +36,7 @@ const MEMORY_TRUNCATED_TOOLTIP =
  *   ⚠ truncated relay banner (if applicable)
  *   ── tree rooted at `core` ──
  *   ── orphans list (if any) ──
- *   ── dangling refs list (if any) ──
+ *   ── missing [[slug]] refs highlighted inline on parent memories ──
  *
  * tho will refine the visual design — this is the structural placement.
  */
@@ -216,8 +216,12 @@ function MemoryGraphView({
 }) {
   const { rootedTree, orphans, dangling } = graph;
   const [showAllEntries, setShowAllEntries] = React.useState(false);
+  const danglingSlugs = React.useMemo(
+    () => new Set(dangling.map((d) => d.slug)),
+    [dangling],
+  );
 
-  const isEmpty = !rootedTree && orphans.length === 0 && dangling.length === 0;
+  const isEmpty = !rootedTree && orphans.length === 0;
   if (isEmpty) {
     return (
       <p
@@ -254,7 +258,11 @@ function MemoryGraphView({
 
       <div className="space-y-2" data-testid="agent-memory-list">
         {visibleEntries.map((entry) => (
-          <MemoryEntryAccordion entry={entry} key={entry.eventId} />
+          <MemoryEntryAccordion
+            danglingSlugs={danglingSlugs}
+            entry={entry}
+            key={entry.eventId}
+          />
         ))}
       </div>
 
@@ -277,22 +285,6 @@ function MemoryGraphView({
         >
           Show less
         </button>
-      ) : null}
-
-      {dangling.length > 0 ? (
-        <div className="space-y-2" data-testid="agent-memory-dangling">
-          <h5 className="px-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
-            Broken references ({dangling.length})
-          </h5>
-          {dangling.map((d) => (
-            <div
-              className="overflow-hidden rounded-2xl bg-muted/40 px-4 py-3"
-              key={d.slug}
-            >
-              <DanglingRefRow danglingRef={d} />
-            </div>
-          ))}
-        </div>
       ) : null}
     </div>
   );
@@ -373,15 +365,16 @@ function MemoryBodyText({ body }: { body: string }) {
 
   for (const match of body.matchAll(MEMORY_REF_PATTERN)) {
     const index = match.index ?? 0;
+    const slug = match[1];
     if (index > lastIndex) {
       parts.push(body.slice(lastIndex, index));
     }
     parts.push(
       <span
         className="wrap-break-word break-all text-foreground"
-        key={`${index}-${match[1]}`}
+        key={`${index}-${slug}`}
       >
-        [[{match[1]}]]
+        [[{slug}]]
       </span>,
     );
     lastIndex = index + match[0].length;
@@ -392,6 +385,37 @@ function MemoryBodyText({ body }: { body: string }) {
   }
 
   return <>{parts}</>;
+}
+
+function MemoryDanglingRefsHint({ slugs }: { slugs: string[] }) {
+  if (slugs.length === 0) return null;
+
+  return (
+    <div
+      className="-mx-4 -mb-2 mt-2 px-2 pb-1"
+      data-testid="agent-memory-dangling-hint"
+    >
+      <div className="rounded-xl bg-warning/5 px-2.5 py-2 text-xs leading-5">
+        <p className="text-warning">
+          Missing {slugs.length === 1 ? "link" : "links"}:{" "}
+          {slugs.map((slug, index) => (
+            <React.Fragment key={slug}>
+              {index > 0 ? ", " : null}
+              <span
+                className="wrap-break-word break-all text-warning"
+                data-testid="agent-memory-dangling-ref"
+              >
+                [[{slug}]]
+              </span>
+            </React.Fragment>
+          ))}
+        </p>
+        <p className="mt-0.5 text-foreground/50">
+          {MEMORY_DANGLING_REF_TOOLTIP}
+        </p>
+      </div>
+    </div>
+  );
 }
 
 function MemorySlugTitle({ slug }: { slug: string }) {
@@ -440,13 +464,24 @@ function elementExceedsLines(element: HTMLElement, lines: number): boolean {
 }
 
 /** A single engram accordion — collapsed preview truncates to two lines. */
-function MemoryEntryAccordion({ entry }: { entry: EngramEntry }) {
+function MemoryEntryAccordion({
+  danglingSlugs,
+  entry,
+}: {
+  danglingSlugs: ReadonlySet<string>;
+  entry: EngramEntry;
+}) {
   const [open, setOpen] = React.useState(false);
   const [showCaret, setShowCaret] = React.useState(false);
   const articleRef = React.useRef<HTMLElement>(null);
   const titleRef = React.useRef<HTMLDivElement>(null);
   const bodyRef = React.useRef<HTMLDivElement>(null);
   const isEmpty = entry.body.trim().length === 0;
+  const danglingRefsForEntry = entry.outgoingRefs.filter((ref) =>
+    danglingSlugs.has(ref),
+  );
+  const hasDanglingRefs = danglingRefsForEntry.length > 0;
+  const canExpand = showCaret || hasDanglingRefs;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: remeasure when accordion clamping changes
   React.useLayoutEffect(() => {
@@ -479,6 +514,9 @@ function MemoryEntryAccordion({ entry }: { entry: EngramEntry }) {
           )}
           ref={titleRef}
         >
+          {hasDanglingRefs ? (
+            <AlertTriangle className="mr-1 inline-block h-3.5 w-3.5 align-[-2px] text-warning" />
+          ) : null}
           <MemorySlugTitle slug={entry.slug} />
         </div>
         <div
@@ -495,7 +533,7 @@ function MemoryEntryAccordion({ entry }: { entry: EngramEntry }) {
           )}
         </div>
       </div>
-      {showCaret ? (
+      {canExpand ? (
         <ChevronDown
           className={cn(
             "mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform",
@@ -511,31 +549,21 @@ function MemoryEntryAccordion({ entry }: { entry: EngramEntry }) {
       className="overflow-hidden rounded-2xl bg-muted/40"
       ref={articleRef}
     >
-      {showCaret ? (
+      {canExpand ? (
         <button
           aria-expanded={open}
-          className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50"
+          className="w-full px-4 py-3 text-left transition-colors hover:bg-muted/50"
           onClick={() => setOpen((value) => !value)}
           type="button"
         >
-          {content}
+          <div className="flex items-start gap-3">{content}</div>
+          {hasDanglingRefs && open ? (
+            <MemoryDanglingRefsHint slugs={danglingRefsForEntry} />
+          ) : null}
         </button>
       ) : (
         <div className="flex items-start gap-3 px-4 py-3">{content}</div>
       )}
     </article>
-  );
-}
-
-function DanglingRefRow({ danglingRef }: { danglingRef: DanglingRef }) {
-  return (
-    <div className="flex items-baseline gap-2 text-xs">
-      <span className="font-mono text-[11px] text-warning">
-        {danglingRef.slug}
-      </span>
-      <span className="text-muted-foreground/70">
-        ← {danglingRef.referencedBy.join(", ")}
-      </span>
-    </div>
   );
 }
