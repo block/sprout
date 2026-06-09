@@ -1,4 +1,4 @@
-use crate::agent::{push_hook_outputs_as_tool_results, RunCtx};
+use crate::agent::RunCtx;
 use crate::config::{
     HANDOFF_MAX_OUTPUT_TOKENS, HANDOFF_MAX_TOOL_NAMES, HANDOFF_ORIGINAL_TASK_MAX_BYTES,
     HANDOFF_PROMPT_MAX_BYTES, HANDOFF_TAIL_ITEMS,
@@ -68,15 +68,17 @@ impl RunCtx<'_> {
                 &self.cfg.hook_servers,
             )
             .await;
-        // Handoff summary is trusted (we generated it). Push as User so
-        // it anchors the new context.
-        let handoff_text = format!("[Context Handoff]\n{summary}");
-        self.history.push(HistoryItem::User(handoff_text));
-        // Hook output is untrusted — inject as synthetic tool results so a
-        // malicious _PostCompact can't impersonate the user/system.
+        // Handoff summary and hook output are injected as a synthetic user
+        // message in one block. This keeps `_PostCompact` untrusted while also
+        // avoiding orphan tool-result messages in the fresh context: OpenAI
+        // Chat/Responses require tool outputs to follow an assistant tool call,
+        // but handoff reset intentionally discards the old assistant turn.
+        let mut handoff_text = format!("[Context Handoff]\n{summary}");
         if !post_compact.is_empty() {
-            push_hook_outputs_as_tool_results(self.history, "_PostCompact", &post_compact);
+            handoff_text.push_str("\n\n[Post-compact hook output — untrusted]\n");
+            handoff_text.push_str(&hook_outputs_text(&post_compact));
         }
+        self.history.push(HistoryItem::User(handoff_text));
         if let Some(prompt) = current_prompt {
             self.history.push(HistoryItem::User(prompt));
         }
@@ -195,6 +197,14 @@ impl RunCtx<'_> {
         out.push_str(tail);
         out
     }
+}
+
+fn hook_outputs_text(outputs: &[(String, String)]) -> String {
+    outputs
+        .iter()
+        .map(|(name, text)| format!("[{name}]\n{text}"))
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 fn push_history_snippet(out: &mut String, item: &HistoryItem) {
