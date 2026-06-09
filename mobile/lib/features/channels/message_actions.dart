@@ -259,10 +259,9 @@ void _confirmDelete({
         FilledButton(
           onPressed: () {
             Navigator.of(dialogContext).pop();
-            ref.read(channelActionsProvider).deleteMessage(
-              channelId: channelId,
-              eventId: messageId,
-            );
+            ref
+                .read(channelActionsProvider)
+                .deleteMessage(channelId: channelId, eventId: messageId);
           },
           style: FilledButton.styleFrom(
             backgroundColor: Theme.of(dialogContext).colorScheme.error,
