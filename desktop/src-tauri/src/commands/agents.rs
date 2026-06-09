@@ -695,25 +695,25 @@ pub async fn create_managed_agent(
 }
 
 /// Data needed for background profile reconciliation after agent start.
-struct ProfileReconcileData {
-    private_key_nsec: String,
-    name: String,
-    relay_url: String,
+pub(crate) struct ProfileReconcileData {
+    pub(crate) private_key_nsec: String,
+    pub(crate) name: String,
+    pub(crate) relay_url: String,
     /// Expected avatar URL for the published profile. `None` for legacy records
     /// that predate the `avatar_url` field — these will be backfilled from the
     /// relay's existing kind:0 profile on first reconciliation.
-    avatar_url: Option<String>,
-    auth_tag: Option<String>,
+    pub(crate) avatar_url: Option<String>,
+    pub(crate) auth_tag: Option<String>,
     /// The agent's pubkey (hex). Needed to update the persisted record during
     /// avatar backfill migration.
-    pubkey: String,
+    pub(crate) pubkey: String,
     /// The agent's command (e.g. "goose"). Used as fallback when no profile
     /// exists on the relay during avatar backfill.
-    agent_command: String,
+    pub(crate) agent_command: String,
     /// Persona ID if this agent was created from a persona. Used during avatar
     /// backfill to recover the correct avatar from the persona record when the
     /// relay profile has been corrupted.
-    persona_id: Option<String>,
+    pub(crate) persona_id: Option<String>,
 }
 
 #[tauri::command]
@@ -877,7 +877,7 @@ fn resolve_legacy_avatar(
 /// Query and publish both target the agent's stored `relay_url` so that, under
 /// an active workspace relay override, reconciliation reads and writes the same
 /// relay the agent's profile actually lives on.
-async fn reconcile_agent_profile(
+pub(crate) async fn reconcile_agent_profile(
     state: &AppState,
     app: &AppHandle,
     agent_pubkey: &str,
