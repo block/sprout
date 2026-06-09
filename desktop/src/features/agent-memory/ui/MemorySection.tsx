@@ -13,8 +13,12 @@ import type { EngramEntry } from "@/shared/api/tauriEngrams";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Skeleton } from "@/shared/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 const MEMORY_LIST_PREVIEW_LIMIT = 3;
+
+const MEMORY_TRUNCATED_TOOLTIP =
+  "This list may be incomplete — the relay returned the maximum number of memories.";
 
 /**
  * Memory section — IXI-7 phase 1 read-only viewer.
@@ -121,9 +125,7 @@ function MemorySectionForOwner({ agentPubkey }: { agentPubkey: string }) {
             <MemoryStaleErrorBanner onRetry={() => query.refetch()} />
           ) : null}
 
-          {query.data.truncated ? <MemoryTruncatedBanner /> : null}
-
-          <MemoryGraphView graph={graph} />
+          <MemoryGraphView graph={graph} truncated={query.data.truncated} />
         </>
       ) : null}
     </section>
@@ -205,25 +207,12 @@ function MemoryStaleErrorBanner({ onRetry }: { onRetry: () => void }) {
   );
 }
 
-function MemoryTruncatedBanner() {
-  return (
-    <div
-      className="mb-2 flex items-start gap-2 rounded-md border border-warning/30 bg-warning/5 p-2 text-xs"
-      data-testid="agent-memory-truncated"
-    >
-      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-warning" />
-      <span className="text-muted-foreground">
-        This list may be incomplete — the relay returned the maximum number of
-        memories.
-      </span>
-    </div>
-  );
-}
-
 function MemoryGraphView({
   graph,
+  truncated,
 }: {
   graph: NonNullable<ReturnType<typeof useAgentMemoryGraph>["graph"]>;
+  truncated: boolean;
 }) {
   const { rootedTree, orphans, dangling } = graph;
   const [showAllEntries, setShowAllEntries] = React.useState(false);
@@ -270,15 +259,14 @@ function MemoryGraphView({
       </div>
 
       {hasMoreEntries && !showAllEntries ? (
-        <button
-          className="flex w-full justify-center rounded-2xl bg-muted/40 px-4 py-3 text-sm font-medium text-foreground transition-colors hover:bg-muted/50"
-          data-testid="agent-memory-show-more"
+        <MemoryShowMoreButton
+          count={entries.length}
           onClick={() => setShowAllEntries(true)}
-          type="button"
-        >
-          View all ({entries.length})
-        </button>
+          truncated={truncated}
+        />
       ) : null}
+
+      {truncated && !hasMoreEntries ? <MemoryTruncatedHint /> : null}
 
       {hasMoreEntries && showAllEntries ? (
         <button
@@ -307,6 +295,64 @@ function MemoryGraphView({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function MemoryShowMoreButton({
+  count,
+  onClick,
+  truncated,
+}: {
+  count: number;
+  onClick: () => void;
+  truncated: boolean;
+}) {
+  const button = (
+    <button
+      className={cn(
+        "flex w-full items-center justify-center gap-2 rounded-2xl bg-muted/40 px-4 py-3 text-sm font-medium text-foreground transition-colors hover:bg-muted/50",
+        truncated && "border border-warning/30",
+      )}
+      data-testid={
+        truncated ? "agent-memory-truncated" : "agent-memory-show-more"
+      }
+      onClick={onClick}
+      type="button"
+    >
+      {truncated ? (
+        <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+      ) : null}
+      View all ({count})
+    </button>
+  );
+
+  if (!truncated) return button;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{button}</TooltipTrigger>
+      <TooltipContent className="max-w-xs text-xs" side="top">
+        {MEMORY_TRUNCATED_TOOLTIP}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function MemoryTruncatedHint() {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div
+          className="flex justify-center rounded-2xl border border-warning/30 bg-warning/5 px-4 py-2"
+          data-testid="agent-memory-truncated"
+        >
+          <AlertTriangle className="h-4 w-4 text-warning" />
+        </div>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs text-xs" side="top">
+        {MEMORY_TRUNCATED_TOOLTIP}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
