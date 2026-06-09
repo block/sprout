@@ -102,8 +102,7 @@ type BridgeOptions = {
    * When true (default), seed every preview feature in preview-features.json as
    * enabled in localStorage so E2E tests can interact with gated UI without
    * clicking through the Experiments settings panel. Set to false in specs
-   * that test the toggle behavior itself (e.g.
-   * `screenshot-feature-flags.ts`).
+   * that exercise the Experiments toggle UI itself.
    */
   seedPreviewFeatures?: boolean;
   user?: keyof typeof TEST_IDENTITIES;
