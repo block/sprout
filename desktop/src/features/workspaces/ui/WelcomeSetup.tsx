@@ -478,7 +478,7 @@ export function WelcomeSetup({
                 type="button"
                 variant="secondary"
               >
-                Create a new workspace
+                Join a workspace
               </Button>
 
               <Button
@@ -512,7 +512,7 @@ export function WelcomeSetup({
           >
             <div className="w-full max-w-[440px]">
               <h1 className="text-3xl font-semibold tracking-tight">
-                Create a new workspace
+                Join a workspace
               </h1>
               <p className="mt-3 text-sm leading-6 text-muted-foreground">
                 Workspaces are where teammates and agents collaborate across
@@ -577,11 +577,11 @@ export function WelcomeSetup({
                 >
                   {isConnecting ? (
                     <Spinner
-                      aria-label="Creating workspace"
+                      aria-label="Joining workspace"
                       className="h-4 w-4"
                     />
                   ) : (
-                    "Create workspace"
+                    "Join a workspace"
                   )}
                 </Button>
 

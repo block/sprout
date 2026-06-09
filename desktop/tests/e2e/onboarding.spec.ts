@@ -246,6 +246,25 @@ test("welcome can continue using an existing Nostr key", async ({ page }) => {
     .toBe(TEST_IDENTITIES.alice.pubkey);
 });
 
+test("welcome presents custom workspace setup as joining a workspace", async ({
+  page,
+}) => {
+  await installMockBridge(page, undefined, {
+    skipOnboardingSeed: true,
+    skipWorkspaceSeed: true,
+  });
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Join a workspace" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Join a workspace" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Join a workspace" }),
+  ).toBeVisible();
+});
+
 test("identity fallback text does not count as a real onboarding name", async ({
   page,
 }) => {

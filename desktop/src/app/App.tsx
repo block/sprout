@@ -83,7 +83,7 @@ function OnboardingLoadingGate() {
               type="button"
               variant="secondary"
             >
-              Create a new workspace
+              Join a workspace
             </Button>
 
             <Button
