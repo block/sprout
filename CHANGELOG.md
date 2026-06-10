@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.3.15
+
+877048d68fb fix: persona is source of truth at spawn + thread-depth conventions (#930)
+73cd8d082d4 fix: skip avatar reconciliation for legacy agent records (#933)
+165b9f7a5f5 feat(desktop): add nest commit identity guidance with human sign-off (#929)
+9a98e60fc29 feat: provider/model selection for personas and runtime-aware env injection (#794)
+762a45969a6 fix: reconcile agent profile on startup when relay publish was missed (#921)
+5d927aba0c4 Revamp first-run onboarding (#924)
+f3626501952 Update setup loading screen (#926)
+c38301bca5a fix(dm): keep hidden DMs hidden across refetch via relay-signed visibility snapshot (NIP-DV) (#857)
+4dfae61f242 Maximize desktop window on launch (#925)
+ae430d4dd95 feat: preview features (experiments settings UI) (#888)
+a357e220d82 fix(updater): send no-cache header on update check to avoid stale manifest (#922)
+56230c1442f fix(desktop): refresh channel state after unarchive (#923)
+7dd5b34536b Add channel visibility & ephemeral TTL controls to manage sidebar (#911)
+4b78fe3bea2 ci(release): add Intel macOS (x86_64) DMG as a release target (#748)
+421593062f2 mesh: Rust-owned coordinator — fix saved-agent reconnect flakiness + DRY the start path (#879)
+
+
 ## v0.3.14
 
 bfafdd46b29 fix(sdk): resolve multi-word display names and add NIP-27 nostr:npub mention extraction (#905)
