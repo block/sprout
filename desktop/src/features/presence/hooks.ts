@@ -6,6 +6,7 @@ import { getPresence } from "@/shared/api/tauri";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
   mergePresenceUpdate,
+  parseLivePresenceEvent,
   presenceQueryWantsPubkey,
 } from "@/features/presence/lib/presence";
 import type { PresenceLookup, PresenceStatus } from "@/shared/api/types";
@@ -107,18 +108,11 @@ export function usePresenceSubscription() {
     let isCancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
-    function handlePresenceEvent(event: {
-      pubkey: string;
-      content: string;
-      tags?: string[][];
-    }) {
+    function handlePresenceEvent(event: { pubkey: string; content: string }) {
       if (isCancelled) return;
-      const status = event.content;
-      if (status !== "online" && status !== "away" && status !== "offline")
-        return;
-      const pubkey = (
-        event.tags?.find((t) => t[0] === "p")?.[1] ?? event.pubkey
-      ).toLowerCase();
+      const parsed = parseLivePresenceEvent(event);
+      if (!parsed) return;
+      const { pubkey, status } = parsed;
       queryClient.setQueriesData<PresenceLookup>(
         {
           queryKey: ["presence"],

@@ -1,5 +1,20 @@
 import type { PresenceLookup, PresenceStatus } from "@/shared/api/types";
 
+// Live kind:20001 events are self-signed by their author; the subject is
+// always the event author. A p tag is NOT trusted here — a client could forge
+// one to spoof another user. The relay-signed REST/seed path is the only place
+// a p-tag subject is trusted. Returns null for unknown statuses.
+export function parseLivePresenceEvent(event: {
+  pubkey: string;
+  content: string;
+}): { pubkey: string; status: PresenceStatus } | null {
+  const status = event.content;
+  if (status !== "online" && status !== "away" && status !== "offline") {
+    return null;
+  }
+  return { pubkey: event.pubkey.toLowerCase(), status };
+}
+
 // Presence query keys are ["presence", ...normalizedSortedPubkeys]; a query
 // "wants" an update only for a pubkey it actually requested.
 export function presenceQueryWantsPubkey(
