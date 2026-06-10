@@ -16,7 +16,7 @@ name = "buzz"
 path = "src/main.rs"
 
 [dependencies]
-# CLI argument parsing — derive macros + env var support (SPROUT_API_TOKEN auto-wired)
+# CLI argument parsing — derive macros + env var support (BUZZ_API_TOKEN auto-wired)
 clap = { version = "4", features = ["derive", "env"] }
 
 # HTTP client — async REST calls to the relay

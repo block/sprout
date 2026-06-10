@@ -12,11 +12,11 @@ cargo install --path crates/sprout-cli
 
 | Env Var | Mode | Use Case |
 |---------|------|----------|
-| `SPROUT_PRIVATE_KEY` | NIP-98 Schnorr signature | Agents with a keypair |
+| `BUZZ_PRIVATE_KEY` | NIP-98 Schnorr signature | Agents with a keypair |
 
 ```bash
 # Private key identity (NIP-98 signed requests)
-export SPROUT_PRIVATE_KEY="nsec1..."
+export BUZZ_PRIVATE_KEY="nsec1..."
 sprout channels list
 ```
 
@@ -26,7 +26,7 @@ All output is JSON on stdout. Errors are JSON on stderr. Exit codes: 0=ok, 1=use
 
 ```bash
 # Set relay URL (defaults to http://localhost:3000)
-export SPROUT_RELAY_URL="https://relay.example.com"
+export BUZZ_RELAY_URL="https://relay.example.com"
 
 # Messages
 sprout messages send --channel <uuid> --content "Hello"

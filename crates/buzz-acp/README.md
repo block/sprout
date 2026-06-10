@@ -46,8 +46,8 @@ By default, the harness discovers only channels the agent is a **member** of (`G
 ## Quick Start (goose)
 
 ```bash
-export SPROUT_PRIVATE_KEY="nsec1..."   # your agent's key (see "Generating Keys")
-export SPROUT_RELAY_URL="ws://localhost:3000"
+export BUZZ_PRIVATE_KEY="nsec1..."   # your agent's key (see "Generating Keys")
+export BUZZ_RELAY_URL="ws://localhost:3000"
 export GOOSE_MODE=auto
 
 sprout-acp
@@ -65,8 +65,8 @@ cd /path/to/codex-acp && cargo build --release
 
 # Run
 export OPENAI_API_KEY="sk-..."   # required — use an OpenAI API key, not a ChatGPT subscription
-export SPROUT_ACP_AGENT_COMMAND="/path/to/codex-acp/target/release/codex-acp"
-export SPROUT_ACP_AGENT_ARGS='-c,permissions.approval_policy="never"'
+export BUZZ_ACP_AGENT_COMMAND="/path/to/codex-acp/target/release/codex-acp"
+export BUZZ_ACP_AGENT_ARGS='-c,permissions.approval_policy="never"'
 
 sprout-acp
 ```
@@ -83,7 +83,7 @@ npm install -g @agentclientprotocol/claude-agent-acp
 
 # Run
 export ANTHROPIC_API_KEY="sk-ant-..."
-export SPROUT_ACP_AGENT_COMMAND="claude-agent-acp"
+export BUZZ_ACP_AGENT_COMMAND="claude-agent-acp"
 
 sprout-acp
 ```
@@ -99,27 +99,27 @@ All configuration is via environment variables (or CLI flags — every env var h
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `SPROUT_PRIVATE_KEY` | **yes** | — | Agent's Nostr private key (`nsec1...`). Used for relay auth and agent identity. |
-| `SPROUT_RELAY_URL` | no | `ws://localhost:3000` | Relay WebSocket URL. |
-| `SPROUT_ACP_AGENT_COMMAND` | no | `goose` | Agent binary to spawn. |
-| `SPROUT_ACP_AGENT_ARGS` | no | `acp` | Agent arguments (comma-separated). |
-| `SPROUT_ACP_MCP_COMMAND` | no | `""` (empty) | Path to an optional MCP server binary to provide to the agent subprocess. |
-| `SPROUT_ACP_IDLE_TIMEOUT` | no | `620` | Idle timeout: max seconds of silence before cancelling a turn. Resets on any agent stdout activity. |
-| `SPROUT_ACP_MAX_TURN_DURATION` | no | `3600` | Absolute wall-clock cap per turn (safety valve). |
-| `SPROUT_API_TOKEN` | no | — | API token (required if relay enforces token auth). |
+| `BUZZ_PRIVATE_KEY` | **yes** | — | Agent's Nostr private key (`nsec1...`). Used for relay auth and agent identity. |
+| `BUZZ_RELAY_URL` | no | `ws://localhost:3000` | Relay WebSocket URL. |
+| `BUZZ_ACP_AGENT_COMMAND` | no | `goose` | Agent binary to spawn. |
+| `BUZZ_ACP_AGENT_ARGS` | no | `acp` | Agent arguments (comma-separated). |
+| `BUZZ_ACP_MCP_COMMAND` | no | `""` (empty) | Path to an optional MCP server binary to provide to the agent subprocess. |
+| `BUZZ_ACP_IDLE_TIMEOUT` | no | `620` | Idle timeout: max seconds of silence before cancelling a turn. Resets on any agent stdout activity. |
+| `BUZZ_ACP_MAX_TURN_DURATION` | no | `3600` | Absolute wall-clock cap per turn (safety valve). |
+| `BUZZ_API_TOKEN` | no | — | API token (required if relay enforces token auth). |
 
-**Note:** `SPROUT_ACP_AGENT_ARGS` splits on commas. For args with values, use: `-c,key="value"`.
+**Note:** `BUZZ_ACP_AGENT_ARGS` splits on commas. For args with values, use: `-c,key="value"`.
 
-**Legacy env vars:** `SPROUT_ACP_PRIVATE_KEY`, `SPROUT_ACP_API_TOKEN`, and `SPROUT_ACP_TURN_TIMEOUT` (replaced by `SPROUT_ACP_IDLE_TIMEOUT`) are still accepted as fallbacks.
+**Legacy env vars:** `BUZZ_ACP_PRIVATE_KEY`, `BUZZ_ACP_API_TOKEN`, and `BUZZ_ACP_TURN_TIMEOUT` (replaced by `BUZZ_ACP_IDLE_TIMEOUT`) are still accepted as fallbacks.
 
 ### Parallel Agents & Heartbeat
 
 | Flag | Env Var | Default | Description |
 |------|---------|---------|-------------|
-| `--agents` | `SPROUT_ACP_AGENTS` | `1` | Number of agent subprocesses (1–32). |
-| `--heartbeat-interval` | `SPROUT_ACP_HEARTBEAT_INTERVAL` | `0` | Seconds between heartbeat prompts. `0` = disabled. Must be `0` or ≥10 when enabled. |
-| `--heartbeat-prompt` | `SPROUT_ACP_HEARTBEAT_PROMPT` | (built-in) | Custom heartbeat prompt text. Conflicts with `--heartbeat-prompt-file`. |
-| `--heartbeat-prompt-file` | `SPROUT_ACP_HEARTBEAT_PROMPT_FILE` | — | Read heartbeat prompt from a file. Conflicts with `--heartbeat-prompt`. |
+| `--agents` | `BUZZ_ACP_AGENTS` | `1` | Number of agent subprocesses (1–32). |
+| `--heartbeat-interval` | `BUZZ_ACP_HEARTBEAT_INTERVAL` | `0` | Seconds between heartbeat prompts. `0` = disabled. Must be `0` or ≥10 when enabled. |
+| `--heartbeat-prompt` | `BUZZ_ACP_HEARTBEAT_PROMPT` | (built-in) | Custom heartbeat prompt text. Conflicts with `--heartbeat-prompt-file`. |
+| `--heartbeat-prompt-file` | `BUZZ_ACP_HEARTBEAT_PROMPT_FILE` | — | Read heartbeat prompt from a file. Conflicts with `--heartbeat-prompt`. |
 
 ### Inbound Author Gate
 
@@ -127,8 +127,8 @@ Controls which authors' events the harness forwards to the agent. Events from di
 
 | Flag | Env Var | Default | Description |
 |------|---------|---------|-------------|
-| `--respond-to` | `SPROUT_ACP_RESPOND_TO` | `owner-only` | Author gate mode: `owner-only`, `allowlist`, `anyone`, `nobody`. |
-| `--respond-to-allowlist` | `SPROUT_ACP_RESPOND_TO_ALLOWLIST` | — | Comma-separated 64-char hex pubkeys (required when mode is `allowlist`). Owner is always implicitly included. |
+| `--respond-to` | `BUZZ_ACP_RESPOND_TO` | `owner-only` | Author gate mode: `owner-only`, `allowlist`, `anyone`, `nobody`. |
+| `--respond-to-allowlist` | `BUZZ_ACP_RESPOND_TO_ALLOWLIST` | — | Comma-separated 64-char hex pubkeys (required when mode is `allowlist`). Owner is always implicitly included. |
 
 **Modes:**
 
@@ -252,7 +252,7 @@ The harness works with any agent that implements the [ACP spec](https://agentcli
 - Accept `session/prompt` with a text message and stream `session/update` notifications
 - Return a `stopReason` (`end_turn`, `cancelled`, `max_tokens`, etc.)
 
-Set `SPROUT_ACP_AGENT_COMMAND` and `SPROUT_ACP_AGENT_ARGS` to point at your agent binary.
+Set `BUZZ_ACP_AGENT_COMMAND` and `BUZZ_ACP_AGENT_ARGS` to point at your agent binary.
 
 ## Testing
 

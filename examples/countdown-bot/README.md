@@ -27,10 +27,10 @@ The bot authenticates with its own key only.
 Use this when the bot should be admitted as its own independent relay identity.
 
 ```bash
-SPROUT_RELAY_URL=ws://localhost:3000 \
-SPROUT_CHANNEL_ID=<channel-uuid> \
-SPROUT_BOT_PRIVATE_KEY=<bot-nsec-or-hex-secret> \
-SPROUT_BOT_AUTH_MODE=standalone \
+BUZZ_RELAY_URL=ws://localhost:3000 \
+BUZZ_CHANNEL_ID=<channel-uuid> \
+BUZZ_BOT_PRIVATE_KEY=<bot-nsec-or-hex-secret> \
+BUZZ_BOT_AUTH_MODE=standalone \
 cargo run --manifest-path examples/countdown-bot/Cargo.toml
 ```
 
@@ -50,27 +50,27 @@ relay member.
 Generate the auth tag on the fly:
 
 ```bash
-SPROUT_RELAY_URL=ws://localhost:3000 \
-SPROUT_CHANNEL_ID=<channel-uuid> \
-SPROUT_BOT_PRIVATE_KEY=<bot-nsec-or-hex-secret> \
-SPROUT_OWNER_PRIVATE_KEY=<owner-or-agent-nsec-or-hex-secret> \
-SPROUT_BOT_AUTH_MODE=owner-attested \
+BUZZ_RELAY_URL=ws://localhost:3000 \
+BUZZ_CHANNEL_ID=<channel-uuid> \
+BUZZ_BOT_PRIVATE_KEY=<bot-nsec-or-hex-secret> \
+BUZZ_OWNER_PRIVATE_KEY=<owner-or-agent-nsec-or-hex-secret> \
+BUZZ_BOT_AUTH_MODE=owner-attested \
 cargo run --manifest-path examples/countdown-bot/Cargo.toml
 ```
 
 Or precompute and pass the tag explicitly:
 
 ```bash
-SPROUT_AUTH_TAG='["auth","<owner-pubkey>","","<sig>"]' \
-SPROUT_BOT_AUTH_MODE=owner-attested \
-# plus SPROUT_RELAY_URL, SPROUT_CHANNEL_ID, SPROUT_BOT_PRIVATE_KEY
+BUZZ_AUTH_TAG='["auth","<owner-pubkey>","","<sig>"]' \
+BUZZ_BOT_AUTH_MODE=owner-attested \
+# plus BUZZ_RELAY_URL, BUZZ_CHANNEL_ID, BUZZ_BOT_PRIVATE_KEY
 cargo run --manifest-path examples/countdown-bot/Cargo.toml
 ```
 
 Relay requirements for this path:
 
-- `SPROUT_REQUIRE_RELAY_MEMBERSHIP=true` on closed relays.
-- `SPROUT_ALLOW_NIP_OA_AUTH=true` so owner-attested non-member bot keys can be
+- `BUZZ_REQUIRE_RELAY_MEMBERSHIP=true` on closed relays.
+- `BUZZ_ALLOW_NIP_OA_AUTH=true` so owner-attested non-member bot keys can be
   admitted.
 - The owner pubkey must be an active relay member.
 

@@ -38,20 +38,20 @@ The agent's **output is its tool calls**. Generated text is forwarded to the cli
 cargo build --release -p sprout-agent
 
 # Run against Anthropic
-SPROUT_AGENT_PROVIDER=anthropic \
+BUZZ_AGENT_PROVIDER=anthropic \
 ANTHROPIC_API_KEY=sk-ant-... \
 ANTHROPIC_MODEL=claude-sonnet-4-5 \
   ./target/release/sprout-agent
 
 # Or any OpenAI-compatible endpoint
-SPROUT_AGENT_PROVIDER=openai \
+BUZZ_AGENT_PROVIDER=openai \
 OPENAI_COMPAT_API_KEY=sk-... \
 OPENAI_COMPAT_MODEL=gpt-5 \
 OPENAI_COMPAT_BASE_URL=https://api.openai.com/v1 \
   ./target/release/sprout-agent
 
 # Or Databricks model serving via OAuth 2.0 PKCE
-SPROUT_AGENT_PROVIDER=databricks \
+BUZZ_AGENT_PROVIDER=databricks \
 DATABRICKS_HOST=https://dbc-...cloud.databricks.com \
 DATABRICKS_MODEL=goose-claude-4-6-sonnet \
   ./target/release/sprout-agent
@@ -129,7 +129,7 @@ Everything is environment variables. No flags, no config files. (We are a subpro
 
 | Variable | Default | Notes |
 |---|---|---|
-| `SPROUT_AGENT_PROVIDER` | — | `anthropic`, `openai`, or `databricks`. If unset, or if `anthropic`/`openai` is selected but its API key is missing, Databricks is auto-selected when `DATABRICKS_HOST` + `DATABRICKS_MODEL` are set. |
+| `BUZZ_AGENT_PROVIDER` | — | `anthropic`, `openai`, or `databricks`. If unset, or if `anthropic`/`openai` is selected but its API key is missing, Databricks is auto-selected when `DATABRICKS_HOST` + `DATABRICKS_MODEL` are set. |
 | `ANTHROPIC_API_KEY` | — | Required when provider=anthropic unless Databricks fallback is configured. |
 | `ANTHROPIC_MODEL` | — | Required when provider=anthropic. |
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | |
@@ -141,25 +141,25 @@ Everything is environment variables. No flags, no config files. (We are a subpro
 | `DATABRICKS_HOST` | — | Required when provider=databricks or when using Databricks fallback. |
 | `DATABRICKS_MODEL` | — | Required when provider=databricks or when using Databricks fallback. |
 | `DATABRICKS_TOKEN` | — | Optional static bearer escape hatch. If unset, Databricks uses browser OAuth + refresh cache. |
-| `SPROUT_AGENT_SYSTEM_PROMPT` | built-in | Inline system prompt. |
-| `SPROUT_AGENT_SYSTEM_PROMPT_FILE` | — | File path. Mutually exclusive with the above. |
-| `SPROUT_AGENT_MAX_ROUNDS` | `0` | Tool-loop iteration cap. 0 = unlimited. |
-| `SPROUT_AGENT_MAX_OUTPUT_TOKENS` | `32768` | Per LLM call. Headroom for large tool-call inputs (e.g. file writes via heredoc); Sonnet 4 / Opus 4 cap at 64K. |
-| `SPROUT_AGENT_MAX_CONTEXT_TOKENS` | `200000` | Provider context window used by the handoff gate. |
-| `SPROUT_AGENT_MAX_HANDOFFS` | `10` | Max context handoffs per session before falling back to truncation. |
-| `SPROUT_AGENT_LLM_TIMEOUT_SECS` | `120` | |
-| `SPROUT_AGENT_TOOL_TIMEOUT_SECS` | `660` | Per-tool call timeout in seconds |
-| `SPROUT_AGENT_MAX_PARALLEL_TOOLS` | `8` | Max concurrent tool calls per turn (1 = sequential) |
-| `SPROUT_AGENT_MAX_SESSIONS` | unlimited | Max concurrent ACP sessions. Sessions are cheap; default has no cap. |
-| `SPROUT_AGENT_MAX_LINE_BYTES` | `4194304` | 4 MiB. Hard cap on inbound JSON-RPC frames. |
-| `SPROUT_AGENT_MAX_HISTORY_BYTES` | `1048576` | 1 MiB. Old turns are evicted past this. |
+| `BUZZ_AGENT_SYSTEM_PROMPT` | built-in | Inline system prompt. |
+| `BUZZ_AGENT_SYSTEM_PROMPT_FILE` | — | File path. Mutually exclusive with the above. |
+| `BUZZ_AGENT_MAX_ROUNDS` | `0` | Tool-loop iteration cap. 0 = unlimited. |
+| `BUZZ_AGENT_MAX_OUTPUT_TOKENS` | `32768` | Per LLM call. Headroom for large tool-call inputs (e.g. file writes via heredoc); Sonnet 4 / Opus 4 cap at 64K. |
+| `BUZZ_AGENT_MAX_CONTEXT_TOKENS` | `200000` | Provider context window used by the handoff gate. |
+| `BUZZ_AGENT_MAX_HANDOFFS` | `10` | Max context handoffs per session before falling back to truncation. |
+| `BUZZ_AGENT_LLM_TIMEOUT_SECS` | `120` | |
+| `BUZZ_AGENT_TOOL_TIMEOUT_SECS` | `660` | Per-tool call timeout in seconds |
+| `BUZZ_AGENT_MAX_PARALLEL_TOOLS` | `8` | Max concurrent tool calls per turn (1 = sequential) |
+| `BUZZ_AGENT_MAX_SESSIONS` | unlimited | Max concurrent ACP sessions. Sessions are cheap; default has no cap. |
+| `BUZZ_AGENT_MAX_LINE_BYTES` | `4194304` | 4 MiB. Hard cap on inbound JSON-RPC frames. |
+| `BUZZ_AGENT_MAX_HISTORY_BYTES` | `1048576` | 1 MiB. Old turns are evicted past this. |
 
 
 ## Providers
 
-`sprout-agent` speaks two HTTP dialects. Pick with `SPROUT_AGENT_PROVIDER`.
+`sprout-agent` speaks two HTTP dialects. Pick with `BUZZ_AGENT_PROVIDER`.
 
-| Provider | `SPROUT_AGENT_PROVIDER` | Endpoint (auto) | Tested with |
+| Provider | `BUZZ_AGENT_PROVIDER` | Endpoint (auto) | Tested with |
 |---|---|---|---|
 | Anthropic | `anthropic` | `POST {base}/v1/messages` | claude-sonnet-4-5, claude-opus-4 |
 | OpenAI | `openai` | `POST {base}/responses` | gpt-5, gpt-5-mini, o4-mini, gpt-4o |
@@ -170,7 +170,7 @@ Everything is environment variables. No flags, no config files. (We are a subpro
 | Block Gateway | `openai` | `POST {base}/chat/completions` | gpt-5, claude |
 | Databricks | `databricks` | `POST {host}/serving-endpoints/{model}/invocations` | goose-claude-4-6-sonnet |
 
-If `SPROUT_AGENT_PROVIDER=anthropic` is selected without `ANTHROPIC_API_KEY`, or `SPROUT_AGENT_PROVIDER=openai` is selected without `OPENAI_COMPAT_API_KEY`, the agent automatically falls back to Databricks OAuth when `DATABRICKS_HOST` and `DATABRICKS_MODEL` are set. The same Databricks fallback applies when `SPROUT_AGENT_PROVIDER` is unset. Explicit Anthropic/OpenAI API keys always win.
+If `BUZZ_AGENT_PROVIDER=anthropic` is selected without `ANTHROPIC_API_KEY`, or `BUZZ_AGENT_PROVIDER=openai` is selected without `OPENAI_COMPAT_API_KEY`, the agent automatically falls back to Databricks OAuth when `DATABRICKS_HOST` and `DATABRICKS_MODEL` are set. The same Databricks fallback applies when `BUZZ_AGENT_PROVIDER` is unset. Explicit Anthropic/OpenAI API keys always win.
 
 `provider=openai` speaks two HTTP dialects: the [Responses API](https://platform.openai.com/docs/api-reference/responses) (`/v1/responses`, required for GPT-5 / o-series tool-calling on OpenAI's own service) and the [Chat Completions API](https://platform.openai.com/docs/api-reference/chat) (`/chat/completions`, the broadly-supported OpenAI-compatible wire format).
 
@@ -219,19 +219,19 @@ The trust boundary is **the operator who launched the agent**. The harness, MCP 
 | MCP child env | Whitelist (`PATH`, `HOME`, `TERM`, `LANG`, `LC_ALL`, `TMPDIR`) plus what the client explicitly passes. Your `ANTHROPIC_API_KEY` does not leak into MCP children. |
 | MCP child lifetime | Process group via `setpgid(0,0)` in `pre_exec`. On transport break or shutdown: `killpg(SIGKILL)`. Grandchildren die too. |
 | Server poisoning | After a timeout or transport break, the offending server is marked dead. Future calls trigger a lazy restart with exponential backoff. Other servers keep working. |
-| Frame size | `SPROUT_AGENT_MAX_LINE_BYTES` (default 4 MiB). Oversize → connection killed. |
+| Frame size | `BUZZ_AGENT_MAX_LINE_BYTES` (default 4 MiB). Oversize → connection killed. |
 | LLM response size | 16 MiB hard cap. Both `Content-Length` precheck and streaming-buffer cap. |
 | Cancellation | `tokio::select! { biased; _ = cancel.changed() => ... }` at every loop boundary. Cancel always wins the race. |
-| Session isolation | Unlimited concurrent sessions by default (configurable via `SPROUT_AGENT_MAX_SESSIONS`). One prompt per session at a time. Each session gets its own MCP servers. |
+| Session isolation | Unlimited concurrent sessions by default (configurable via `BUZZ_AGENT_MAX_SESSIONS`). One prompt per session at a time. Each session gets its own MCP servers. |
 | `tool_use ↔ tool_result` pairing | Encoded in the type system. Every `ToolCall` and `ToolResult` carries a `provider_id: String` (not `Option`). |
 
 ### Bounded Everything
 
 | Limit | Default | Where |
 |---|---|---|
-| Inbound JSON-RPC frame | 4 MiB | `SPROUT_AGENT_MAX_LINE_BYTES` |
+| Inbound JSON-RPC frame | 4 MiB | `BUZZ_AGENT_MAX_LINE_BYTES` |
 | Single prompt | 1 MiB | `MAX_PROMPT_BYTES` |
-| History window | 1 MiB | `SPROUT_AGENT_MAX_HISTORY_BYTES` |
+| History window | 1 MiB | `BUZZ_AGENT_MAX_HISTORY_BYTES` |
 | LLM response body | 16 MiB | `MAX_LLM_RESPONSE_BYTES` |
 | LLM error body | 4 KiB | `MAX_LLM_ERROR_BODY_BYTES` |
 | Tool result body | 256 KiB | `MAX_TOOL_RESULT_BYTES` |
@@ -240,9 +240,9 @@ The trust boundary is **the operator who launched the agent**. The harness, MCP 
 | Tool description bytes | 1 KiB | `MAX_DESCRIPTION_BYTES` |
 | Tool schema bytes | 4 KiB | `MAX_SCHEMA_BYTES` (oversize → replaced with `{}`) |
 | Tool calls per turn | 64 | `MAX_TOOL_CALLS_PER_TURN` |
-| Loop rounds | 0 (unlimited) | `SPROUT_AGENT_MAX_ROUNDS` |
-| LLM call timeout | 120 s | `SPROUT_AGENT_LLM_TIMEOUT_SECS` |
-| Tool call timeout | 660 s | `SPROUT_AGENT_TOOL_TIMEOUT_SECS` |
+| Loop rounds | 0 (unlimited) | `BUZZ_AGENT_MAX_ROUNDS` |
+| LLM call timeout | 120 s | `BUZZ_AGENT_LLM_TIMEOUT_SECS` |
+| Tool call timeout | 660 s | `BUZZ_AGENT_TOOL_TIMEOUT_SECS` |
 
 ## What This Is NOT
 

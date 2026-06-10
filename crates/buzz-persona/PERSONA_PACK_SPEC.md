@@ -273,9 +273,9 @@ The `[Base]` layer is compiled into sprout-acp and is **identical for every agen
 Pack authors do not write or configure the `[Base]` layer — it is maintained by the Sprout team
 and updated in sprout-acp releases.
 
-**Disabling or customizing the base layer**: Set `SPROUT_ACP_NO_BASE_PROMPT` to omit the `[Base]`
+**Disabling or customizing the base layer**: Set `BUZZ_ACP_NO_BASE_PROMPT` to omit the `[Base]`
 section entirely. To replace the compiled-in default with custom content, set
-`SPROUT_ACP_BASE_PROMPT_FILE` to a file path — sprout-acp reads it at startup and uses it instead.
+`BUZZ_ACP_BASE_PROMPT_FILE` to a file path — sprout-acp reads it at startup and uses it instead.
 
 ### The `[System]` Layer
 

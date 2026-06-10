@@ -22,11 +22,11 @@ just relay    # starts Docker services + migrations automatically
 
 ### 2. Mint a proxy API token
 
-The token's `--pubkey` must match the public key derived from `SPROUT_PROXY_SERVER_KEY`.
+The token's `--pubkey` must match the public key derived from `BUZZ_PROXY_SERVER_KEY`.
 
 ```bash
 # Derive the public key from your server key
-nak key public <SPROUT_PROXY_SERVER_KEY>
+nak key public <BUZZ_PROXY_SERVER_KEY>
 
 # Mint the token with that pubkey
 cargo run -p sprout-admin -- mint-token \
@@ -38,12 +38,12 @@ cargo run -p sprout-admin -- mint-token \
 ### 3. Configure environment
 
 ```bash
-export SPROUT_UPSTREAM_URL=ws://localhost:3000
-export SPROUT_PROXY_BIND_ADDR=0.0.0.0:4869
-export SPROUT_PROXY_SERVER_KEY=<hex nsec from step 2>
-export SPROUT_PROXY_SALT=$(openssl rand -hex 32)
-export SPROUT_PROXY_API_TOKEN=<api token from step 2>
-export SPROUT_PROXY_ADMIN_SECRET=<secret for admin API>
+export BUZZ_UPSTREAM_URL=ws://localhost:3000
+export BUZZ_PROXY_BIND_ADDR=0.0.0.0:4869
+export BUZZ_PROXY_SERVER_KEY=<hex nsec from step 2>
+export BUZZ_PROXY_SALT=$(openssl rand -hex 32)
+export BUZZ_PROXY_API_TOKEN=<api token from step 2>
+export BUZZ_PROXY_ADMIN_SECRET=<secret for admin API>
 ```
 
 > Put these in `.env` at the repo root — `just` loads it automatically.
@@ -61,7 +61,7 @@ Register a guest by their Nostr public key. They can then connect with any NIP-4
 ```bash
 curl -X POST http://localhost:4869/admin/guests \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <SPROUT_PROXY_ADMIN_SECRET>" \
+  -H "Authorization: Bearer <BUZZ_PROXY_ADMIN_SECRET>" \
   -d '{"pubkey":"<guest-hex-pubkey>","channels":"<channel-uuid1>,<channel-uuid2>"}'
 ```
 
@@ -80,7 +80,7 @@ The client handles NIP-42 authentication automatically. No token in the URL.
 ```bash
 curl -X POST http://localhost:4869/admin/invite \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <SPROUT_PROXY_ADMIN_SECRET>" \
+  -H "Authorization: Bearer <BUZZ_PROXY_ADMIN_SECRET>" \
   -d '{"channels":"<channel-uuid>","hours":24,"max_uses":10}'
 ```
 
@@ -96,12 +96,12 @@ ws://localhost:4869?token=<invite_token>
 
 | Variable | Required | Default | Description |
 |----------|:--------:|---------|-------------|
-| `SPROUT_UPSTREAM_URL` | ✅ | — | WebSocket URL of the Sprout relay |
-| `SPROUT_PROXY_SERVER_KEY` | ✅ | — | Hex nsec for the proxy server keypair |
-| `SPROUT_PROXY_SALT` | ✅ | — | Hex 32-byte salt for shadow key derivation (keep stable) |
-| `SPROUT_PROXY_API_TOKEN` | ✅ | — | Sprout API token with `proxy:submit`, `channels:read`, and `messages:read` scopes |
-| `SPROUT_PROXY_BIND_ADDR` | ❌ | `0.0.0.0:4869` | Listen address |
-| `SPROUT_PROXY_ADMIN_SECRET` | ❌ | — | Bearer secret for `POST /admin/invite` (unset = dev mode, no auth) |
+| `BUZZ_UPSTREAM_URL` | ✅ | — | WebSocket URL of the Sprout relay |
+| `BUZZ_PROXY_SERVER_KEY` | ✅ | — | Hex nsec for the proxy server keypair |
+| `BUZZ_PROXY_SALT` | ✅ | — | Hex 32-byte salt for shadow key derivation (keep stable) |
+| `BUZZ_PROXY_API_TOKEN` | ✅ | — | Sprout API token with `proxy:submit`, `channels:read`, and `messages:read` scopes |
+| `BUZZ_PROXY_BIND_ADDR` | ❌ | `0.0.0.0:4869` | Listen address |
+| `BUZZ_PROXY_ADMIN_SECRET` | ❌ | — | Bearer secret for `POST /admin/invite` (unset = dev mode, no auth) |
 | `RUST_LOG` | ❌ | `sprout_proxy=info` | Log level |
 
 ---
@@ -114,7 +114,7 @@ ws://localhost:4869?token=<invite_token>
 
 ### `POST /admin/invite`
 
-Create an invite token. Requires `Authorization: Bearer <SPROUT_PROXY_ADMIN_SECRET>` (if secret is set).
+Create an invite token. Requires `Authorization: Bearer <BUZZ_PROXY_ADMIN_SECRET>` (if secret is set).
 
 **Request:**
 ```json
@@ -194,7 +194,7 @@ nak event -k 42 -c "Hello!" --tag "e=<kind40_event_id>" --sec <nsec> "ws://local
 | `"error: invite token not found"` | Token expired, used up, or proxy restarted | Create new token via `POST /admin/invite` |
 | `"auth-required: authentication timeout"` | Client didn't respond to AUTH challenge within 30s | Use a NIP-42-capable client |
 | `"error: channel not found"` | Channel created after proxy started | Restart proxy to refresh channel map |
-| Connection drops immediately | Relay not running or wrong `SPROUT_UPSTREAM_URL` | Check `just relay` is running |
+| Connection drops immediately | Relay not running or wrong `BUZZ_UPSTREAM_URL` | Check `just relay` is running |
 | No messages appearing | Wrong kind:40 event ID in subscription | Re-query kind:40 to get correct event ID |
 | Startup fails: "failed to initialize channel map" | Can't reach relay REST API | Check relay health and API token scopes |
 
