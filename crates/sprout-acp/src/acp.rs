@@ -854,8 +854,9 @@ impl AcpClient {
                         match method {
                             "session/update" => {
                                 if self.handle_session_update(&msg) {
-                                    // Tool call started — explicitly reset idle clock.
-                                    // The agent will be silent while the tool executes.
+                                    // Belt-and-suspenders — general reset already fired
+                                    // above, this is defense-in-depth in case the general
+                                    // reset is later narrowed.
                                     tracing::debug!("idle clock reset: tool call started");
                                     idle_deadline = Instant::now() + idle_timeout;
                                 }
@@ -963,6 +964,7 @@ impl AcpClient {
                 );
                 false
             }
+            "keepalive" => false,
             other => {
                 tracing::debug!(target: "acp::update", "session/update: {other}");
                 false

@@ -750,13 +750,25 @@ impl HarnessRelay {
 
     /// Build a channel message (kind:9) for death notices — posted when the
     /// agent session ends due to timeout or unexpected exit.
-    pub fn build_death_notice(&self, channel_id: Uuid, message: &str) -> Result<Event, RelayError> {
+    /// If `thread_root` is provided, the message is threaded as a reply.
+    pub fn build_death_notice(
+        &self,
+        channel_id: Uuid,
+        message: &str,
+        thread_root: Option<&str>,
+    ) -> Result<Event, RelayError> {
         use sprout_core::kind::KIND_STREAM_MESSAGE;
 
         let h_tag = Tag::parse(["h", &channel_id.to_string()])
             .map_err(|e| RelayError::AuthFailed(e.to_string()))?;
+        let mut tags = vec![h_tag];
+        if let Some(root_id) = thread_root {
+            let e_tag = Tag::parse(["e", root_id, "", "reply"])
+                .map_err(|e| RelayError::AuthFailed(e.to_string()))?;
+            tags.push(e_tag);
+        }
         let event = EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE as u16), message)
-            .tags([h_tag])
+            .tags(tags)
             .sign_with_keys(&self.keys)?;
         Ok(event)
     }
