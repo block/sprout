@@ -383,7 +383,17 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
-                .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
+                // The main window should always launch edge-to-edge in the
+                // available desktop area. Do not let stale saved geometry or
+                // fullscreen state override the maximized launch config.
+                .with_state_flags(
+                    StateFlags::all()
+                        & !(StateFlags::VISIBLE
+                            | StateFlags::POSITION
+                            | StateFlags::SIZE
+                            | StateFlags::MAXIMIZED
+                            | StateFlags::FULLSCREEN),
+                )
                 .build(),
         )
         .plugin(tauri_plugin_websocket::init())
@@ -513,6 +523,10 @@ pub fn run() {
             migration::reconcile_persona_pack_paths(&app_handle);
             migration::reconcile_provider_mcp_commands(&app_handle);
             migration::migrate_persona_provider_to_runtime(&app_handle);
+
+            if let Err(e) = managed_agents::sync_pack_personas(&app_handle) {
+                eprintln!("sprout-desktop: sync-pack-personas: {e}");
+            }
 
             // Resolve persisted identity key (env var → file → generate+save).
             // This is fatal — the app should not start with an ephemeral identity

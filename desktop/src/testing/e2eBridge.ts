@@ -1,6 +1,7 @@
-import { hexToBytes } from "@noble/hashes/utils.js";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import { finalizeEvent } from "nostr-tools/pure";
+import { decode } from "nostr-tools/nip19";
+import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { parse as yamlParse } from "yaml";
 
 import type { RelayEvent } from "@/shared/api/types";
@@ -9,6 +10,7 @@ import {
   KIND_EMOJI_SET,
 } from "@/shared/api/customEmoji";
 import {
+  KIND_DM_VISIBILITY,
   KIND_STREAM_MESSAGE_EDIT,
   KIND_SYSTEM_MESSAGE,
   KIND_USER_STATUS,
@@ -1621,6 +1623,44 @@ function readStoredIdentityOverride(): TestIdentity | undefined {
   }
 }
 
+function writeStoredIdentityOverride(identity: TestIdentity) {
+  window.localStorage.setItem(
+    E2E_IDENTITY_OVERRIDE_STORAGE_KEY,
+    JSON.stringify(identity),
+  );
+}
+
+function importMockIdentity(nsec: string) {
+  const decoded = decode(nsec.trim());
+  if (decoded.type !== "nsec") {
+    throw new Error("Invalid Nostr private key.");
+  }
+
+  const privateKey = bytesToHex(decoded.data);
+  const pubkey = getPublicKey(decoded.data);
+  const username = mockDisplayNames.get(pubkey) ?? "";
+  const identity = {
+    privateKey,
+    pubkey,
+    username,
+  };
+  writeStoredIdentityOverride(identity);
+  if (!mockProfiles.has(pubkey)) {
+    mockProfiles.set(pubkey, {
+      pubkey,
+      display_name: username || null,
+      avatar_url: null,
+      about: null,
+      nip05_handle: null,
+    });
+  }
+
+  return {
+    pubkey,
+    display_name: username,
+  };
+}
+
 function isRelayMode(config: E2eConfig | undefined): boolean {
   return config?.mode === "relay";
 }
@@ -2485,44 +2525,67 @@ async function handleGetChannels(config: E2eConfig | undefined) {
   const memberSet = new Set(channelIds);
   const metaEvents = allMetaEvents;
 
+  // NIP-DV: query the viewer's latest DM visibility snapshot (kind:30622).
+  // The snapshot is `#p`-gated to its owner, so we query by `#p`=my pubkey.
+  // Its `h` tags are the DM channel ids to hide from the sidebar.
+  const visibilityEvents = await relayQuery(config, [
+    { kinds: [KIND_DM_VISIBILITY], "#p": [identity.pubkey], limit: 1 },
+  ]);
+  const latestVisibility = visibilityEvents.reduce<RelayEvent | null>(
+    (latest, ev) =>
+      !latest || ev.created_at > latest.created_at ? ev : latest,
+    null,
+  );
+  const hiddenDms = new Set(
+    ((latestVisibility?.tags ?? []) as string[][])
+      .filter((t) => t[0] === "h")
+      .map((t) => t[1]),
+  );
+
   // Convert kind:39000 events to the RawChannel shape the frontend expects.
-  return metaEvents.map((ev) => {
-    const tags = (ev.tags ?? []) as string[][];
-    const getTag = (name: string) =>
-      tags.find((t) => t[0] === name)?.[1] ?? null;
-    const channelId = getTag("d") ?? "";
-    const channelType = getTag("t") ?? "stream";
-    const isPrivate = tags.some((t) => t[0] === "private");
-    const isArchived = tags.some((t) => t[0] === "archived" && t[1] === "true");
+  return metaEvents
+    .map((ev) => {
+      const tags = (ev.tags ?? []) as string[][];
+      const getTag = (name: string) =>
+        tags.find((t) => t[0] === name)?.[1] ?? null;
+      const channelId = getTag("d") ?? "";
+      const channelType = getTag("t") ?? "stream";
+      const isPrivate = tags.some((t) => t[0] === "private");
+      const isArchived = tags.some(
+        (t) => t[0] === "archived" && t[1] === "true",
+      );
 
-    // Get participant pubkeys from the membership event for this channel
-    const memberEvent = memberEvents.find((me) =>
-      (me.tags ?? []).some((t: string[]) => t[0] === "d" && t[1] === channelId),
-    );
-    const pTags = memberEvent
-      ? ((memberEvent.tags ?? []) as string[][])
-          .filter((t) => t[0] === "p")
-          .map((t) => t[1])
-      : [];
+      // Get participant pubkeys from the membership event for this channel
+      const memberEvent = memberEvents.find((me) =>
+        (me.tags ?? []).some(
+          (t: string[]) => t[0] === "d" && t[1] === channelId,
+        ),
+      );
+      const pTags = memberEvent
+        ? ((memberEvent.tags ?? []) as string[][])
+            .filter((t) => t[0] === "p")
+            .map((t) => t[1])
+        : [];
 
-    return {
-      id: channelId,
-      name: getTag("name") ?? "",
-      description: getTag("about") ?? "",
-      channel_type: channelType as "stream" | "forum" | "dm",
-      visibility: (isPrivate ? "private" : "open") as "open" | "private",
-      topic: getTag("topic") ?? null,
-      purpose: getTag("purpose") ?? null,
-      member_count: pTags.length,
-      last_message_at: null,
-      archived_at: isArchived ? new Date().toISOString() : null,
-      participants: pTags,
-      participant_pubkeys: pTags,
-      ttl_seconds: getTag("ttl") ? Number(getTag("ttl")) : null,
-      ttl_deadline: getTag("ttl_deadline") ?? null,
-      is_member: memberSet.has(channelId),
-    };
-  });
+      return {
+        id: channelId,
+        name: getTag("name") ?? "",
+        description: getTag("about") ?? "",
+        channel_type: channelType as "stream" | "forum" | "dm",
+        visibility: (isPrivate ? "private" : "open") as "open" | "private",
+        topic: getTag("topic") ?? null,
+        purpose: getTag("purpose") ?? null,
+        member_count: pTags.length,
+        last_message_at: null,
+        archived_at: isArchived ? new Date().toISOString() : null,
+        participants: pTags,
+        participant_pubkeys: pTags,
+        ttl_seconds: getTag("ttl") ? Number(getTag("ttl")) : null,
+        ttl_deadline: getTag("ttl_deadline") ?? null,
+        is_member: memberSet.has(channelId),
+      };
+    })
+    .filter((c) => c.channel_type !== "dm" || !hiddenDms.has(c.id));
 }
 
 async function handleGetProfile(config: E2eConfig | undefined) {
@@ -2586,27 +2649,27 @@ async function handleUpdateProfile(
     }
 
     const profile = ensureMockProfile(config);
-    const nextDisplayName = args.displayName?.trim();
-    const nextAvatarUrl = args.avatarUrl?.trim();
-    const nextAbout = args.about?.trim();
-    const nextNip05Handle = args.nip05Handle?.trim();
+    const hasDisplayNameUpdate = typeof args.displayName === "string";
+    const hasAvatarUrlUpdate = typeof args.avatarUrl === "string";
+    const hasAboutUpdate = typeof args.about === "string";
+    const hasNip05HandleUpdate = typeof args.nip05Handle === "string";
+    const nextDisplayName = args.displayName?.trim() ?? "";
+    const nextAvatarUrl = args.avatarUrl?.trim() ?? "";
+    const nextAbout = args.about?.trim() ?? "";
+    const nextNip05Handle = args.nip05Handle?.trim() ?? "";
 
-    if (nextDisplayName && nextDisplayName !== profile.display_name) {
-      profile.display_name = nextDisplayName;
-      applyMockDisplayName(profile.pubkey, nextDisplayName);
+    if (hasDisplayNameUpdate && nextDisplayName !== profile.display_name) {
+      profile.display_name = nextDisplayName || null;
+      applyMockDisplayName(profile.pubkey, profile.display_name);
     }
-    if (nextAvatarUrl && nextAvatarUrl !== profile.avatar_url) {
-      profile.avatar_url = nextAvatarUrl;
+    if (hasAvatarUrlUpdate && nextAvatarUrl !== profile.avatar_url) {
+      profile.avatar_url = nextAvatarUrl || null;
     }
-    if (typeof nextAbout === "string" && nextAbout !== profile.about) {
-      profile.about = nextAbout;
+    if (hasAboutUpdate && nextAbout !== profile.about) {
+      profile.about = nextAbout || null;
     }
-    if (
-      typeof nextNip05Handle === "string" &&
-      nextNip05Handle !== profile.nip05_handle
-    ) {
-      profile.nip05_handle =
-        nextNip05Handle.length > 0 ? nextNip05Handle : null;
+    if (hasNip05HandleUpdate && nextNip05Handle !== profile.nip05_handle) {
+      profile.nip05_handle = nextNip05Handle || null;
     }
 
     return cloneProfile(profile);
@@ -3129,6 +3192,8 @@ async function handleUpdateChannel(
     channelId: string;
     name?: string;
     description?: string;
+    visibility?: "open" | "private";
+    ttlSeconds?: number | null;
   },
   config: E2eConfig | undefined,
 ) {
@@ -3141,6 +3206,16 @@ async function handleUpdateChannel(
     if (args.description !== undefined) {
       channel.description = args.description;
     }
+    if (args.visibility !== undefined) {
+      channel.visibility = args.visibility;
+    }
+    if (args.ttlSeconds !== undefined) {
+      channel.ttl_seconds = args.ttlSeconds;
+      channel.ttl_deadline =
+        args.ttlSeconds === null
+          ? null
+          : new Date(Date.now() + args.ttlSeconds * 1000).toISOString();
+    }
     touchMockChannel(channel);
     return toRawChannelDetail(channel, config);
   }
@@ -3152,6 +3227,12 @@ async function handleUpdateChannel(
   if (args.description !== undefined) {
     tags.push(["about", args.description]);
   }
+  if (args.visibility !== undefined) {
+    tags.push(["visibility", args.visibility]);
+  }
+  if (args.ttlSeconds !== undefined) {
+    tags.push(["ttl", args.ttlSeconds === null ? "" : String(args.ttlSeconds)]);
+  }
   await submitSignedEvent(config, { kind: 9002, content: "", tags });
 
   // Re-fetch updated metadata
@@ -3162,19 +3243,24 @@ async function handleUpdateChannel(
   const evTags = (ev?.tags ?? []) as string[][];
   const getTag = (name: string) =>
     evTags.find((t) => t[0] === name)?.[1] ?? null;
+  const ttlTag = getTag("ttl");
+  const ttlSeconds = ttlTag === null || ttlTag === "" ? null : Number(ttlTag);
   return {
     id: args.channelId,
     name: getTag("name") ?? "",
     description: getTag("about") ?? null,
     channel_type: getTag("t") ?? "stream",
-    visibility: evTags.some((t) => t[0] === "private") ? "private" : "open",
+    visibility: getTag("visibility") ?? "open",
     topic: getTag("topic") ?? null,
     purpose: getTag("purpose") ?? null,
     member_count: 0,
     role: "owner",
     archived_at: null,
-    ttl_seconds: null,
-    ttl_deadline: null,
+    ttl_seconds: ttlSeconds,
+    ttl_deadline:
+      ttlSeconds === null
+        ? null
+        : new Date(Date.now() + ttlSeconds * 1000).toISOString(),
     created_at: ev?.created_at
       ? new Date(ev.created_at * 1000).toISOString()
       : new Date().toISOString(),
@@ -5458,6 +5544,10 @@ export function maybeInstallE2eTauriMocks() {
         return DEFAULT_MOCK_IDENTITY;
       case "get_nsec":
         return "nsec1mock000000000000000000000000000000000000000000000000000000";
+      case "import_identity":
+        return importMockIdentity(
+          (payload as { nsec?: string } | null)?.nsec ?? "",
+        );
       case "apply_workspace":
         return;
       case "get_profile":
@@ -5650,7 +5740,8 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "update_channel":
         return handleUpdateChannel(
-          payload as Parameters<typeof handleUpdateChannel>[0],
+          (payload as { input: Parameters<typeof handleUpdateChannel>[0] })
+            .input,
           activeConfig,
         );
       case "set_channel_topic":

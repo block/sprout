@@ -41,7 +41,7 @@ const SPROUT_CLI_SKILL_MD: &str = include_str!("nest_skill.md");
 /// Template content version for AGENTS.md static content (above managed markers).
 /// Bump this when changing `nest_agents.md` to trigger refresh on existing installs.
 /// Version 1 is implicitly "before this mechanism existed" (no version file).
-const NEST_AGENTS_VERSION: u32 = 3;
+const NEST_AGENTS_VERSION: u32 = 4;
 
 /// Template content version for SKILL.md.
 /// Bump this when changing `nest_skill.md` to trigger refresh on existing installs.
@@ -943,6 +943,7 @@ mod tests {
             system_prompt: String::new(),
             runtime: None,
             model: None,
+            provider: None,
             name_pool: vec![],
             is_builtin: false,
             is_active: true,
@@ -962,6 +963,7 @@ mod tests {
             private_key_nsec: String::new(),
             auth_tag: None,
             relay_url: String::new(),
+            avatar_url: None,
             acp_command: String::new(),
             agent_command: String::new(),
             agent_args: vec![],

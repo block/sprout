@@ -502,6 +502,7 @@ fn built_in_persona_records(now: &str) -> Vec<PersonaRecord> {
             system_prompt: persona.system_prompt.to_string(),
             runtime: persona.runtime.map(|s| s.to_string()),
             model: persona.model.map(|s| s.to_string()),
+            provider: None,
             name_pool: persona.name_pool.iter().map(|s| s.to_string()).collect(),
             is_builtin: true,
             is_active: true,
@@ -837,12 +838,17 @@ pub fn import_persona_pack(
             system_prompt: p.system_prompt.clone(),
             runtime: p.runtime.clone(),
             model: p.model.clone(),
+            provider: p.llm_provider.clone(),
             name_pool: Vec::new(),
             is_builtin: false,
             is_active: true,
             source_pack: Some(resolved.id.clone()),
             source_pack_persona_slug: Some(p.name.clone()),
-            env_vars: std::collections::BTreeMap::new(),
+            // Filter derived provider/model env keys at import time so stale
+            // values don't shadow the structured fields after UI edits.
+            env_vars: crate::managed_agents::env_vars::filter_derived_provider_model_env_vars(
+                p.runtime_env_vars.iter().cloned(),
+            ),
             created_at: now.clone(),
             updated_at: now.clone(),
         })
@@ -944,6 +950,95 @@ pub struct PackSummary {
     pub version: String,
     pub persona_count: usize,
     pub path: PathBuf,
+}
+
+/// Re-read pack directories and update persona records whose source content
+/// has changed. Runs on launch so pack edits on disk propagate without
+/// manual intervention.
+pub fn sync_pack_personas(app: &AppHandle) -> Result<(), String> {
+    let mut records = load_personas(app)?;
+    let packs = packs_dir(app)?;
+
+    if !packs.exists() {
+        return Ok(());
+    }
+
+    let mut changed = false;
+
+    for record in records.iter_mut() {
+        let pack_id = match &record.source_pack {
+            Some(id) => id.clone(),
+            None => continue,
+        };
+        let slug = match &record.source_pack_persona_slug {
+            Some(s) => s.clone(),
+            None => continue,
+        };
+
+        // Find the pack directory whose resolved ID matches
+        let pack_dir_entries =
+            fs::read_dir(&packs).map_err(|e| format!("failed to read packs dir: {e}"))?;
+
+        let mut found = false;
+        for entry in pack_dir_entries {
+            let entry = entry.map_err(|e| format!("dir entry error: {e}"))?;
+            let dir = entry.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            let resolved = match sprout_persona::resolve::resolve_pack(&dir) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            if resolved.id != pack_id {
+                continue;
+            }
+
+            // Found the matching pack — find the persona by slug
+            if let Some(persona) = resolved.personas.iter().find(|p| p.name == slug) {
+                let mut record_changed = false;
+
+                if record.system_prompt != persona.system_prompt {
+                    record.system_prompt = persona.system_prompt.clone();
+                    record_changed = true;
+                }
+                if record.model != persona.model {
+                    record.model = persona.model.clone();
+                    record_changed = true;
+                }
+                if record.avatar_url != persona.avatar {
+                    record.avatar_url = persona.avatar.clone();
+                    record_changed = true;
+                }
+                if record.display_name != persona.display_name {
+                    record.display_name = persona.display_name.clone();
+                    record_changed = true;
+                }
+
+                if record_changed {
+                    record.updated_at = now_iso();
+                    changed = true;
+                    eprintln!(
+                        "sprout-desktop: sync-pack-personas: updated {:?} from pack {:?}",
+                        record.display_name, pack_id
+                    );
+                }
+            }
+            found = true;
+            break;
+        }
+
+        if !found {
+            // Pack directory no longer exists or doesn't resolve — skip silently
+            continue;
+        }
+    }
+
+    if changed {
+        save_personas(app, &records)?;
+    }
+
+    Ok(())
 }
 
 pub fn load_personas(app: &AppHandle) -> Result<Vec<PersonaRecord>, String> {

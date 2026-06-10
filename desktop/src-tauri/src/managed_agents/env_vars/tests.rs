@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use super::{
-    display_invalid_key, is_reserved_env_key, is_well_formed_env_key, merged_user_env,
-    validate_user_env_keys, MAX_ENV_TOTAL_BYTES, MAX_ENV_VALUE_BYTES, RESERVED_ENV_KEYS,
+    display_invalid_key, filter_derived_provider_model_env_vars, is_derived_provider_model_key,
+    is_reserved_env_key, is_well_formed_env_key, merged_user_env, validate_user_env_keys,
+    DERIVED_PROVIDER_MODEL_ENV_KEYS, MAX_ENV_TOTAL_BYTES, MAX_ENV_VALUE_BYTES, RESERVED_ENV_KEYS,
 };
 
 fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -413,5 +414,90 @@ fn merged_env_drops_oversize_value() {
     .collect();
     let merged = merged_user_env(&BTreeMap::new(), &agent);
     assert!(!merged.contains_key("HUGE"));
+    assert_eq!(merged.get("LEGIT").map(String::as_str), Some("v"));
+}
+
+// ── derived provider/model key filter ──────────────────────────────
+//
+// Pack import must strip derived env keys (GOOSE_MODEL, GOOSE_PROVIDER,
+// SPROUT_AGENT_MODEL, SPROUT_AGENT_PROVIDER) so they don't shadow the
+// structured PersonaRecord.model / PersonaRecord.provider fields after
+// the user edits them in the UI.
+
+#[test]
+fn is_derived_key_matches_all_known_keys() {
+    for key in DERIVED_PROVIDER_MODEL_ENV_KEYS {
+        assert!(
+            is_derived_provider_model_key(key),
+            "{key} should be recognized as derived"
+        );
+    }
+}
+
+#[test]
+fn is_derived_key_is_case_insensitive() {
+    assert!(is_derived_provider_model_key("goose_model"));
+    assert!(is_derived_provider_model_key("Goose_Provider"));
+    assert!(is_derived_provider_model_key("sprout_agent_model"));
+    assert!(is_derived_provider_model_key("SPROUT_AGENT_PROVIDER"));
+}
+
+#[test]
+fn is_derived_key_does_not_match_unrelated_keys() {
+    assert!(!is_derived_provider_model_key("GOOSE_TEMPERATURE"));
+    assert!(!is_derived_provider_model_key("GOOSE_CONTEXT_LIMIT"));
+    assert!(!is_derived_provider_model_key("ANTHROPIC_API_KEY"));
+    assert!(!is_derived_provider_model_key("SPROUT_PRIVATE_KEY"));
+    assert!(!is_derived_provider_model_key("MODEL"));
+    assert!(!is_derived_provider_model_key("PROVIDER"));
+}
+
+#[test]
+fn filter_derived_strips_provider_model_keys_preserves_rest() {
+    let input = vec![
+        (
+            "GOOSE_MODEL".to_string(),
+            "claude-sonnet-4-20250514".to_string(),
+        ),
+        ("GOOSE_PROVIDER".to_string(), "anthropic".to_string()),
+        ("SPROUT_AGENT_MODEL".to_string(), "gpt-4o".to_string()),
+        ("SPROUT_AGENT_PROVIDER".to_string(), "openai".to_string()),
+        ("GOOSE_TEMPERATURE".to_string(), "0.7".to_string()),
+        ("ANTHROPIC_API_KEY".to_string(), "sk-test".to_string()),
+    ];
+    let filtered = filter_derived_provider_model_env_vars(input);
+    assert_eq!(filtered.len(), 2);
+    assert_eq!(
+        filtered.get("GOOSE_TEMPERATURE").map(String::as_str),
+        Some("0.7")
+    );
+    assert_eq!(
+        filtered.get("ANTHROPIC_API_KEY").map(String::as_str),
+        Some("sk-test")
+    );
+}
+
+#[test]
+fn filter_derived_empty_input_returns_empty() {
+    let filtered = filter_derived_provider_model_env_vars(std::iter::empty());
+    assert!(filtered.is_empty());
+}
+
+#[test]
+fn stale_derived_env_does_not_override_structured_fields() {
+    // Documents that merged_user_env is transparent to derived keys — it
+    // does NOT strip them. The defense is the import filter
+    // (filter_derived_provider_model_env_vars) which prevents them from
+    // being persisted in the first place. If a stale record somehow has
+    // them, they flow through merged_user_env unchanged — the spawn-time
+    // re-derivation from structured fields writes AFTER merged env.
+    let persona_env = map(&[("GOOSE_MODEL", "stale-model"), ("LEGIT", "v")]);
+    let merged = merged_user_env(&persona_env, &BTreeMap::new());
+    // merged_user_env does NOT filter derived keys — that's by design.
+    // The import filter is the boundary defense.
+    assert_eq!(
+        merged.get("GOOSE_MODEL").map(String::as_str),
+        Some("stale-model")
+    );
     assert_eq!(merged.get("LEGIT").map(String::as_str), Some("v"));
 }

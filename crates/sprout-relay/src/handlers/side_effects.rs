@@ -7,10 +7,10 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use sprout_core::kind::{
-    event_kind_u32, is_parameterized_replaceable, KIND_AGENT_PROFILE, KIND_GIT_REPO_ANNOUNCEMENT,
-    KIND_IA_ARCHIVED, KIND_IA_ARCHIVED_LIST, KIND_IA_UNARCHIVED, KIND_MEMBER_ADDED_NOTIFICATION,
-    KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_GROUP_ADMINS, KIND_NIP29_GROUP_MEMBERS,
-    KIND_NIP29_GROUP_METADATA, KIND_NIP43_MEMBERSHIP_LIST, KIND_REACTION,
+    event_kind_u32, is_parameterized_replaceable, KIND_AGENT_PROFILE, KIND_DM_VISIBILITY,
+    KIND_GIT_REPO_ANNOUNCEMENT, KIND_IA_ARCHIVED, KIND_IA_ARCHIVED_LIST, KIND_IA_UNARCHIVED,
+    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_GROUP_ADMINS,
+    KIND_NIP29_GROUP_MEMBERS, KIND_NIP29_GROUP_METADATA, KIND_NIP43_MEMBERSHIP_LIST, KIND_REACTION,
 };
 use sprout_db::channel::MemberRole;
 
@@ -40,27 +40,61 @@ async fn evict_live_channel_subscriptions(
     let conn_ids = state.conn_manager.connection_ids_for_pubkey(target_pubkey);
 
     for conn_id in conn_ids {
-        let removed = state
-            .sub_registry
-            .remove_channel_subscriptions(conn_id, channel_id);
-        if removed.is_empty() {
-            continue;
-        }
+        evict_conn_channel_subscriptions(state, channel_id, conn_id).await;
+    }
+}
 
-        if let Some(subscriptions) = state.conn_manager.subscriptions_for(conn_id) {
-            let mut conn_subscriptions = subscriptions.lock().await;
-            for sub_id in &removed {
-                conn_subscriptions.remove(sub_id);
-            }
-        }
+/// Close every live channel-scoped subscription on `conn_id`, removing them from
+/// the connection's local map and sending `CLOSED restricted` for each.
+async fn evict_conn_channel_subscriptions(
+    state: &Arc<AppState>,
+    channel_id: Uuid,
+    conn_id: uuid::Uuid,
+) {
+    let removed = state
+        .sub_registry
+        .remove_channel_subscriptions(conn_id, channel_id);
+    if removed.is_empty() {
+        return;
+    }
 
-        for sub_id in removed {
-            let _ = state.conn_manager.send_to(
-                conn_id,
-                RelayMessage::closed(&sub_id, "restricted: channel access revoked"),
-            );
+    if let Some(subscriptions) = state.conn_manager.subscriptions_for(conn_id) {
+        let mut conn_subscriptions = subscriptions.lock().await;
+        for sub_id in &removed {
+            conn_subscriptions.remove(sub_id);
         }
     }
+
+    for sub_id in removed {
+        let _ = state.conn_manager.send_to(
+            conn_id,
+            RelayMessage::closed(&sub_id, "restricted: channel access revoked"),
+        );
+    }
+}
+
+/// Revoke live channel subscriptions held by connections whose authenticated
+/// pubkey is not a current member. Used when an open channel flips to private:
+/// non-members could have subscribed while it was open, and fan-out does not
+/// re-check membership per event, so their subscriptions must be closed.
+async fn evict_non_member_channel_subscriptions(
+    state: &Arc<AppState>,
+    channel_id: Uuid,
+) -> anyhow::Result<()> {
+    let members = state.db.get_members(channel_id).await?;
+    let member_pubkeys: std::collections::HashSet<Vec<u8>> =
+        members.into_iter().map(|m| m.pubkey).collect();
+
+    for conn_id in state.sub_registry.channel_subscriber_conns(channel_id) {
+        let is_member = match state.conn_manager.pubkey_for_conn(conn_id) {
+            Some(pubkey) => member_pubkeys.contains(&pubkey),
+            None => false,
+        };
+        if !is_member {
+            evict_conn_channel_subscriptions(state, channel_id, conn_id).await;
+        }
+    }
+    Ok(())
 }
 
 /// Dispatch side effects for a stored event.
@@ -293,14 +327,22 @@ pub async fn validate_admin_event(
         }
         9002 => {
             // EDIT_METADATA: require at least one recognized metadata tag.
-            const RECOGNIZED_TAGS: &[&str] = &["name", "about", "archived", "topic", "purpose"];
+            const RECOGNIZED_TAGS: &[&str] = &[
+                "name",
+                "about",
+                "archived",
+                "topic",
+                "purpose",
+                "visibility",
+                "ttl",
+            ];
             let has_recognized = event
                 .tags
                 .iter()
                 .any(|t| RECOGNIZED_TAGS.contains(&t.kind().to_string().as_str()));
             if !has_recognized {
                 return Err(anyhow::anyhow!(
-                    "kind:9002 must include at least one metadata tag (name, about, archived, topic, purpose)"
+                    "kind:9002 must include at least one metadata tag (name, about, archived, topic, purpose, visibility, ttl)"
                 ));
             }
 
@@ -321,10 +363,53 @@ pub async fn validate_admin_event(
                 }
             }
 
-            // name/about/archived require owner/admin; topic/purpose allow any member
+            // Validate visibility values before storage.
+            for t in event.tags.iter() {
+                if t.kind().to_string() == "visibility" {
+                    match t.content() {
+                        Some("open") | Some("private") => {}
+                        Some(v) => {
+                            return Err(anyhow::anyhow!(
+                                "invalid visibility value: {v} (must be \"open\" or \"private\")"
+                            ));
+                        }
+                        None => {
+                            return Err(anyhow::anyhow!("visibility tag must have a value"));
+                        }
+                    }
+                }
+            }
+
+            // Validate ttl values before storage. Empty string clears the TTL
+            // (channel becomes permanent); any other value must parse as a
+            // positive integer number of seconds. A bare tag with no value is
+            // rejected so clearing is always explicit (`["ttl", ""]`).
+            for t in event.tags.iter() {
+                if t.kind().to_string() == "ttl" {
+                    match t.content() {
+                        Some("") => {}
+                        Some(v) => match v.parse::<i32>() {
+                            Ok(n) if n > 0 => {}
+                            _ => {
+                                return Err(anyhow::anyhow!(
+                                    "invalid ttl value: {v} (must be a positive integer of seconds, or empty to clear)"
+                                ));
+                            }
+                        },
+                        None => {
+                            return Err(anyhow::anyhow!(
+                                "ttl tag must have a value (seconds, or empty string to clear)"
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // name/about/archived/visibility/ttl require owner/admin;
+            // topic/purpose allow any member.
             let has_privileged_tag = event.tags.iter().any(|t| {
                 let k = t.kind().to_string();
-                k == "name" || k == "about" || k == "archived"
+                k == "name" || k == "about" || k == "archived" || k == "visibility" || k == "ttl"
             });
             if has_privileged_tag {
                 let members = state.db.get_members(channel_id).await?;
@@ -332,7 +417,7 @@ pub async fn validate_admin_event(
                 match actor_member {
                     Some(m) if m.role == "owner" || m.role == "admin" => Ok(()),
                     _ => Err(anyhow::anyhow!(
-                        "actor not authorized for name/about/archived changes"
+                        "actor not authorized for name/about/archived/visibility/ttl changes"
                     )),
                 }
             } else {
@@ -935,7 +1020,7 @@ async fn handle_edit_metadata(event: &Event, state: &Arc<AppState>) -> anyhow::R
                             channel_id,
                             sprout_db::channel::ChannelUpdate {
                                 name: Some(val.to_string()),
-                                description: None,
+                                ..Default::default()
                             },
                         )
                         .await?;
@@ -946,8 +1031,8 @@ async fn handle_edit_metadata(event: &Event, state: &Arc<AppState>) -> anyhow::R
                         .update_channel(
                             channel_id,
                             sprout_db::channel::ChannelUpdate {
-                                name: None,
                                 description: Some(val.to_string()),
+                                ..Default::default()
                             },
                         )
                         .await?;
@@ -970,6 +1055,74 @@ async fn handle_edit_metadata(event: &Event, state: &Arc<AppState>) -> anyhow::R
                         channel_id,
                         serde_json::json!({
                             "type": "purpose_changed", "actor": actor_hex, "purpose": val
+                        }),
+                    )
+                    .await?;
+                }
+                "visibility" => {
+                    let was_open = state
+                        .db
+                        .get_channel(channel_id)
+                        .await
+                        .map(|c| c.visibility == "open")
+                        .unwrap_or(false);
+                    state
+                        .db
+                        .update_channel(
+                            channel_id,
+                            sprout_db::channel::ChannelUpdate {
+                                visibility: Some(val.to_string()),
+                                ..Default::default()
+                            },
+                        )
+                        .await?;
+                    // A visibility flip changes who can see the channel, so the
+                    // accessible-channels and visibility caches must be cleared
+                    // before any later event for this channel fans out.
+                    state.invalidate_all_accessible_channels();
+                    state.invalidate_channel_visibility(channel_id);
+                    // On open -> private, eagerly close non-members' live subs
+                    // for an immediate CLOSED on this node. The fan-out access
+                    // filter is the cluster-wide correctness backstop.
+                    if was_open && val == "private" {
+                        evict_non_member_channel_subscriptions(state, channel_id).await?;
+                    }
+                    emit_system_message(
+                        state,
+                        channel_id,
+                        serde_json::json!({
+                            "type": "visibility_changed", "actor": actor_hex, "visibility": val
+                        }),
+                    )
+                    .await?;
+                }
+                "ttl" => {
+                    // Empty string clears the TTL (permanent); otherwise it is a
+                    // positive integer of seconds, validated during authorization.
+                    // Fail closed: a parse failure must reject, never silently
+                    // clear the TTL to permanent.
+                    let ttl_change: Option<i32> = if val.is_empty() {
+                        None
+                    } else {
+                        Some(val.parse::<i32>().map_err(|_| {
+                            anyhow::anyhow!("invalid ttl value: {val} (must be a positive integer)")
+                        })?)
+                    };
+                    state
+                        .db
+                        .update_channel(
+                            channel_id,
+                            sprout_db::channel::ChannelUpdate {
+                                ttl_seconds: Some(ttl_change),
+                                ..Default::default()
+                            },
+                        )
+                        .await?;
+                    emit_system_message(
+                        state,
+                        channel_id,
+                        serde_json::json!({
+                            "type": "ttl_changed", "actor": actor_hex, "ttl_seconds": ttl_change
                         }),
                     )
                     .await?;
@@ -2171,6 +2324,85 @@ pub async fn publish_nipia_archival_list(state: &Arc<AppState>) -> anyhow::Resul
     info!(
         archived_count = archived.len(),
         "NIP-IA archived identities list published"
+    );
+    Ok(())
+}
+
+/// NIP-DV: publish the relay-signed, per-viewer DM visibility snapshot for
+/// `viewer`. The event is parameterized-replaceable (`d` = viewer pubkey) and
+/// carries one `h` tag per DM the viewer currently has hidden. Called after any
+/// hide (41012) or unhide (41010 that clears `hidden_at`); the latest event is
+/// always the authoritative hidden set, so no client-side delta merge is needed.
+pub async fn publish_dm_visibility_snapshot(
+    state: &Arc<AppState>,
+    viewer: &[u8],
+) -> anyhow::Result<()> {
+    let viewer_hex = hex::encode(viewer);
+    let hidden = state.db.list_hidden_dms(viewer).await?;
+    let relay_pubkey_hex = state.relay_keypair.public_key().to_hex();
+
+    let mut tags: Vec<Tag> = Vec::with_capacity(hidden.len() + 2);
+    tags.push(
+        Tag::parse(["d", &viewer_hex])
+            .map_err(|e| anyhow::anyhow!("failed to build d tag: {e}"))?,
+    );
+    // `p` = viewer so the relay's `#p`-gated read path scopes the snapshot to
+    // its owner; no one else may query another viewer's hidden-DM set.
+    tags.push(
+        Tag::parse(["p", &viewer_hex])
+            .map_err(|e| anyhow::anyhow!("failed to build p tag: {e}"))?,
+    );
+    for channel_id in &hidden {
+        tags.push(
+            Tag::parse(["h", &channel_id.to_string()])
+                .map_err(|e| anyhow::anyhow!("failed to build h tag: {e}"))?,
+        );
+    }
+
+    // Force created_at strictly past any prior snapshot for this viewer: a same-second
+    // replacement whose random event id sorts higher is rejected by stale-write
+    // protection, so a hide→re-open within one second could otherwise strand the stale
+    // snapshot. Same guard as emit_addressable_discovery_event.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let ts = {
+        let existing = state
+            .db
+            .query_events(&sprout_db::event::EventQuery {
+                kinds: Some(vec![KIND_DM_VISIBILITY as i32]),
+                pubkey: Some(state.relay_keypair.public_key().to_bytes().to_vec()),
+                d_tag: Some(viewer_hex.clone()),
+                limit: Some(1),
+                ..Default::default()
+            })
+            .await
+            .unwrap_or_default();
+        existing
+            .first()
+            .map(|e| (e.event.created_at.as_secs() + 1).max(now))
+            .unwrap_or(now)
+    };
+
+    let event = EventBuilder::new(Kind::Custom(KIND_DM_VISIBILITY as u16), "")
+        .tags(tags)
+        .custom_created_at(nostr::Timestamp::from(ts))
+        .sign_with_keys(&state.relay_keypair)
+        .map_err(|e| anyhow::anyhow!("failed to sign kind:{KIND_DM_VISIBILITY}: {e}"))?;
+
+    let (stored, was_inserted) = state
+        .db
+        .replace_parameterized_event(&event, &viewer_hex, None)
+        .await?;
+    if was_inserted {
+        dispatch_persistent_event(state, &stored, KIND_DM_VISIBILITY, &relay_pubkey_hex).await;
+    }
+
+    info!(
+        viewer = %viewer_hex,
+        hidden_count = hidden.len(),
+        "NIP-DV DM visibility snapshot published"
     );
     Ok(())
 }

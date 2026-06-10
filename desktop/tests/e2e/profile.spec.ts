@@ -445,6 +445,10 @@ test("snaps custom avatar colors to the dot grid", async ({ page }) => {
     page.getByTestId("profile-avatar-custom-color-done"),
   ).toBeVisible();
 
+  const hueSlider = page.getByTestId("profile-avatar-custom-color-hue");
+  await hueSlider.press("Home");
+  await expect(hueSlider).toHaveAttribute("aria-valuenow", "0");
+
   const spectrumBox = await spectrum.boundingBox();
   if (!spectrumBox) {
     throw new Error("Custom color spectrum did not render bounds.");

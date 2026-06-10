@@ -12,6 +12,7 @@ type RawParsedPersonaPreview = {
   avatar_data_url: string | null;
   runtime: string | null;
   model: string | null;
+  provider: string | null;
   name_pool?: string[];
   source_file: string;
 };
@@ -33,6 +34,7 @@ export type ParsedPersonaPreview = {
   avatarDataUrl: string | null;
   runtime: string | null;
   model: string | null;
+  provider: string | null;
   namePool: string[];
   sourceFile: string;
 };
@@ -54,6 +56,7 @@ type RawPersona = {
   system_prompt: string;
   runtime?: string | null;
   model?: string | null;
+  provider?: string | null;
   name_pool?: string[];
   is_builtin: boolean;
   is_active?: boolean;
@@ -70,6 +73,7 @@ function fromRawPersona(persona: RawPersona): AgentPersona {
     systemPrompt: persona.system_prompt,
     runtime: persona.runtime ?? null,
     model: persona.model ?? null,
+    provider: persona.provider ?? null,
     namePool: persona.name_pool ?? [],
     isBuiltIn: persona.is_builtin,
     isActive: persona.is_active ?? true,
@@ -94,6 +98,7 @@ export async function createPersona(
         systemPrompt: input.systemPrompt,
         runtime: input.runtime,
         model: input.model,
+        provider: input.provider,
         namePool: input.namePool ?? [],
         envVars: input.envVars ?? {},
       },
@@ -113,6 +118,7 @@ export async function updatePersona(
         systemPrompt: input.systemPrompt,
         runtime: input.runtime,
         model: input.model,
+        provider: input.provider,
         namePool: input.namePool ?? [],
         // Send envVars only when caller explicitly provided it; omitting
         // tells the backend "don't touch the stored env vars" so editing
@@ -151,6 +157,7 @@ export async function parsePersonaFiles(
       avatarDataUrl: p.avatar_data_url,
       runtime: p.runtime,
       model: p.model,
+      provider: p.provider,
       namePool: p.name_pool ?? [],
       sourceFile: p.source_file,
     })),

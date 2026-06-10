@@ -44,6 +44,7 @@ export function duplicatePersonaDialogState(
       systemPrompt: persona.systemPrompt,
       runtime: persona.runtime ?? undefined,
       model: persona.model ?? undefined,
+      provider: persona.provider ?? undefined,
       // Carry envVars and namePool into the duplicate. Without this, a
       // duplicated persona that relies on an API key in env_vars would
       // silently fail at spawn until the user re-entered every credential.
@@ -69,6 +70,7 @@ export function editPersonaDialogState(
       systemPrompt: persona.systemPrompt,
       runtime: persona.runtime ?? undefined,
       model: persona.model ?? undefined,
+      provider: persona.provider ?? undefined,
       // Seed both namePool and envVars from the loaded persona so editing
       // unrelated fields doesn't submit an empty value that wipes them.
       // (Persona update treats Some(empty) as "clear all" intentionally;
@@ -92,6 +94,7 @@ export function importPersonaDialogState(
       systemPrompt: persona.systemPrompt,
       runtime: persona.runtime ?? undefined,
       model: persona.model ?? undefined,
+      provider: persona.provider ?? undefined,
     },
   };
 }

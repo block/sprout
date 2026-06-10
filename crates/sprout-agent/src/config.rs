@@ -93,6 +93,12 @@ impl Config {
             databricks_host.as_deref(),
             databricks_model.as_deref(),
         )?;
+
+        // Universal model override — any provider will use this when its own
+        // model env var is absent. Useful for wrapper scripts that set a single
+        // var regardless of which provider is active.
+        let sprout_agent_model = env("SPROUT_AGENT_MODEL");
+
         // OPENAI_COMPAT_API is only read when provider=openai, so a stray
         // bad value can't break an Anthropic-only deployment.
         //
@@ -102,19 +108,28 @@ impl Config {
         let (api_key, model, base_url, openai_api) = match provider {
             Provider::Anthropic => (
                 req("ANTHROPIC_API_KEY")?,
-                req("ANTHROPIC_MODEL")?,
+                resolve_model(
+                    env("ANTHROPIC_MODEL").as_deref(),
+                    sprout_agent_model.as_deref(),
+                )
+                .ok_or_else(|| "config: ANTHROPIC_MODEL required".to_string())?,
                 env_or("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
                 OpenAiApi::Auto, // unused for Anthropic
             ),
             Provider::OpenAi => (
                 req("OPENAI_COMPAT_API_KEY")?,
-                req("OPENAI_COMPAT_MODEL")?,
+                resolve_model(
+                    env("OPENAI_COMPAT_MODEL").as_deref(),
+                    sprout_agent_model.as_deref(),
+                )
+                .ok_or_else(|| "config: OPENAI_COMPAT_MODEL required".to_string())?,
                 env_or("OPENAI_COMPAT_BASE_URL", "https://api.openai.com/v1"),
                 parse_openai_api(env("OPENAI_COMPAT_API").as_deref())?,
             ),
             Provider::Databricks => (
                 env("DATABRICKS_TOKEN").unwrap_or_default(),
-                databricks_model.ok_or_else(|| "config: DATABRICKS_MODEL required".to_string())?,
+                resolve_model(databricks_model.as_deref(), sprout_agent_model.as_deref())
+                    .ok_or_else(|| "config: DATABRICKS_MODEL required".to_string())?,
                 databricks_host.ok_or_else(|| "config: DATABRICKS_HOST required".to_string())?,
                 OpenAiApi::Chat, // Databricks invocations is chat-shaped
             ),
@@ -230,6 +245,13 @@ fn env_or(k: &str, d: &str) -> String {
 
 fn req(k: &str) -> Result<String, String> {
     env(k).ok_or_else(|| format!("config: {k} required"))
+}
+
+/// Returns the first of `provider_model` or `universal_fallback` that is
+/// `Some`, converting to an owned `String`. Returns `None` when both are
+/// absent so the caller can supply a provider-specific error message.
+fn resolve_model(provider_model: Option<&str>, universal_fallback: Option<&str>) -> Option<String> {
+    provider_model.or(universal_fallback).map(str::to_owned)
 }
 
 fn present_nonempty(v: Option<&str>) -> bool {
@@ -595,5 +617,23 @@ mod tests {
         ] {
             assert_eq!(is_openai_host(url), want, "url={url}");
         }
+    }
+
+    #[test]
+    fn resolve_model_prefers_provider_specific() {
+        let result = resolve_model(Some("anthropic-model"), Some("universal-model"));
+        assert_eq!(result.as_deref(), Some("anthropic-model"));
+    }
+
+    #[test]
+    fn resolve_model_falls_back_to_universal() {
+        let result = resolve_model(None, Some("universal-model"));
+        assert_eq!(result.as_deref(), Some("universal-model"));
+    }
+
+    #[test]
+    fn resolve_model_returns_none_when_both_absent() {
+        let result = resolve_model(None, None);
+        assert!(result.is_none());
     }
 }

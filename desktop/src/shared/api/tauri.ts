@@ -579,7 +579,9 @@ export async function getChannelMembers(
 export async function updateChannel(
   input: UpdateChannelInput,
 ): Promise<ChannelDetail> {
-  const channel = await invokeTauri<RawChannelDetail>("update_channel", input);
+  const channel = await invokeTauri<RawChannelDetail>("update_channel", {
+    input,
+  });
   return fromRawChannelDetail(channel);
 }
 

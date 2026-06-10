@@ -1,18 +1,22 @@
 import * as React from "react";
 import { Check, Copy, KeyRound, ShieldX } from "lucide-react";
 
-import { pubkeyToNpub } from "@/shared/lib/nostrUtils";
+import { nsecToNpub, pubkeyToNpub, shortenNpub } from "@/shared/lib/nostrUtils";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
+import { Input } from "@/shared/ui/input";
+import { Spinner } from "@/shared/ui/spinner";
 
 type MembershipDeniedProps = {
   onChangeKey?: () => void;
+  onImportKey?: (nsec: string) => Promise<void>;
   onRetry: () => void;
   pubkey: string;
 };
 
 export function MembershipDenied({
   onChangeKey,
+  onImportKey,
   onRetry,
   pubkey,
 }: MembershipDeniedProps) {
@@ -28,6 +32,14 @@ export function MembershipDenied({
     }
   }, [pubkey]);
   const [copied, setCopied] = React.useState(false);
+  const [importError, setImportError] = React.useState<string | null>(null);
+  const [isImportFormOpen, setIsImportFormOpen] = React.useState(false);
+  const [isImportingKey, setIsImportingKey] = React.useState(false);
+  const [nsecInput, setNsecInput] = React.useState("");
+  const previewNpub = React.useMemo(() => nsecToNpub(nsecInput), [nsecInput]);
+  const trimmedNsec = nsecInput.trim();
+  const canImportKey = typeof onImportKey === "function";
+  const isValidNsec = previewNpub !== null;
 
   const handleCopy = React.useCallback(async () => {
     try {
@@ -39,8 +51,37 @@ export function MembershipDenied({
     }
   }, [npub]);
 
+  const handleImportKey = React.useCallback(async () => {
+    if (!onImportKey) {
+      return;
+    }
+
+    if (!previewNpub) {
+      setImportError(
+        "That doesn't look like a valid nsec. Paste an nsec1 key.",
+      );
+      return;
+    }
+
+    setImportError(null);
+    setIsImportingKey(true);
+
+    try {
+      await onImportKey(trimmedNsec);
+    } catch (error) {
+      setImportError(
+        error instanceof Error ? error.message : "Failed to import key.",
+      );
+    } finally {
+      setIsImportingKey(false);
+    }
+  }, [onImportKey, previewNpub, trimmedNsec]);
+
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-[radial-gradient(circle_at_top,hsl(var(--primary)/0.14),transparent_48%),linear-gradient(180deg,hsl(var(--background)),hsl(var(--muted)/0.55))] px-4 py-8">
+    <div
+      className="flex min-h-dvh items-center justify-center bg-[radial-gradient(circle_at_top,hsl(var(--primary)/0.14),transparent_48%),linear-gradient(180deg,hsl(var(--background)),hsl(var(--muted)/0.55))] px-4 py-8"
+      data-testid="membership-denied"
+    >
       <div className="w-full max-w-md rounded-[28px] border border-border/70 bg-background/92 p-8 shadow-2xl backdrop-blur-sm">
         <div className="space-y-3">
           <Badge variant="warning">Membership required</Badge>
@@ -92,19 +133,113 @@ export function MembershipDenied({
         </div>
 
         <div className="mt-6 flex flex-col gap-2">
-          <Button className="w-full" onClick={onRetry} type="button">
-            Try again
-          </Button>
-          {onChangeKey ? (
-            <button
-              className="flex w-full items-center justify-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-              onClick={onChangeKey}
-              type="button"
+          {isImportFormOpen ? (
+            <form
+              className="flex flex-col gap-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void handleImportKey();
+              }}
             >
-              <KeyRound className="h-3 w-3" />
-              Use a different key
-            </button>
-          ) : null}
+              <div className="space-y-1.5 text-left">
+                <label
+                  className="text-sm font-medium text-foreground"
+                  htmlFor="membership-denied-nsec"
+                >
+                  Private key
+                </label>
+                <Input
+                  autoComplete="off"
+                  autoCorrect="off"
+                  data-testid="membership-denied-nsec-input"
+                  disabled={isImportingKey}
+                  id="membership-denied-nsec"
+                  onChange={(event) => {
+                    setNsecInput(event.target.value);
+                    setImportError(null);
+                  }}
+                  placeholder="nsec1..."
+                  spellCheck={false}
+                  type="password"
+                  value={nsecInput}
+                />
+              </div>
+
+              {previewNpub ? (
+                <div
+                  className="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs"
+                  data-testid="membership-denied-npub-preview"
+                >
+                  <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+                  <div className="min-w-0 space-y-0.5">
+                    <p className="font-medium text-foreground">
+                      This will use this Nostr identity:
+                    </p>
+                    <p className="break-all font-mono text-[11px] text-muted-foreground">
+                      {shortenNpub(previewNpub)}
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+
+              {importError ? (
+                <p className="text-center text-sm text-destructive">
+                  {importError}
+                </p>
+              ) : null}
+
+              <Button
+                className="w-full"
+                data-testid="membership-denied-import-key"
+                disabled={!isValidNsec || isImportingKey}
+                type="submit"
+              >
+                {isImportingKey ? (
+                  <Spinner aria-label="Importing key" className="h-4 w-4" />
+                ) : (
+                  "Import key"
+                )}
+              </Button>
+              <Button
+                className="w-full text-muted-foreground hover:text-accent-foreground"
+                disabled={isImportingKey}
+                onClick={() => {
+                  setImportError(null);
+                  setIsImportFormOpen(false);
+                  setNsecInput("");
+                }}
+                type="button"
+                variant="ghost"
+              >
+                Back
+              </Button>
+            </form>
+          ) : (
+            <>
+              <Button className="w-full" onClick={onRetry} type="button">
+                Try again
+              </Button>
+              {onChangeKey || canImportKey ? (
+                <button
+                  className="flex w-full items-center justify-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                  data-testid="membership-denied-change-key"
+                  onClick={() => {
+                    if (onChangeKey) {
+                      onChangeKey();
+                      return;
+                    }
+
+                    setImportError(null);
+                    setIsImportFormOpen(true);
+                  }}
+                  type="button"
+                >
+                  <KeyRound className="h-3 w-3" />
+                  Use a different key
+                </button>
+              ) : null}
+            </>
+          )}
         </div>
       </div>
     </div>
