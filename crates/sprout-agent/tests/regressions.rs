@@ -68,17 +68,36 @@ async fn spawn_capturing_llm(responses: Vec<Value>) -> CapturingLlm {
                 if let Ok(req) = serde_json::from_slice::<Value>(&buf[header_end..]) {
                     captured.lock().await.push(req);
                 }
-                let body = queue
+                let is_stream = buf[header_end..]
+                    .windows(13)
+                    .any(|w| w == b"\"stream\":true");
+
+                let canned = queue
                     .lock()
                     .await
                     .pop_front()
                     .unwrap_or_else(|| json!({ "error": "no canned response" }));
-                let body_s = serde_json::to_string(&body).unwrap();
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body_s.len(), body_s,
-                );
-                let _ = sock.write_all(resp.as_bytes()).await;
+
+                if is_stream {
+                    let events = openai_to_sse_events(&canned);
+                    let mut sse_body = String::new();
+                    for ev in &events {
+                        sse_body.push_str(&format!("data: {}\n\n", ev));
+                    }
+                    sse_body.push_str("data: [DONE]\n\n");
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{}",
+                        sse_body,
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                } else {
+                    let body_s = serde_json::to_string(&canned).unwrap();
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body_s.len(), body_s,
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                }
                 let _ = sock.shutdown().await;
             });
         }
@@ -214,6 +233,68 @@ fn openai_tool_call(id: &str, name: &str, args: Value) -> Value {
             "finish_reason": "tool_calls",
         }],
     })
+}
+
+/// Convert a canned OpenAI Chat Completions response into SSE delta events.
+fn openai_to_sse_events(response: &Value) -> Vec<String> {
+    let mut events = Vec::new();
+    let choice = &response["choices"][0];
+    let msg = &choice["message"];
+
+    if let Some(content) = msg.get("content").and_then(Value::as_str) {
+        if !content.is_empty() {
+            events.push(
+                json!({
+                    "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": null}]
+                })
+                .to_string(),
+            );
+        }
+    }
+
+    if let Some(tcs) = msg.get("tool_calls").and_then(Value::as_array) {
+        for (i, tc) in tcs.iter().enumerate() {
+            let id = tc.get("id").and_then(Value::as_str).unwrap_or("");
+            let name = tc["function"]
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let args = tc["function"]
+                .get("arguments")
+                .and_then(Value::as_str)
+                .unwrap_or("{}");
+            events.push(json!({
+                "choices": [{"index": 0, "delta": {
+                    "tool_calls": [{"index": i, "id": id, "function": {"name": name, "arguments": ""}}]
+                }, "finish_reason": null}]
+            }).to_string());
+            events.push(
+                json!({
+                    "choices": [{"index": 0, "delta": {
+                        "tool_calls": [{"index": i, "function": {"arguments": args}}]
+                    }, "finish_reason": null}]
+                })
+                .to_string(),
+            );
+        }
+    }
+
+    let finish = choice
+        .get("finish_reason")
+        .and_then(Value::as_str)
+        .unwrap_or("stop");
+    // Carry usage from the original response if present
+    let mut final_event = json!({
+        "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
+    });
+    if let Some(usage) = response.get("usage") {
+        final_event["usage"] = usage.clone();
+    } else {
+        final_event["usage"] = json!({"prompt_tokens": 10, "completion_tokens": 5});
+    }
+    events.push(final_event.to_string());
+
+    events
 }
 
 async fn init_session(h: &mut Harness, mcp_servers: Value) -> String {

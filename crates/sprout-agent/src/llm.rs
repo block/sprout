@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -9,6 +10,7 @@ use crate::config::{is_openai_host, Config, OpenAiApi, Provider};
 use crate::types::{
     AgentError, HistoryItem, LlmResponse, ProviderStop, ToolCall, ToolDef, ToolResultContent,
 };
+use crate::wire::{self, WireSender};
 
 /// Databricks OAuth client_id — the public Databricks-published CLI client.
 /// PKCE-only, no secret. Same identifier goose uses, so a user's browser
@@ -25,6 +27,10 @@ type OpenAiParse = fn(Value) -> Result<LlmResponse, AgentError>;
 
 pub struct Llm {
     http: Client,
+    /// Streaming client — no global timeout so long-running SSE streams
+    /// survive. First-byte and inter-chunk timeouts are enforced externally
+    /// via `tokio::time::timeout`.
+    http_stream: Client,
     /// One-shot sticky flag: set when a Chat Completions request comes
     /// back with a "use /v1/responses" provider error while `cfg.openai_api
     /// == Auto`. Subsequent OpenAI calls then go straight to Responses
@@ -36,23 +42,51 @@ pub struct Llm {
     /// Databricks otherwise. Anthropic doesn't use this — it always
     /// reads `cfg.api_key` directly because the API expects `x-api-key`.
     auth: Arc<dyn TokenSource>,
+    /// Max gap allowed between response-body chunks. Enforced per
+    /// `chunk()` poll rather than as a total request deadline, so a
+    /// slow-but-progressing completion survives arbitrarily long while a
+    /// connection that goes silent mid-body is torn down promptly.
+    chunk_timeout: std::time::Duration,
+    /// Inter-chunk timeout for SSE streaming after the first content delta
+    /// has arrived. Default 30s, configurable via
+    /// `SPROUT_AGENT_STREAM_CHUNK_TIMEOUT_SECS`.
+    stream_chunk_timeout: std::time::Duration,
+    /// Timeout from stream-open until the first text or tool delta. Uses
+    /// `llm_timeout` (120s default) to accommodate reasoning models that
+    /// pause before producing content.
+    first_byte_timeout: std::time::Duration,
 }
 
 impl Llm {
     pub fn new(cfg: &Config) -> Result<Self, AgentError> {
         let http = Client::builder()
+            // Fixed short connect timeout: a dead/unroutable endpoint must
+            // fail fast at the TCP/TLS handshake, independent of llm_timeout
+            // (which governs in-flight inter-chunk stalls, a different concern).
             .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(cfg.llm_timeout)
             .build()
             .map_err(|e| AgentError::Llm(format!("http: {e}")))?;
+        // Streaming client has no global timeout — SSE streams can run
+        // indefinitely. Timeouts are enforced per-event via tokio::time::timeout.
+        let http_stream = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| AgentError::Llm(format!("http_stream: {e}")))?;
         let auth = build_token_source(cfg)?;
         Ok(Self {
             http,
+            http_stream,
             auto_upgraded: AtomicBool::new(false),
             auth,
+            chunk_timeout: cfg.llm_stream_chunk_timeout,
+            stream_chunk_timeout: cfg.stream_chunk_timeout,
+            first_byte_timeout: cfg.llm_timeout,
         })
     }
 
+    /// Non-streaming completion — kept as fallback for providers/scenarios
+    /// where SSE streaming is unavailable or undesirable.
+    #[allow(dead_code)]
     pub async fn complete(
         &self,
         cfg: &Config,
@@ -142,7 +176,7 @@ impl Llm {
 
     async fn post_anthropic(&self, cfg: &Config, body: &Value) -> Result<Value, AgentError> {
         let url = format!("{}/v1/messages", cfg.base_url.trim_end_matches('/'));
-        post(&self.http, &url, body, |r| {
+        post(&self.http, &url, body, self.chunk_timeout, |r| {
             r.header("x-api-key", &cfg.api_key)
                 .header("anthropic-version", &cfg.anthropic_api_version)
         })
@@ -204,7 +238,10 @@ impl Llm {
                 body
             }
         };
-        post(&self.http, &url, body_ref, |r| r.bearer_auth(&bearer)).await
+        post(&self.http, &url, body_ref, self.chunk_timeout, |r| {
+            r.bearer_auth(&bearer)
+        })
+        .await
     }
 
     /// If `err` names `/v1/responses` / "use the Responses API", latch a
@@ -225,6 +262,645 @@ impl Llm {
             );
         }
         true
+    }
+
+    // ── SSE Streaming ────────────────────────────────────────────────────────
+
+    /// Stream a completion, emitting text deltas as `agent_message_chunk`
+    /// session updates and accumulating tool-call arguments per content-block
+    /// index.
+    pub async fn complete_stream(
+        &self,
+        cfg: &Config,
+        system_prompt: &str,
+        history: &[HistoryItem],
+        tools: &[ToolDef],
+        emitter: &StreamEmitter,
+    ) -> Result<LlmResponse, AgentError> {
+        match cfg.provider {
+            Provider::Anthropic => {
+                let mut body = anthropic_body(cfg, system_prompt, history, tools);
+                body["stream"] = json!(true);
+                self.post_stream_anthropic(cfg, &body, emitter).await
+            }
+            Provider::OpenAi | Provider::Databricks => {
+                self.openai_stream_request(cfg, system_prompt, history, tools, emitter)
+                    .await
+            }
+        }
+    }
+
+    async fn post_stream_anthropic(
+        &self,
+        cfg: &Config,
+        body: &Value,
+        emitter: &StreamEmitter,
+    ) -> Result<LlmResponse, AgentError> {
+        let url = format!("{}/v1/messages", cfg.base_url.trim_end_matches('/'));
+        let body_bytes =
+            serde_json::to_vec(body).map_err(|e| AgentError::Llm(format!("serialize: {e}")))?;
+        let resp = self
+            .http_stream
+            .post(&url)
+            .header("content-type", "application/json")
+            .header("x-api-key", &cfg.api_key)
+            .header("anthropic-version", &cfg.anthropic_api_version)
+            .body(body_bytes)
+            .send()
+            .await
+            .map_err(|e| AgentError::Llm(format!("transport: {e}")))?;
+        let status = resp.status();
+        if status == 401 || status == 403 {
+            return Err(AgentError::LlmAuth(read_error_body(resp).await));
+        }
+        if !status.is_success() {
+            return Err(AgentError::Llm(format!(
+                "{status}: {}",
+                read_error_body(resp).await
+            )));
+        }
+        self.consume_sse_anthropic(resp, emitter).await
+    }
+
+    async fn consume_sse_anthropic(
+        &self,
+        resp: reqwest::Response,
+        emitter: &StreamEmitter,
+    ) -> Result<LlmResponse, AgentError> {
+        let mut text = String::new();
+        let mut tool_blocks: HashMap<usize, (String, String)> = HashMap::new();
+        let mut stop = ProviderStop::Other;
+        let mut input_tokens: Option<u64> = None;
+        let mut saw_content_delta = false;
+        let mut accumulated_bytes: usize = 0;
+
+        let mut sse_reader = SseReader::new(resp);
+        loop {
+            let timeout = if saw_content_delta {
+                self.stream_chunk_timeout
+            } else {
+                self.first_byte_timeout
+            };
+            let event = match tokio::time::timeout(timeout, sse_reader.next_event()).await {
+                Ok(Ok(Some(ev))) => ev,
+                Ok(Ok(None)) => break,
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    return Err(AgentError::Llm(format!(
+                        "stream stalled: no SSE event within {}s",
+                        timeout.as_secs()
+                    )));
+                }
+            };
+            let data: Value = match serde_json::from_str(&event) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let event_type = data.get("type").and_then(Value::as_str).unwrap_or("");
+            match event_type {
+                "content_block_start" => {
+                    let idx = data.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                    let cb = &data["content_block"];
+                    if cb.get("type").and_then(Value::as_str) == Some("tool_use") {
+                        let id = str_field(cb, "id");
+                        let name = str_field(cb, "name");
+                        tool_blocks.insert(idx, (format!("{id}:{name}"), String::new()));
+                    }
+                }
+                "content_block_delta" => {
+                    saw_content_delta = true;
+                    let idx = data.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                    let delta = &data["delta"];
+                    match delta.get("type").and_then(Value::as_str) {
+                        Some("text_delta") => {
+                            if let Some(t) = delta.get("text").and_then(Value::as_str) {
+                                accumulated_bytes += t.len();
+                                if accumulated_bytes > MAX_LLM_RESPONSE_BYTES {
+                                    return Err(AgentError::Llm(format!(
+                                        "streaming response exceeded {MAX_LLM_RESPONSE_BYTES} bytes"
+                                    )));
+                                }
+                                text.push_str(t);
+                                emitter.emit_chunk(t).await;
+                            }
+                        }
+                        Some("input_json_delta") => {
+                            if let Some(partial) = delta.get("partial_json").and_then(Value::as_str)
+                            {
+                                accumulated_bytes += partial.len();
+                                if accumulated_bytes > MAX_LLM_RESPONSE_BYTES {
+                                    return Err(AgentError::Llm(format!(
+                                        "streaming response exceeded {MAX_LLM_RESPONSE_BYTES} bytes"
+                                    )));
+                                }
+                                if let Some(entry) = tool_blocks.get_mut(&idx) {
+                                    entry.1.push_str(partial);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                "message_start" => {
+                    if let Some(usage) = data.get("message").and_then(|m| m.get("usage")) {
+                        input_tokens = anthropic_usage_sum(usage);
+                    }
+                }
+                "message_delta" => {
+                    if let Some(sr) = data["delta"].get("stop_reason").and_then(Value::as_str) {
+                        stop = map_stop(Some(sr));
+                    }
+                    if let Some(usage) = data.get("usage") {
+                        if let Some(t) = anthropic_usage_sum(usage) {
+                            input_tokens = Some(t);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut tool_calls = Vec::new();
+        let mut indices: Vec<usize> = tool_blocks.keys().copied().collect();
+        indices.sort_unstable();
+        for idx in indices {
+            let (id_name, args_str) = tool_blocks.remove(&idx).unwrap();
+            let (provider_id, name) = id_name
+                .split_once(':')
+                .map(|(a, b)| (a.to_owned(), b.to_owned()))
+                .unwrap_or((String::new(), id_name));
+            let arguments: Value =
+                serde_json::from_str(&args_str).unwrap_or(Value::Object(Default::default()));
+            tool_calls.push(make_tool_call(provider_id, name, arguments)?);
+        }
+
+        if !tool_calls.is_empty() && stop == ProviderStop::Other {
+            stop = ProviderStop::ToolUse;
+        }
+        if tool_calls.is_empty() && stop == ProviderStop::Other {
+            stop = ProviderStop::EndTurn;
+        }
+
+        Ok(LlmResponse {
+            text,
+            tool_calls,
+            stop,
+            input_tokens,
+        })
+    }
+
+    async fn openai_stream_request(
+        &self,
+        cfg: &Config,
+        system_prompt: &str,
+        history: &[HistoryItem],
+        tools: &[ToolDef],
+        emitter: &StreamEmitter,
+    ) -> Result<LlmResponse, AgentError> {
+        let use_responses = self.auto_upgraded.load(Ordering::Relaxed)
+            || matches!(cfg.openai_api, OpenAiApi::Responses)
+            || (matches!(cfg.openai_api, OpenAiApi::Auto) && is_openai_host(&cfg.base_url));
+
+        if use_responses {
+            let mut body = responses_body(cfg, system_prompt, history, tools);
+            body["stream"] = json!(true);
+            let resp = self.send_openai_stream(cfg, "/responses", &body).await?;
+            return self.consume_sse_responses(resp, emitter).await;
+        }
+
+        let mut body = openai_body(cfg, system_prompt, history, tools);
+        body["stream"] = json!(true);
+        match self
+            .send_openai_stream(cfg, "/chat/completions", &body)
+            .await
+        {
+            Ok(resp) => self.consume_sse_openai_chat(resp, emitter).await,
+            Err(e) if cfg.openai_api == OpenAiApi::Auto && self.try_upgrade(&e) => {
+                let mut body = responses_body(cfg, system_prompt, history, tools);
+                body["stream"] = json!(true);
+                let resp = self.send_openai_stream(cfg, "/responses", &body).await?;
+                self.consume_sse_responses(resp, emitter).await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn send_openai_stream(
+        &self,
+        cfg: &Config,
+        path: &str,
+        body: &Value,
+    ) -> Result<reqwest::Response, AgentError> {
+        let bearer = self.auth.bearer().await?;
+        let (url, body_owned);
+        let body_ref: &Value = match cfg.provider {
+            Provider::Databricks => {
+                url = format!(
+                    "{}/serving-endpoints/{}/invocations",
+                    cfg.base_url.trim_end_matches('/'),
+                    cfg.model
+                );
+                body_owned = strip_model(body);
+                &body_owned
+            }
+            _ => {
+                url = format!("{}{}", cfg.base_url.trim_end_matches('/'), path);
+                body
+            }
+        };
+        let body_bytes =
+            serde_json::to_vec(body_ref).map_err(|e| AgentError::Llm(format!("serialize: {e}")))?;
+        let resp = self
+            .http_stream
+            .post(&url)
+            .header("content-type", "application/json")
+            .bearer_auth(&bearer)
+            .body(body_bytes)
+            .send()
+            .await
+            .map_err(|e| AgentError::Llm(format!("transport: {e}")))?;
+        let status = resp.status();
+        if status == 401 || status == 403 {
+            return Err(AgentError::LlmAuth(read_error_body(resp).await));
+        }
+        if !status.is_success() {
+            return Err(AgentError::Llm(format!(
+                "{status}: {}",
+                read_error_body(resp).await
+            )));
+        }
+        Ok(resp)
+    }
+
+    async fn consume_sse_openai_chat(
+        &self,
+        resp: reqwest::Response,
+        emitter: &StreamEmitter,
+    ) -> Result<LlmResponse, AgentError> {
+        let mut text = String::new();
+        let mut tool_calls_acc: Vec<(String, String, String)> = Vec::new();
+        let mut stop = ProviderStop::Other;
+        let mut input_tokens: Option<u64> = None;
+        let mut saw_content_delta = false;
+        let mut accumulated_bytes: usize = 0;
+
+        let mut sse_reader = SseReader::new(resp);
+        loop {
+            let timeout = if saw_content_delta {
+                self.stream_chunk_timeout
+            } else {
+                self.first_byte_timeout
+            };
+            let event = match tokio::time::timeout(timeout, sse_reader.next_event()).await {
+                Ok(Ok(Some(ev))) => ev,
+                Ok(Ok(None)) => break,
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    return Err(AgentError::Llm(format!(
+                        "stream stalled: no SSE event within {}s",
+                        timeout.as_secs()
+                    )));
+                }
+            };
+            if event == "[DONE]" {
+                break;
+            }
+            let data: Value = match serde_json::from_str(&event) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if let Some(usage) = data.get("usage") {
+                if let Some(pt) = usage.get("prompt_tokens").and_then(Value::as_u64) {
+                    let mut total = pt;
+                    for f in ["cache_read_input_tokens", "cache_creation_input_tokens"] {
+                        if let Some(n) = usage.get(f).and_then(Value::as_u64) {
+                            total = total.saturating_add(n);
+                        }
+                    }
+                    input_tokens = Some(total);
+                }
+            }
+            let choice = match data
+                .get("choices")
+                .and_then(Value::as_array)
+                .and_then(|a| a.first())
+            {
+                Some(c) => c,
+                None => continue,
+            };
+            if let Some(fr) = choice.get("finish_reason").and_then(Value::as_str) {
+                stop = map_stop(Some(fr));
+            }
+            let delta = &choice["delta"];
+            if let Some(t) = delta.get("content").and_then(Value::as_str) {
+                if !t.is_empty() {
+                    saw_content_delta = true;
+                    accumulated_bytes += t.len();
+                    if accumulated_bytes > MAX_LLM_RESPONSE_BYTES {
+                        return Err(AgentError::Llm(format!(
+                            "streaming response exceeded {MAX_LLM_RESPONSE_BYTES} bytes"
+                        )));
+                    }
+                    text.push_str(t);
+                    emitter.emit_chunk(t).await;
+                }
+            }
+            if let Some(tcs) = delta.get("tool_calls").and_then(Value::as_array) {
+                saw_content_delta = true;
+                for tc in tcs {
+                    let idx = tc.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                    while tool_calls_acc.len() <= idx {
+                        tool_calls_acc.push((String::new(), String::new(), String::new()));
+                    }
+                    if let Some(id) = tc.get("id").and_then(Value::as_str) {
+                        tool_calls_acc[idx].0 = id.to_owned();
+                    }
+                    if let Some(f) = tc.get("function") {
+                        if let Some(name) = f.get("name").and_then(Value::as_str) {
+                            tool_calls_acc[idx].1 = name.to_owned();
+                        }
+                        if let Some(args) = f.get("arguments").and_then(Value::as_str) {
+                            accumulated_bytes += args.len();
+                            if accumulated_bytes > MAX_LLM_RESPONSE_BYTES {
+                                return Err(AgentError::Llm(format!(
+                                    "streaming response exceeded {MAX_LLM_RESPONSE_BYTES} bytes"
+                                )));
+                            }
+                            tool_calls_acc[idx].2.push_str(args);
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut tool_calls = Vec::new();
+        for (id, name, args_str) in tool_calls_acc {
+            if id.is_empty() && name.is_empty() {
+                continue;
+            }
+            let arguments: Value =
+                serde_json::from_str(&args_str).unwrap_or(Value::Object(Default::default()));
+            tool_calls.push(make_tool_call(id, name, arguments)?);
+        }
+
+        Ok(LlmResponse {
+            text,
+            tool_calls,
+            stop,
+            input_tokens,
+        })
+    }
+
+    async fn consume_sse_responses(
+        &self,
+        resp: reqwest::Response,
+        emitter: &StreamEmitter,
+    ) -> Result<LlmResponse, AgentError> {
+        let mut text = String::new();
+        let mut tool_calls_map: HashMap<String, (String, String)> = HashMap::new();
+        let mut stop = ProviderStop::Other;
+        let mut input_tokens: Option<u64> = None;
+        let mut saw_content_delta = false;
+        let mut saw_function_call = false;
+        let mut accumulated_bytes: usize = 0;
+
+        let mut sse_reader = SseReader::new(resp);
+        loop {
+            let timeout = if saw_content_delta {
+                self.stream_chunk_timeout
+            } else {
+                self.first_byte_timeout
+            };
+            let event = match tokio::time::timeout(timeout, sse_reader.next_event()).await {
+                Ok(Ok(Some(ev))) => ev,
+                Ok(Ok(None)) => break,
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    return Err(AgentError::Llm(format!(
+                        "stream stalled: no SSE event within {}s",
+                        timeout.as_secs()
+                    )));
+                }
+            };
+            let data: Value = match serde_json::from_str(&event) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let event_type = data.get("type").and_then(Value::as_str).unwrap_or("");
+            match event_type {
+                "response.output_text.delta" => {
+                    saw_content_delta = true;
+                    if let Some(t) = data.get("delta").and_then(Value::as_str) {
+                        accumulated_bytes += t.len();
+                        if accumulated_bytes > MAX_LLM_RESPONSE_BYTES {
+                            return Err(AgentError::Llm(format!(
+                                "streaming response exceeded {MAX_LLM_RESPONSE_BYTES} bytes"
+                            )));
+                        }
+                        text.push_str(t);
+                        emitter.emit_chunk(t).await;
+                    }
+                }
+                "response.function_call_arguments.delta" => {
+                    saw_content_delta = true;
+                    saw_function_call = true;
+                    let call_id = str_field(&data, "call_id");
+                    if let Some(d) = data.get("delta").and_then(Value::as_str) {
+                        accumulated_bytes += d.len();
+                        if accumulated_bytes > MAX_LLM_RESPONSE_BYTES {
+                            return Err(AgentError::Llm(format!(
+                                "streaming response exceeded {MAX_LLM_RESPONSE_BYTES} bytes"
+                            )));
+                        }
+                        tool_calls_map
+                            .entry(call_id)
+                            .or_insert_with(|| (String::new(), String::new()))
+                            .1
+                            .push_str(d);
+                    }
+                }
+                "response.output_item.added"
+                    if data
+                        .get("item")
+                        .and_then(|i| i.get("type"))
+                        .and_then(Value::as_str)
+                        == Some("function_call") =>
+                {
+                    saw_function_call = true;
+                    let call_id = str_field(&data["item"], "call_id");
+                    let name = str_field(&data["item"], "name");
+                    if !call_id.is_empty() {
+                        tool_calls_map
+                            .entry(call_id)
+                            .or_insert_with(|| (name, String::new()));
+                    }
+                }
+                "response.completed" => {
+                    if let Some(response) = data.get("response") {
+                        match response.get("status").and_then(Value::as_str) {
+                            Some("incomplete") => {
+                                let reason = response
+                                    .get("incomplete_details")
+                                    .and_then(|d| d.get("reason"))
+                                    .and_then(Value::as_str);
+                                stop = if reason == Some("max_output_tokens") {
+                                    ProviderStop::MaxTokens
+                                } else {
+                                    ProviderStop::Other
+                                };
+                            }
+                            Some("completed") if saw_function_call => {
+                                stop = ProviderStop::ToolUse;
+                            }
+                            Some("completed") => {
+                                stop = ProviderStop::EndTurn;
+                            }
+                            _ => {}
+                        }
+                        if let Some(usage) = response.get("usage") {
+                            if let Some(it) = usage.get("input_tokens").and_then(Value::as_u64) {
+                                input_tokens = Some(it);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut tool_calls = Vec::new();
+        for (call_id, (name, args_str)) in tool_calls_map {
+            let arguments: Value =
+                serde_json::from_str(&args_str).unwrap_or(Value::Object(Default::default()));
+            tool_calls.push(make_tool_call(call_id, name, arguments)?);
+        }
+
+        Ok(LlmResponse {
+            text,
+            tool_calls,
+            stop,
+            input_tokens,
+        })
+    }
+}
+
+// ── Stream Emitter ──────────────────────────────────────────────────────────
+
+pub struct StreamEmitter {
+    wire: WireSender,
+    session_id: String,
+}
+
+impl StreamEmitter {
+    pub fn new(wire: WireSender, session_id: String) -> Self {
+        Self { wire, session_id }
+    }
+
+    async fn emit_chunk(&self, text: &str) {
+        wire::send(
+            &self.wire,
+            wire::session_update(
+                &self.session_id,
+                json!({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": { "type": "text", "text": text }
+                }),
+            ),
+        )
+        .await;
+    }
+
+    #[cfg(test)]
+    pub fn noop() -> Self {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        Self {
+            wire: tx,
+            session_id: String::new(),
+        }
+    }
+}
+
+// ── SSE Parser ──────────────────────────────────────────────────────────────
+
+struct SseReader {
+    resp: reqwest::Response,
+    buf: String,
+}
+
+impl SseReader {
+    fn new(resp: reqwest::Response) -> Self {
+        Self {
+            resp,
+            buf: String::new(),
+        }
+    }
+
+    async fn next_event(&mut self) -> Result<Option<String>, AgentError> {
+        loop {
+            if let Some(pos) = self.buf.find("\n\n") {
+                let event_block = self.buf[..pos].to_owned();
+                self.buf.drain(..pos + 2);
+                if let Some(d) = Self::extract_data(&event_block) {
+                    return Ok(Some(d));
+                }
+                continue;
+            }
+            match self.resp.chunk().await {
+                Ok(Some(chunk)) => {
+                    self.buf.push_str(&String::from_utf8_lossy(&chunk));
+                }
+                Ok(None) => {
+                    if !self.buf.trim().is_empty() {
+                        let event_block = std::mem::take(&mut self.buf);
+                        if let Some(d) = Self::extract_data(&event_block) {
+                            return Ok(Some(d));
+                        }
+                    }
+                    return Ok(None);
+                }
+                Err(e) => return Err(AgentError::Llm(format!("stream read: {e}"))),
+            }
+        }
+    }
+
+    fn extract_data(block: &str) -> Option<String> {
+        let mut data_parts: Vec<&str> = Vec::new();
+        for line in block.lines() {
+            if line.is_empty() {
+                continue;
+            }
+            if line.starts_with(':') {
+                continue;
+            }
+            if let Some(value) = line.strip_prefix("data:") {
+                data_parts.push(value.strip_prefix(' ').unwrap_or(value));
+            }
+        }
+        if data_parts.is_empty() {
+            None
+        } else {
+            Some(data_parts.join("\n"))
+        }
+    }
+}
+
+fn anthropic_usage_sum(usage: &Value) -> Option<u64> {
+    let mut total = 0u64;
+    let mut saw = false;
+    for f in [
+        "input_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+    ] {
+        if let Some(n) = usage.get(f).and_then(Value::as_u64) {
+            total = total.saturating_add(n);
+            saw = true;
+        }
+    }
+    if saw {
+        Some(total)
+    } else {
+        None
     }
 }
 
@@ -769,10 +1445,20 @@ async fn backoff_with_jitter(attempt: u32) {
 /// Body-serialization happens before the retry loop, so `is_request()` here
 /// is always a network failure, never a malformed request we'd just resend.
 fn is_retryable_transport_error(e: &reqwest::Error) -> bool {
-    e.is_timeout() || e.is_connect() || e.is_request()
+    // `is_decode` covers mid-body read failures: reqwest's `chunk()` wraps a
+    // reset/truncated response body as a decode error, which is a transient
+    // transport fault and safe to resend. JSON-parse failures take a separate
+    // path (`serde_json` on the fully-buffered body), so they never reach here.
+    e.is_timeout() || e.is_connect() || e.is_request() || e.is_decode()
 }
 
-async fn post<F>(http: &Client, url: &str, body: &Value, apply: F) -> Result<Value, AgentError>
+async fn post<F>(
+    http: &Client,
+    url: &str,
+    body: &Value,
+    chunk_timeout: std::time::Duration,
+    apply: F,
+) -> Result<Value, AgentError>
 where
     F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
 {
@@ -832,7 +1518,32 @@ where
         let mut buf: Vec<u8> = Vec::new();
         let mut stream = resp;
         loop {
-            match stream.chunk().await {
+            // Per-chunk deadline: a stall between body chunks means the
+            // provider connection went silent mid-response. Bounding each
+            // poll (instead of the whole request) lets a slow-but-progressing
+            // completion run arbitrarily long while still tearing down a
+            // dead connection. A stall is transport-class, so retry the whole
+            // request when attempts remain, then surface a clear error.
+            let next = match tokio::time::timeout(chunk_timeout, stream.chunk()).await {
+                Ok(r) => r,
+                Err(_) => {
+                    if attempt + 1 < MAX_RETRIES {
+                        tracing::warn!(
+                            attempt = attempt + 1,
+                            max_attempts = MAX_RETRIES,
+                            timeout_secs = chunk_timeout.as_secs(),
+                            "llm: response body stalled between chunks, retrying"
+                        );
+                        backoff_with_jitter(attempt).await;
+                        break;
+                    }
+                    return Err(AgentError::Llm(format!(
+                        "response body stalled: no chunk within {}s",
+                        chunk_timeout.as_secs()
+                    )));
+                }
+            };
+            match next {
                 Ok(Some(chunk)) => {
                     if buf.len() + chunk.len() > MAX_LLM_RESPONSE_BYTES {
                         return Err(AgentError::Llm(format!(
@@ -841,11 +1552,30 @@ where
                     }
                     buf.extend_from_slice(&chunk);
                 }
-                Ok(None) => break,
-                Err(e) => return Err(AgentError::Llm(format!("read: {e}"))),
+                Ok(None) => {
+                    return serde_json::from_slice(&buf)
+                        .map_err(|e| AgentError::Llm(format!("json: {e}")));
+                }
+                Err(e) => {
+                    // A read error mid-body (connection reset, broken pipe,
+                    // TLS failure) is transport-class, same as a stall. With
+                    // the total request timeout gone this is the main body-read
+                    // failure, so retry the whole request when attempts remain
+                    // and the error is transient, mirroring the stall arm.
+                    if attempt + 1 < MAX_RETRIES && is_retryable_transport_error(&e) {
+                        tracing::warn!(
+                            attempt = attempt + 1,
+                            max_attempts = MAX_RETRIES,
+                            error = %e,
+                            "llm: response body read error, retrying"
+                        );
+                        backoff_with_jitter(attempt).await;
+                        break;
+                    }
+                    return Err(AgentError::Llm(format!("read: {e}")));
+                }
             }
         }
-        return serde_json::from_slice(&buf).map_err(|e| AgentError::Llm(format!("json: {e}")));
     }
     Err(AgentError::Llm("exhausted retries".into()))
 }
@@ -916,6 +1646,8 @@ mod tests {
             max_rounds: 10,
             max_output_tokens: 1024,
             llm_timeout: Duration::from_secs(10),
+            llm_stream_chunk_timeout: Duration::from_secs(120),
+            stream_chunk_timeout: Duration::from_secs(30),
             tool_timeout: Duration::from_secs(10),
             mcp_init_timeout: Duration::from_secs(10),
             mcp_max_restart_attempts: 1,
@@ -1342,9 +2074,212 @@ mod tests {
             .timeout(Duration::from_secs(5))
             .build()
             .unwrap();
-        let out = post(&client, &url, &serde_json::json!({}), |b| b)
+        let out = post(
+            &client,
+            &url,
+            &serde_json::json!({}),
+            Duration::from_secs(5),
+            |b| b,
+        )
+        .await
+        .expect("post should succeed after retry");
+        assert_eq!(out, serde_json::json!({ "ok": true }));
+        assert!(
+            accepts.load(Ordering::SeqCst) >= 2,
+            "server should have seen at least 2 connection attempts, saw {}",
+            accepts.load(Ordering::SeqCst)
+        );
+    }
+
+    /// A response that stops sending chunks mid-body (stalls longer than the
+    /// chunk timeout) should be retried and eventually surface a clear error
+    /// if all retries exhaust.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn post_times_out_on_stalled_response_body() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/x", listener.local_addr().unwrap());
+        let accepts = Arc::new(AtomicU32::new(0));
+        let accepts_srv = accepts.clone();
+
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+                accepts_srv.fetch_add(1, Ordering::SeqCst);
+                // Handle each connection in its own task so a stalled
+                // response never blocks accepting the next retry.
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut tmp = [0u8; 4096];
+                    while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match sock.read(&mut tmp).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(k) => buf.extend_from_slice(&tmp[..k]),
+                        }
+                    }
+                    // Send headers with chunked encoding, write one chunk, then stall.
+                    let headers = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                                   Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+                    let _ = sock.write_all(headers.as_bytes()).await;
+                    // Send a partial chunk then go silent.
+                    let _ = sock.write_all(b"4\r\n{\"ok\r\n").await;
+                    let _ = sock.flush().await;
+                    // Hold the connection open but never send more data. Just
+                    // longer than the chunk timeout so the client's per-chunk
+                    // deadline fires; no need to outlast the whole retry budget.
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                });
+            }
+        });
+
+        // Disable idle-connection reuse so each retry opens a fresh socket
+        // instead of waiting on the stalled one still draining in the pool.
+        let client = Client::builder().pool_max_idle_per_host(0).build().unwrap();
+        // Very short chunk timeout so the test runs fast.
+        let chunk_timeout = Duration::from_millis(100);
+        let err = post(&client, &url, &serde_json::json!({}), chunk_timeout, |b| b)
             .await
-            .expect("post should succeed after retry");
+            .unwrap_err();
+        // Should surface a stall error after exhausting retries.
+        match err {
+            AgentError::Llm(msg) => {
+                assert!(msg.contains("stalled"), "expected stall error, got: {msg}")
+            }
+            other => panic!("expected AgentError::Llm, got: {other:?}"),
+        }
+        // All retry attempts should have been used.
+        assert_eq!(
+            accepts.load(Ordering::SeqCst),
+            MAX_RETRIES,
+            "should have attempted all retries"
+        );
+    }
+
+    /// A slow-but-progressing response (chunks arrive within the timeout)
+    /// should succeed regardless of total elapsed time.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn post_succeeds_with_slow_but_progressing_response() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/x", listener.local_addr().unwrap());
+
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = Vec::new();
+            let mut tmp = [0u8; 4096];
+            while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                match sock.read(&mut tmp).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(k) => buf.extend_from_slice(&tmp[..k]),
+                }
+            }
+            // Chunked response: send the JSON body in small pieces with delays
+            // that are within the chunk timeout.
+            let headers = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                           Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+            let _ = sock.write_all(headers.as_bytes()).await;
+            // Split `{"ok":true}` across multiple chunks with delays.
+            for piece in ["{\"ok\"", ":tru", "e}"] {
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                let chunk = format!("{:x}\r\n{}\r\n", piece.len(), piece);
+                let _ = sock.write_all(chunk.as_bytes()).await;
+                let _ = sock.flush().await;
+            }
+            // Terminating chunk.
+            let _ = sock.write_all(b"0\r\n\r\n").await;
+            let _ = sock.shutdown().await;
+        });
+
+        let client = Client::builder().build().unwrap();
+        // Chunk timeout is longer than the inter-chunk delay, so this should succeed.
+        let chunk_timeout = Duration::from_millis(200);
+        let out = post(&client, &url, &serde_json::json!({}), chunk_timeout, |b| b)
+            .await
+            .expect("slow-but-progressing response should succeed");
+        assert_eq!(out, serde_json::json!({ "ok": true }));
+    }
+
+    /// A connection that delivers partial body bytes then is reset mid-body
+    /// (before the terminating chunk) surfaces as a transport read error on
+    /// `chunk().await`. That error is transient and must retry like a stall:
+    /// the next attempt serves a complete body and the call succeeds.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn post_retries_on_read_error_mid_body() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/x", listener.local_addr().unwrap());
+        let accepts = Arc::new(AtomicU32::new(0));
+        let accepts_srv = accepts.clone();
+
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+                let n = accepts_srv.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut tmp = [0u8; 4096];
+                    while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match sock.read(&mut tmp).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(k) => buf.extend_from_slice(&tmp[..k]),
+                        }
+                    }
+                    if n == 0 {
+                        // First attempt: send chunked headers and a partial
+                        // chunk, then drop the socket without the terminating
+                        // chunk. The truncated chunked body makes reqwest's
+                        // `chunk()` return a transport read error.
+                        let headers = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                             Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+                        let _ = sock.write_all(headers.as_bytes()).await;
+                        let _ = sock.write_all(b"4\r\n{\"ok\r\n").await;
+                        let _ = sock.flush().await;
+                        drop(sock);
+                        return;
+                    }
+                    // Subsequent attempts: serve a complete body.
+                    let body = "{\"ok\":true}";
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body,
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+
+        // Fresh socket per retry so the reset connection isn't reused.
+        let client = Client::builder().pool_max_idle_per_host(0).build().unwrap();
+        // Generous chunk timeout: this test exercises the read-error arm, not
+        // the stall arm — the failure must come from the reset, not a timeout.
+        let out = post(
+            &client,
+            &url,
+            &serde_json::json!({}),
+            Duration::from_secs(5),
+            |b| b,
+        )
+        .await
+        .expect("post should succeed after retrying the read error");
         assert_eq!(out, serde_json::json!({ "ok": true }));
         assert!(
             accepts.load(Ordering::SeqCst) >= 2,
@@ -1459,5 +2394,283 @@ mod tests {
         // is "no usable reading" -> None, not Some(0).
         let v = serde_json::json!({"usage": {"output_tokens": 5}});
         assert_eq!(sum_usage(&v, &["input_tokens", "prompt_tokens"]), None);
+    }
+
+    // ── SSE Parser Tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn sse_extract_data_basic() {
+        let block = "data: {\"hello\":\"world\"}";
+        assert_eq!(
+            SseReader::extract_data(block),
+            Some("{\"hello\":\"world\"}".to_owned())
+        );
+    }
+
+    #[test]
+    fn sse_extract_data_discards_comments() {
+        let block = ": this is a comment\ndata: payload";
+        assert_eq!(SseReader::extract_data(block), Some("payload".to_owned()));
+    }
+
+    #[test]
+    fn sse_extract_data_multiline() {
+        let block = "data: line1\ndata: line2";
+        assert_eq!(
+            SseReader::extract_data(block),
+            Some("line1\nline2".to_owned())
+        );
+    }
+
+    #[test]
+    fn sse_extract_data_ignores_event_id_retry() {
+        let block = "event: message\nid: 123\nretry: 5000\ndata: actual";
+        assert_eq!(SseReader::extract_data(block), Some("actual".to_owned()));
+    }
+
+    #[test]
+    fn sse_extract_data_empty_block() {
+        assert_eq!(SseReader::extract_data(""), None);
+        assert_eq!(SseReader::extract_data(": only a comment"), None);
+    }
+
+    #[test]
+    fn sse_extract_data_no_space_after_colon() {
+        // SSE spec: if no space after "data:", the value starts immediately
+        let block = "data:no-space";
+        assert_eq!(SseReader::extract_data(block), Some("no-space".to_owned()));
+    }
+
+    /// Helper: spin up a one-shot HTTP server that returns the given body as
+    /// `text/event-stream`, then send a GET request to it and return the
+    /// `reqwest::Response` for the streaming consumer under test.
+    async fn sse_response(body: String) -> reqwest::Response {
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            // Drain the request
+            loop {
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                if buf[..n].windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{}",
+                body
+            );
+            let _ = sock.write_all(resp.as_bytes()).await;
+            let _ = sock.shutdown().await;
+        });
+        reqwest::get(format!("http://{addr}")).await.unwrap()
+    }
+
+    use tokio::io::AsyncReadExt;
+
+    #[tokio::test]
+    async fn sse_reader_parses_stream() {
+        let body = "data: {\"type\":\"first\"}\n\n: comment\n\ndata: {\"type\":\"second\"}\n\n";
+        let resp = sse_response(body.to_owned()).await;
+        let mut reader = SseReader::new(resp);
+
+        let ev1 = reader.next_event().await.unwrap().unwrap();
+        assert_eq!(ev1, "{\"type\":\"first\"}");
+
+        let ev2 = reader.next_event().await.unwrap().unwrap();
+        assert_eq!(ev2, "{\"type\":\"second\"}");
+
+        let ev3 = reader.next_event().await.unwrap();
+        assert!(ev3.is_none());
+    }
+
+    #[tokio::test]
+    async fn anthropic_stream_text_and_tool() {
+        let events = vec![
+            json!({"type":"message_start","message":{"usage":{"input_tokens":50}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"get_weather"}}),
+            json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"loc"}}),
+            json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"ation\":\"NYC\"}"}}),
+            json!({"type":"content_block_stop","index":1}),
+            json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":30}}),
+        ];
+        let mut sse_body = String::new();
+        for ev in &events {
+            sse_body.push_str(&format!("data: {}\n\n", ev));
+        }
+
+        let resp = sse_response(sse_body).await;
+        let emitter = StreamEmitter::noop();
+        let cfg = cfg(Provider::Anthropic);
+        let llm = Llm::new(&cfg).unwrap();
+        let result = llm.consume_sse_anthropic(resp, &emitter).await.unwrap();
+
+        assert_eq!(result.text, "Hello world");
+        assert_eq!(result.tool_calls.len(), 1);
+        assert_eq!(result.tool_calls[0].name, "get_weather");
+        assert_eq!(result.tool_calls[0].arguments, json!({"location": "NYC"}));
+        assert_eq!(result.stop, ProviderStop::ToolUse);
+        assert_eq!(result.input_tokens, Some(50));
+    }
+
+    #[tokio::test]
+    async fn openai_chat_stream_text() {
+        let events = vec![
+            json!({"choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}),
+            json!({"choices":[{"index":0,"delta":{"content":" there"},"finish_reason":null}]}),
+            json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":15}}),
+        ];
+        let mut sse_body = String::new();
+        for ev in &events {
+            sse_body.push_str(&format!("data: {}\n\n", ev));
+        }
+        sse_body.push_str("data: [DONE]\n\n");
+
+        let resp = sse_response(sse_body).await;
+        let emitter = StreamEmitter::noop();
+        let cfg = cfg(Provider::OpenAi);
+        let llm = Llm::new(&cfg).unwrap();
+        let result = llm.consume_sse_openai_chat(resp, &emitter).await.unwrap();
+
+        assert_eq!(result.text, "Hi there");
+        assert!(result.tool_calls.is_empty());
+        assert_eq!(result.stop, ProviderStop::EndTurn);
+        assert_eq!(result.input_tokens, Some(15));
+    }
+
+    #[tokio::test]
+    async fn openai_chat_stream_tool_calls() {
+        let events = vec![
+            json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_file","arguments":""}}]},"finish_reason":null}]}),
+            json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":"}}]},"finish_reason":null}]}),
+            json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"foo.rs\"}"}}]},"finish_reason":null}]}),
+            json!({"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":20}}),
+        ];
+        let mut sse_body = String::new();
+        for ev in &events {
+            sse_body.push_str(&format!("data: {}\n\n", ev));
+        }
+        sse_body.push_str("data: [DONE]\n\n");
+
+        let resp = sse_response(sse_body).await;
+        let emitter = StreamEmitter::noop();
+        let cfg = cfg(Provider::OpenAi);
+        let llm = Llm::new(&cfg).unwrap();
+        let result = llm.consume_sse_openai_chat(resp, &emitter).await.unwrap();
+
+        assert!(result.text.is_empty());
+        assert_eq!(result.tool_calls.len(), 1);
+        assert_eq!(result.tool_calls[0].name, "read_file");
+        assert_eq!(result.tool_calls[0].arguments, json!({"path": "foo.rs"}));
+        assert_eq!(result.stop, ProviderStop::ToolUse);
+    }
+
+    #[tokio::test]
+    async fn responses_stream_text_and_function() {
+        let events = vec![
+            json!({"type":"response.output_item.added","item":{"type":"function_call","call_id":"fc_1","name":"search"}}),
+            json!({"type":"response.function_call_arguments.delta","call_id":"fc_1","delta":"{\"q\":"}),
+            json!({"type":"response.function_call_arguments.delta","call_id":"fc_1","delta":"\"rust\"}"}),
+            json!({"type":"response.output_text.delta","delta":"Found results"}),
+            json!({"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":42}}}),
+        ];
+        let mut sse_body = String::new();
+        for ev in &events {
+            sse_body.push_str(&format!("data: {}\n\n", ev));
+        }
+
+        let resp = sse_response(sse_body).await;
+        let emitter = StreamEmitter::noop();
+        let cfg = cfg(Provider::OpenAi);
+        let llm = Llm::new(&cfg).unwrap();
+        let result = llm.consume_sse_responses(resp, &emitter).await.unwrap();
+
+        assert_eq!(result.text, "Found results");
+        assert_eq!(result.tool_calls.len(), 1);
+        assert_eq!(result.tool_calls[0].name, "search");
+        assert_eq!(result.tool_calls[0].arguments, json!({"q": "rust"}));
+        assert_eq!(result.stop, ProviderStop::ToolUse);
+        assert_eq!(result.input_tokens, Some(42));
+    }
+
+    #[tokio::test]
+    async fn stream_enforces_max_bytes() {
+        // Send multiple chunks that together exceed MAX_LLM_RESPONSE_BYTES.
+        // Each chunk is small enough to fit in TCP buffers, but accumulated
+        // semantic content crosses the limit.
+        let chunk_size = 1024 * 1024; // 1MB per chunk
+        let num_chunks = (MAX_LLM_RESPONSE_BYTES / chunk_size) + 2;
+        let chunk_text = "x".repeat(chunk_size);
+
+        let mut sse_body = String::new();
+        for _ in 0..num_chunks {
+            let ev = json!({"choices":[{"index":0,"delta":{"content": chunk_text},"finish_reason":null}]});
+            sse_body.push_str(&format!("data: {}\n\n", ev));
+        }
+        sse_body.push_str("data: [DONE]\n\n");
+
+        // Use a streaming server that sends chunks incrementally
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener as TcpL;
+
+        let listener = TcpL::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            loop {
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                if buf[..n].windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let header =
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+            let _ = sock.write_all(header.as_bytes()).await;
+            // Write body in small pieces so TCP buffers don't block
+            let body_bytes = sse_body.as_bytes();
+            for chunk in body_bytes.chunks(64 * 1024) {
+                if sock.write_all(chunk).await.is_err() {
+                    break;
+                }
+            }
+            let _ = sock.shutdown().await;
+        });
+
+        let resp = reqwest::get(format!("http://{addr}")).await.unwrap();
+        let emitter = StreamEmitter::noop();
+        let cfg = cfg(Provider::OpenAi);
+        let llm = Llm::new(&cfg).unwrap();
+        let result = llm.consume_sse_openai_chat(resp, &emitter).await;
+
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("exceeded"), "error: {err_msg}");
+    }
+
+    #[tokio::test]
+    async fn stream_empty_body_completes_gracefully() {
+        let resp = sse_response(String::new()).await;
+        let emitter = StreamEmitter::noop();
+        let cfg = cfg(Provider::OpenAi);
+        let llm = Llm::new(&cfg).unwrap();
+
+        let result = llm.consume_sse_openai_chat(resp, &emitter).await.unwrap();
+        assert!(result.text.is_empty());
+        assert!(result.tool_calls.is_empty());
     }
 }

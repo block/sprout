@@ -48,6 +48,15 @@ pub struct Config {
     pub max_rounds: u32,
     pub max_output_tokens: u32,
     pub llm_timeout: Duration,
+    /// Maximum time to wait between consecutive response body chunks from the
+    /// LLM provider. If no data arrives within this window the request is
+    /// considered stalled and terminated. This does NOT cap total response
+    /// time — a stream that keeps producing chunks can run indefinitely.
+    pub llm_stream_chunk_timeout: Duration,
+    /// Inter-chunk timeout for SSE streaming after the first content delta
+    /// arrives. Tighter than `llm_stream_chunk_timeout` because SSE events
+    /// arrive frequently once content generation starts. Default 30s.
+    pub stream_chunk_timeout: Duration,
     pub tool_timeout: Duration,
     pub mcp_init_timeout: Duration,
     pub mcp_max_restart_attempts: u32,
@@ -152,6 +161,14 @@ impl Config {
             max_rounds: parse_env("SPROUT_AGENT_MAX_ROUNDS", 0)?,
             max_output_tokens: parse_env("SPROUT_AGENT_MAX_OUTPUT_TOKENS", 32_768)?,
             llm_timeout: Duration::from_secs(parse_env("SPROUT_AGENT_LLM_TIMEOUT_SECS", 120)?),
+            llm_stream_chunk_timeout: Duration::from_secs(parse_env(
+                "SPROUT_AGENT_LLM_STREAM_CHUNK_TIMEOUT_SECS",
+                120,
+            )?),
+            stream_chunk_timeout: Duration::from_secs(parse_env(
+                "SPROUT_AGENT_STREAM_CHUNK_TIMEOUT_SECS",
+                30,
+            )?),
             tool_timeout: Duration::from_secs(parse_env("SPROUT_AGENT_TOOL_TIMEOUT_SECS", 660)?),
             mcp_init_timeout: Duration::from_secs(parse_env(
                 "SPROUT_AGENT_MCP_INIT_TIMEOUT_SECS",
@@ -210,6 +227,12 @@ impl Config {
         }
         if self.llm_timeout < MIN_TIMEOUT {
             return Err("config: SPROUT_AGENT_LLM_TIMEOUT_SECS must be >= 1".into());
+        }
+        if self.llm_stream_chunk_timeout < MIN_TIMEOUT {
+            return Err("config: SPROUT_AGENT_LLM_STREAM_CHUNK_TIMEOUT_SECS must be >= 1".into());
+        }
+        if self.stream_chunk_timeout < MIN_TIMEOUT {
+            return Err("config: SPROUT_AGENT_STREAM_CHUNK_TIMEOUT_SECS must be >= 1".into());
         }
         if self.tool_timeout < MIN_TIMEOUT {
             return Err("config: SPROUT_AGENT_TOOL_TIMEOUT_SECS must be >= 1".into());

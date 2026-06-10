@@ -6,7 +6,7 @@ use tokio::task::JoinSet;
 
 use crate::config::{Config, MAX_PROMPT_BYTES, MAX_TOOL_CALLS_PER_TURN, MAX_TOOL_RESULT_BYTES};
 use crate::handoff::HandoffOutcome;
-use crate::llm::Llm;
+use crate::llm::{Llm, StreamEmitter};
 use crate::mcp::McpRegistry;
 
 use crate::types::{
@@ -91,14 +91,16 @@ impl RunCtx<'_> {
 
             let tools = self.mcp.tools();
             round = round.saturating_add(1);
+            let emitter = StreamEmitter::new(self.wire.clone(), self.session_id.to_owned());
             let response = tokio::select! {
                 biased;
                 _ = self.cancel.changed() => return Ok(StopReason::Cancelled),
-                r = self.llm.complete(self.cfg, self.system_prompt, self.history, &tools) => r?,
+                r = self.llm.complete_stream(self.cfg, self.system_prompt, self.history, &tools, &emitter) => r?,
                 _ = async {
-                    // Keepalive ticker: emit a lightweight session update every 30s
-                    // while waiting on the LLM provider. This resets the ACP harness
-                    // idle clock so long provider responses don't trigger timeout.
+                    // Keepalive ticker (fallback): fires every 30s while waiting on
+                    // the LLM. During active streaming, text-delta emissions already
+                    // reset the ACP idle clock — this only matters for reasoning
+                    // models that pause before producing content.
                     let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
                     interval.tick().await; // first tick fires immediately — skip it
                     loop {

@@ -32,6 +32,7 @@ async fn spawn_fake_llm(responses: Vec<Value>) -> String {
             tokio::spawn(async move {
                 let mut buf = Vec::new();
                 let mut tmp = [0u8; 4096];
+                // Read headers
                 while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
                     match sock.read(&mut tmp).await {
                         Ok(0) | Err(_) => return,
@@ -41,22 +42,132 @@ async fn spawn_fake_llm(responses: Vec<Value>) -> String {
                         return;
                     }
                 }
-                let body = queue
+                // Extract content-length and read body
+                let header_str = String::from_utf8_lossy(&buf).to_string();
+                let header_end = header_str.find("\r\n\r\n").unwrap_or(0) + 4;
+                let content_length = header_str
+                    .lines()
+                    .find_map(|l| {
+                        let lower = l.to_lowercase();
+                        if lower.starts_with("content-length:") {
+                            lower.split(':').nth(1)?.trim().parse::<usize>().ok()
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                let already_read = buf.len() - header_end;
+                let remaining = content_length.saturating_sub(already_read);
+                if remaining > 0 {
+                    let mut body_buf = vec![0u8; remaining];
+                    let mut read_so_far = 0;
+                    while read_so_far < remaining {
+                        match sock.read(&mut body_buf[read_so_far..]).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => read_so_far += n,
+                        }
+                    }
+                    buf.extend_from_slice(&body_buf[..read_so_far]);
+                }
+                let body_bytes = &buf[header_end..];
+                let is_stream = body_bytes.windows(13).any(|w| w == b"\"stream\":true");
+
+                let canned = queue
                     .lock()
                     .await
                     .pop_front()
                     .unwrap_or_else(|| json!({ "error": "no canned response" }));
-                let body_s = serde_json::to_string(&body).unwrap();
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body_s.len(), body_s,
-                );
-                let _ = sock.write_all(resp.as_bytes()).await;
+
+                if is_stream {
+                    // Convert canned response to SSE streaming format (OpenAI Chat)
+                    let events = openai_to_sse_events(&canned);
+                    let mut sse_body = String::new();
+                    for ev in &events {
+                        sse_body.push_str(&format!("data: {}\n\n", ev));
+                    }
+                    sse_body.push_str("data: [DONE]\n\n");
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{}",
+                        sse_body,
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                } else {
+                    let body_s = serde_json::to_string(&canned).unwrap();
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body_s.len(), body_s,
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                }
                 let _ = sock.shutdown().await;
             });
         }
     });
     url
+}
+
+/// Convert a canned OpenAI Chat Completions response into SSE delta events.
+fn openai_to_sse_events(response: &Value) -> Vec<String> {
+    let mut events = Vec::new();
+    let choice = &response["choices"][0];
+    let msg = &choice["message"];
+
+    // Text content
+    if let Some(content) = msg.get("content").and_then(Value::as_str) {
+        if !content.is_empty() {
+            events.push(
+                json!({
+                    "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": null}]
+                })
+                .to_string(),
+            );
+        }
+    }
+
+    // Tool calls
+    if let Some(tcs) = msg.get("tool_calls").and_then(Value::as_array) {
+        for (i, tc) in tcs.iter().enumerate() {
+            let id = tc.get("id").and_then(Value::as_str).unwrap_or("");
+            let name = tc["function"]
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let args = tc["function"]
+                .get("arguments")
+                .and_then(Value::as_str)
+                .unwrap_or("{}");
+            // First chunk: id + name
+            events.push(json!({
+                "choices": [{"index": 0, "delta": {
+                    "tool_calls": [{"index": i, "id": id, "function": {"name": name, "arguments": ""}}]
+                }, "finish_reason": null}]
+            }).to_string());
+            // Second chunk: arguments
+            events.push(
+                json!({
+                    "choices": [{"index": 0, "delta": {
+                        "tool_calls": [{"index": i, "function": {"arguments": args}}]
+                    }, "finish_reason": null}]
+                })
+                .to_string(),
+            );
+        }
+    }
+
+    // Final chunk with finish_reason
+    let finish = choice
+        .get("finish_reason")
+        .and_then(Value::as_str)
+        .unwrap_or("stop");
+    events.push(
+        json!({
+            "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5}
+        })
+        .to_string(),
+    );
+
+    events
 }
 
 // ─── ACP harness ────────────────────────────────────────────────────────────
@@ -258,11 +369,16 @@ async fn rejects_concurrent_prompts() {
             buf.extend_from_slice(&tmp[..n]);
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
-        let body = openai_text("done").to_string();
+        // Return SSE streaming response
+        let events = openai_to_sse_events(&openai_text("done"));
+        let mut sse_body = String::new();
+        for ev in &events {
+            sse_body.push_str(&format!("data: {}\n\n", ev));
+        }
+        sse_body.push_str("data: [DONE]\n\n");
         let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{}",
+            sse_body,
         );
         let _ = sock.write_all(resp.as_bytes()).await;
         let _ = sock.shutdown().await;
