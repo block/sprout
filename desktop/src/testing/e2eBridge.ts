@@ -44,6 +44,7 @@ type E2eConfig = {
     profileReadDelayMs?: number;
     profileReadError?: string;
     profileUpdateError?: string;
+    updateChannelDelayMs?: number;
     stallWebsocketSends?: boolean;
     // NIP-IA gate inputs — see tests/helpers/bridge.ts:MockBridgeOptions for
     // semantics. These three drive the archive-button gate matrix in
@@ -497,6 +498,10 @@ declare global {
   interface Window {
     __SPROUT_E2E__?: E2eConfig;
     __SPROUT_E2E_COMMANDS__?: string[];
+    __SPROUT_E2E_COMMAND_LOG__?: Array<{
+      command: string;
+      payload: unknown;
+    }>;
     __SPROUT_E2E_WEBVIEW_ZOOM__?: number;
     __SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
       channelName: string;
@@ -3196,6 +3201,11 @@ async function handleUpdateChannel(
   },
   config: E2eConfig | undefined,
 ) {
+  const delayMs = config?.mock?.updateChannelDelayMs ?? 0;
+  if (delayMs > 0) {
+    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+  }
+
   const identity = getIdentity(config);
   if (!identity) {
     const channel = getMockChannel(args.channelId);
@@ -5291,6 +5301,7 @@ export function maybeInstallE2eTauriMocks() {
   mockWebsocketSendMutexWedged = false;
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
+  window.__SPROUT_E2E_COMMAND_LOG__ = [];
   window.__SPROUT_E2E_SIGNED_EVENTS__ = [];
   window.__SPROUT_E2E_WEBVIEW_ZOOM__ = 1;
   window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__ = ({
@@ -5407,6 +5418,7 @@ export function maybeInstallE2eTauriMocks() {
     const activeConfig = getConfig();
     const identity = getActiveIdentity(activeConfig);
     window.__SPROUT_E2E_COMMANDS__?.push(command);
+    window.__SPROUT_E2E_COMMAND_LOG__?.push({ command, payload });
 
     switch (command) {
       case "mesh_availability":

@@ -79,11 +79,10 @@ pub fn channel_info_from_event(
                 "stream".to_string()
             }
         });
-    // Prefer explicit ["public"] tag; fall back to NIP-29's absence-of-"private"
-    // convention for relays that don't yet emit the explicit tag.
-    let visibility = if has_tag(event, "public") {
+    let visibility_tag = first_tag_value(event, "visibility");
+    let visibility = if has_tag(event, "public") || visibility_tag == Some("open") {
         "open".to_string()
-    } else if has_tag(event, "private") {
+    } else if has_tag(event, "private") || visibility_tag == Some("private") {
         "private".to_string()
     } else {
         "open".to_string()
@@ -161,10 +160,10 @@ pub fn channel_detail_from_event(event: &Event) -> Result<ChannelDetailInfo, Str
                 "stream".to_string()
             }
         });
-    // Prefer explicit ["public"]; fall back to NIP-29 absence-of-"private".
-    let visibility = if has_tag(event, "public") {
+    let visibility_tag = first_tag_value(event, "visibility");
+    let visibility = if has_tag(event, "public") || visibility_tag == Some("open") {
         "open".to_string()
-    } else if has_tag(event, "private") {
+    } else if has_tag(event, "private") || visibility_tag == Some("private") {
         "private".to_string()
     } else {
         "open".to_string()
@@ -678,8 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn channel_info_private_when_private_tag_present() {
-        // Explicit ["private"] tag → private (NIP-29 convention).
+    fn channel_info_private_when_visibility_tag_present() {
         let e = ev(
             39000,
             "",
@@ -687,12 +685,14 @@ mod tests {
                 vec!["d", "u"],
                 vec!["name", "n"],
                 vec!["t", "forum"],
-                vec!["private"],
+                vec!["visibility", "private"],
+                vec!["ttl", "86400"],
             ],
         );
         let info = channel_info_from_event(&e, None, None).unwrap();
         assert_eq!(info.visibility, "private");
         assert_eq!(info.channel_type, "forum");
+        assert_eq!(info.ttl_seconds, Some(86400));
     }
 
     #[test]
@@ -753,6 +753,9 @@ mod tests {
                 vec!["topic", "tt"],
                 vec!["purpose", "pp"],
                 vec!["t", "dm"],
+                vec!["visibility", "private"],
+                vec!["ttl", "86400"],
+                vec!["ttl_deadline", "2026-06-11T00:00:00Z"],
             ],
         );
         let d = channel_detail_from_event(&e).unwrap();
@@ -760,6 +763,9 @@ mod tests {
         assert_eq!(d.topic.as_deref(), Some("tt"));
         assert_eq!(d.purpose.as_deref(), Some("pp"));
         assert_eq!(d.channel_type, "dm");
+        assert_eq!(d.visibility, "private");
+        assert_eq!(d.ttl_seconds, Some(86400));
+        assert_eq!(d.ttl_deadline.as_deref(), Some("2026-06-11T00:00:00Z"));
         assert!(d.created_at.ends_with("Z"));
         assert_eq!(d.created_by, e.pubkey.to_hex());
     }

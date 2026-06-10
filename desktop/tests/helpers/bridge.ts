@@ -51,6 +51,7 @@ type MockBridgeOptions = {
   profileReadDelayMs?: number;
   profileReadError?: string;
   profileUpdateError?: string;
+  updateChannelDelayMs?: number;
   stallWebsocketSends?: boolean;
   // NIP-IA gate inputs — drive the archive-button gate matrix in
   // tests/e2e/identity-archive.spec.ts.

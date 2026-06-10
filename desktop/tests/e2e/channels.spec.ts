@@ -117,11 +117,23 @@ async function getManagedAgentPubkey(
 async function readCommandLog(page: import("@playwright/test").Page) {
   return page.evaluate(() => {
     return (
+      (window as Window & { __SPROUT_E2E_COMMANDS__?: string[] })
+        .__SPROUT_E2E_COMMANDS__ ?? []
+    );
+  });
+}
+
+async function readCommandPayloadLog(page: import("@playwright/test").Page) {
+  return page.evaluate(() => {
+    return (
       (
         window as Window & {
-          __SPROUT_E2E_COMMANDS__?: string[];
+          __SPROUT_E2E_COMMAND_LOG__?: Array<{
+            command: string;
+            payload: unknown;
+          }>;
         }
-      ).__SPROUT_E2E_COMMANDS__ ?? []
+      ).__SPROUT_E2E_COMMAND_LOG__ ?? []
     );
   });
 }
@@ -746,6 +758,108 @@ test("manage channel updates details and context", async ({ page }) => {
   await expect(page.getByTestId("channel-management-purpose")).toHaveValue(
     newPurpose,
   );
+});
+
+test("manage channel updates visibility and ephemeral lifecycle independently", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await openChannelManagement(page, "general");
+
+  const saveDetailsButton = page.getByTestId("channel-management-save-details");
+  const saveLifecycleButton = page.getByTestId(
+    "channel-management-save-lifecycle",
+  );
+
+  await expect(saveLifecycleButton).toBeDisabled();
+
+  await page.getByTestId("channel-management-private-toggle").click();
+  await page.getByTestId("channel-management-ephemeral-toggle").click();
+  await expect(page.getByTestId("channel-management-ttl")).toBeVisible();
+  await expect(saveLifecycleButton).toBeEnabled();
+
+  const commandCountBeforeEnable = (await readCommandPayloadLog(page)).length;
+  await saveLifecycleButton.click();
+  await expect
+    .poll(async () =>
+      (await readCommandPayloadLog(page)).slice(commandCountBeforeEnable),
+    )
+    .toContainEqual(
+      expect.objectContaining({
+        command: "update_channel",
+        payload: expect.objectContaining({
+          input: expect.objectContaining({ ttlSeconds: 86400 }),
+        }),
+      }),
+    );
+  await expect(saveLifecycleButton).toHaveText("Save visibility");
+  await expect(saveDetailsButton).toHaveText("Save details");
+
+  const channelAfterEnable = await invokeMockCommand<{
+    ttl_seconds: number | null;
+    visibility: string;
+  }>(page, "get_channel_details", {
+    channelId: "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
+  });
+  expect(channelAfterEnable).toMatchObject({
+    ttl_seconds: 86400,
+    visibility: "private",
+  });
+
+  await closeChannelManagement(page);
+  await openChannelManagement(page, "general");
+
+  await expect(
+    page.getByTestId("channel-management-private-toggle"),
+  ).toHaveAttribute("data-state", "checked");
+  await expect(
+    page.getByTestId("channel-management-ephemeral-toggle"),
+  ).toHaveAttribute("data-state", "checked");
+  await expect(page.getByTestId("channel-management-ttl")).toHaveValue("1d");
+
+  await page.getByTestId("channel-management-private-toggle").click();
+  await page.getByTestId("channel-management-ephemeral-toggle").click();
+  await expect(saveLifecycleButton).toBeEnabled();
+
+  const commandCountBeforeDisable = (await readCommandPayloadLog(page)).length;
+  await saveLifecycleButton.click();
+  await expect
+    .poll(async () =>
+      (await readCommandPayloadLog(page)).slice(commandCountBeforeDisable),
+    )
+    .toContainEqual(
+      expect.objectContaining({
+        command: "update_channel",
+        payload: expect.objectContaining({
+          input: expect.objectContaining({ ttlSeconds: null }),
+        }),
+      }),
+    );
+  await expect(saveLifecycleButton).toHaveText("Save visibility");
+  await expect(saveDetailsButton).toHaveText("Save details");
+  await expect(page.getByTestId("channel-management-ttl")).toHaveCount(0);
+
+  const channelAfterDisable = await invokeMockCommand<{
+    ttl_seconds: number | null;
+    visibility: string;
+  }>(page, "get_channel_details", {
+    channelId: "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
+  });
+  expect(channelAfterDisable).toMatchObject({
+    ttl_seconds: null,
+    visibility: "open",
+  });
+
+  await closeChannelManagement(page);
+  await openChannelManagement(page, "general");
+
+  await expect(
+    page.getByTestId("channel-management-private-toggle"),
+  ).toHaveAttribute("data-state", "unchecked");
+  await expect(
+    page.getByTestId("channel-management-ephemeral-toggle"),
+  ).toHaveAttribute("data-state", "unchecked");
+  await expect(page.getByTestId("channel-management-ttl")).toHaveCount(0);
 });
 
 test("manage channel keeps canvas near the top of the sheet", async ({

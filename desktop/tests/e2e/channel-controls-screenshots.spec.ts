@@ -121,4 +121,65 @@ test.describe("channel controls screenshots", () => {
 
     await sheet.screenshot({ path: `${SHOTS}/06-management-sheet.png` });
   });
+
+  test("07 — saving lifecycle leaves details save idle", async ({ page }) => {
+    await installMockBridge(page, { updateChannelDelayMs: 500 });
+    await openManagementSheet(page);
+
+    const sheet = page.getByTestId("channel-management-sheet");
+    await page.getByTestId("channel-management-ephemeral-toggle").click();
+    await expect(
+      page.getByTestId("channel-management-save-lifecycle"),
+    ).toBeEnabled();
+
+    await page.getByTestId("channel-management-save-lifecycle").click();
+    await expect(
+      page.getByTestId("channel-management-save-lifecycle"),
+    ).toHaveText("Saving...");
+    await expect(
+      page.getByTestId("channel-management-save-details"),
+    ).toHaveText("Save details");
+    await sheet.screenshot({
+      path: `${SHOTS}/07-lifecycle-saving-details-idle.png`,
+    });
+
+    await expect(
+      page.getByTestId("channel-management-save-lifecycle"),
+    ).toHaveText("Save visibility");
+  });
+
+  test("08 — saved ephemeral lifecycle is reflected after reopen", async ({
+    page,
+  }) => {
+    await installMockBridge(page);
+    await openManagementSheet(page);
+
+    await page.getByTestId("channel-management-private-toggle").click();
+    await page.getByTestId("channel-management-ephemeral-toggle").click();
+    await page.getByTestId("channel-management-save-lifecycle").click();
+    await expect(
+      page.getByTestId("channel-management-save-lifecycle"),
+    ).toHaveText("Save visibility");
+
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByTestId("channel-management-sheet"),
+    ).not.toBeVisible();
+    await page.getByTestId("channel-management-trigger").click();
+
+    const lifecycle = page.getByTestId("channel-management-lifecycle");
+    await lifecycle.scrollIntoViewIfNeeded();
+    await expect(
+      page.getByTestId("channel-management-private-toggle"),
+    ).toHaveAttribute("data-state", "checked");
+    await expect(
+      page.getByTestId("channel-management-ephemeral-toggle"),
+    ).toHaveAttribute("data-state", "checked");
+    await expect(page.getByTestId("channel-management-ttl")).toHaveValue("1d");
+    await settle(page);
+
+    await lifecycle.screenshot({
+      path: `${SHOTS}/08-ephemeral-persisted-after-reopen.png`,
+    });
+  });
 });

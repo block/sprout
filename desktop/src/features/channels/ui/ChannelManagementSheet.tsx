@@ -68,6 +68,8 @@ type ChannelManagementSheetProps = {
   open: boolean;
 };
 
+const DEFAULT_EPHEMERAL_TTL_SECONDS = 24 * 60 * 60;
+
 function MetadataPill({
   icon: Icon,
   label,
@@ -123,7 +125,8 @@ export function ChannelManagementSheet({
   const channelId = channel?.id ?? null;
   const detailsQuery = useChannelDetailsQuery(channelId, open);
   const membersQuery = useChannelMembersQuery(channelId, open);
-  const updateChannelMutation = useUpdateChannelMutation(channelId);
+  const updateChannelDetailsMutation = useUpdateChannelMutation(channelId);
+  const updateChannelLifecycleMutation = useUpdateChannelMutation(channelId);
   const setTopicMutation = useSetChannelTopicMutation(channelId);
   const setPurposeMutation = useSetChannelPurposeMutation(channelId);
   const archiveChannelMutation = useArchiveChannelMutation(channelId);
@@ -243,24 +246,19 @@ export function ChannelManagementSheet({
   const nextVisibility: "open" | "private" = isPrivateDraft
     ? "private"
     : "open";
-  // Ephemeral on with a parsed duration → set those seconds; ephemeral off →
-  // clear (null). An ephemeral toggle with an empty/invalid field leaves the
-  // existing TTL untouched (undefined) so an accidental clear can't happen.
-  const nextTtlSeconds: number | null | undefined = isEphemeralDraft
-    ? (parsedTtlSeconds ?? undefined)
+  const nextTtlSeconds: number | null = isEphemeralDraft
+    ? (parsedTtlSeconds ?? DEFAULT_EPHEMERAL_TTL_SECONDS)
     : null;
   const lifecycleDirty =
     nextVisibility !== currentVisibility ||
-    (nextTtlSeconds !== undefined && nextTtlSeconds !== currentTtlSeconds);
+    nextTtlSeconds !== currentTtlSeconds;
 
   function handleSaveLifecycle() {
-    void updateChannelMutation.mutateAsync({
+    void updateChannelLifecycleMutation.mutateAsync({
       visibility:
         nextVisibility !== currentVisibility ? nextVisibility : undefined,
       ttlSeconds:
-        nextTtlSeconds !== undefined && nextTtlSeconds !== currentTtlSeconds
-          ? nextTtlSeconds
-          : undefined,
+        nextTtlSeconds !== currentTtlSeconds ? nextTtlSeconds : undefined,
     });
   }
 
@@ -360,7 +358,7 @@ export function ChannelManagementSheet({
             className="space-y-3"
             onSubmit={(event) => {
               event.preventDefault();
-              void updateChannelMutation.mutateAsync({
+              void updateChannelDetailsMutation.mutateAsync({
                 description: descriptionDraft.trim() || undefined,
                 name: nameDraft.trim() || undefined,
               });
@@ -372,7 +370,9 @@ export function ChannelManagementSheet({
               </label>
               <Input
                 data-testid="channel-management-name"
-                disabled={!canManageChannel || updateChannelMutation.isPending}
+                disabled={
+                  !canManageChannel || updateChannelDetailsMutation.isPending
+                }
                 id="channel-name"
                 onChange={(event) => setNameDraft(event.target.value)}
                 value={nameDraft}
@@ -388,7 +388,9 @@ export function ChannelManagementSheet({
               <Textarea
                 className="min-h-24"
                 data-testid="channel-management-description"
-                disabled={!canManageChannel || updateChannelMutation.isPending}
+                disabled={
+                  !canManageChannel || updateChannelDetailsMutation.isPending
+                }
                 id="channel-description"
                 onChange={(event) => setDescriptionDraft(event.target.value)}
                 value={descriptionDraft}
@@ -396,15 +398,19 @@ export function ChannelManagementSheet({
             </div>
             <Button
               data-testid="channel-management-save-details"
-              disabled={!canManageChannel || updateChannelMutation.isPending}
+              disabled={
+                !canManageChannel || updateChannelDetailsMutation.isPending
+              }
               size="sm"
               type="submit"
             >
-              {updateChannelMutation.isPending ? "Saving..." : "Save details"}
+              {updateChannelDetailsMutation.isPending
+                ? "Saving..."
+                : "Save details"}
             </Button>
-            {updateChannelMutation.error instanceof Error ? (
+            {updateChannelDetailsMutation.error instanceof Error ? (
               <p className="text-sm text-destructive">
-                {updateChannelMutation.error.message}
+                {updateChannelDetailsMutation.error.message}
               </p>
             ) : null}
           </form>
@@ -425,7 +431,8 @@ export function ChannelManagementSheet({
                   checked={isPrivateDraft}
                   data-testid="channel-management-private-toggle"
                   disabled={
-                    !canManageChannel || updateChannelMutation.isPending
+                    !canManageChannel ||
+                    updateChannelLifecycleMutation.isPending
                   }
                   onCheckedChange={setIsPrivateDraft}
                 />
@@ -442,7 +449,8 @@ export function ChannelManagementSheet({
                   checked={isEphemeralDraft}
                   data-testid="channel-management-ephemeral-toggle"
                   disabled={
-                    !canManageChannel || updateChannelMutation.isPending
+                    !canManageChannel ||
+                    updateChannelLifecycleMutation.isPending
                   }
                   onCheckedChange={setIsEphemeralDraft}
                 />
@@ -457,7 +465,8 @@ export function ChannelManagementSheet({
                     aria-invalid={ttlInvalid}
                     data-testid="channel-management-ttl"
                     disabled={
-                      !canManageChannel || updateChannelMutation.isPending
+                      !canManageChannel ||
+                      updateChannelLifecycleMutation.isPending
                     }
                     id="channel-ttl"
                     onChange={(event) => setTtlDraft(event.target.value)}
@@ -472,7 +481,7 @@ export function ChannelManagementSheet({
                   >
                     {ttlInvalid
                       ? "Enter a duration like 1d, 12h, or 30m."
-                      : "Resets the deletion countdown from now whenever changed."}
+                      : "Defaults to 1d when left empty. Resets the deletion countdown from now whenever changed."}
                   </p>
                 </div>
               ) : null}
@@ -481,7 +490,7 @@ export function ChannelManagementSheet({
                 data-testid="channel-management-save-lifecycle"
                 disabled={
                   !canManageChannel ||
-                  updateChannelMutation.isPending ||
+                  updateChannelLifecycleMutation.isPending ||
                   ttlInvalid ||
                   !lifecycleDirty
                 }
@@ -489,7 +498,7 @@ export function ChannelManagementSheet({
                 size="sm"
                 type="button"
               >
-                {updateChannelMutation.isPending
+                {updateChannelLifecycleMutation.isPending
                   ? "Saving..."
                   : "Save visibility"}
               </Button>
