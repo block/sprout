@@ -365,6 +365,38 @@ pub(crate) fn sweep_orphaned_agent_processes(app: &AppHandle, _skip_pids: &[u32]
     let _ = app;
 }
 
+// ── macOS process-info FFI (shared by all sweep/reap functions) ──────────
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn proc_listallpids(buffer: *mut libc::c_int, buffersize: libc::c_int) -> libc::c_int;
+    fn proc_pidinfo(
+        pid: libc::c_int,
+        flavor: libc::c_int,
+        arg: u64,
+        buffer: *mut libc::c_void,
+        buffersize: libc::c_int,
+    ) -> libc::c_int;
+}
+
+/// Subset of `struct proc_bsdinfo` from `<sys/proc_info.h>`. Layout verified
+/// against the macOS SDK — total size 136 bytes.
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct BSDInfo {
+    _flags_status_xstatus: [u8; 12], // pbi_flags + pbi_status + pbi_xstatus
+    pbi_pid: u32,                    // offset 12
+    pbi_ppid: u32,                   // offset 16
+    pbi_uid: u32,                    // offset 20
+    _rest: [u8; 112],
+}
+
+#[cfg(target_os = "macos")]
+const _: () = assert!(std::mem::size_of::<BSDInfo>() == 136);
+
+#[cfg(target_os = "macos")]
+const PROC_PIDTBSDINFO: libc::c_int = 3;
+
 /// Enumerate all processes on the system owned by the current user and kill any
 /// agent binary stamped with *this* instance's `SPROUT_MANAGED_AGENT` marker
 /// (`instance_id`) that isn't in `skip_pids`. This catches orphans that escaped
@@ -373,28 +405,6 @@ pub(crate) fn sweep_orphaned_agent_processes(app: &AppHandle, _skip_pids: &[u32]
 /// while leaving another live Sprout instance's agents untouched.
 #[cfg(target_os = "macos")]
 pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32]) {
-    extern "C" {
-        fn proc_listallpids(buffer: *mut libc::c_int, buffersize: libc::c_int) -> libc::c_int;
-        fn proc_pidinfo(
-            pid: libc::c_int,
-            flavor: libc::c_int,
-            arg: u64,
-            buffer: *mut libc::c_void,
-            buffersize: libc::c_int,
-        ) -> libc::c_int;
-    }
-
-    #[repr(C)]
-    struct BSDInfo {
-        _flags_status_xstatus: [u8; 12], // pbi_flags + pbi_status + pbi_xstatus
-        pbi_pid: u32,                    // offset 12
-        pbi_ppid: u32,                   // offset 16
-        pbi_uid: u32,                    // offset 20
-        _rest: [u8; 112],
-    }
-    const _: () = assert!(std::mem::size_of::<BSDInfo>() == 136);
-    const PROC_PIDTBSDINFO: libc::c_int = 3;
-
     let my_uid = unsafe { libc::getuid() };
 
     // Loop until the buffer is large enough to hold all PIDs. Under a fork
@@ -522,7 +532,11 @@ pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32])
         if !process_belongs_to_us(upid) || !process_has_sprout_marker(upid, instance_id) {
             continue;
         }
-        // Live child of a tracked harness — not an orphan.
+        // Live child of a tracked harness — not an orphan. If /proc/<pid>/stat
+        // is unreadable (process exiting, transient I/O error), we treat the
+        // process as orphaned — safe because an exiting process will disappear
+        // shortly, and the two-tick grace in the periodic path prevents acting
+        // on transient failures.
         if let Some(ppid) = read_ppid_linux(upid) {
             if skip_pids.contains(&ppid) {
                 continue;
@@ -546,13 +560,14 @@ pub(crate) fn sweep_system_agent_processes(_instance_id: &str, _skip_pids: &[u32
 /// Periodic-sweep variant with two-tick grace: only reaps same-instance orphans
 /// that were also seen orphaned on the previous tick. This prevents killing a
 /// legitimately-starting agent that spawned between the skip-list snapshot and
-/// the process scan.
+/// the process scan. Returns the current orphan set for use as `prev_orphans`
+/// on the next tick.
 #[cfg(unix)]
 pub(crate) fn sweep_system_agent_processes_with_grace(
     instance_id: &str,
     skip_pids: &[u32],
     prev_orphans: &std::collections::HashSet<u32>,
-) {
+) -> std::collections::HashSet<u32> {
     let current = collect_same_instance_orphans(instance_id, skip_pids);
     // Only reap PIDs seen orphaned on two consecutive ticks.
     let confirmed: Vec<i32> = current
@@ -567,6 +582,7 @@ pub(crate) fn sweep_system_agent_processes_with_grace(
         );
         sigterm_then_sigkill(&confirmed);
     }
+    current
 }
 
 #[cfg(not(unix))]
@@ -574,7 +590,8 @@ pub(crate) fn sweep_system_agent_processes_with_grace(
     _instance_id: &str,
     _skip_pids: &[u32],
     _prev_orphans: &std::collections::HashSet<u32>,
-) {
+) -> std::collections::HashSet<u32> {
+    std::collections::HashSet::new()
 }
 
 /// Collect PIDs of same-instance agent processes that appear orphaned (not in
@@ -585,28 +602,6 @@ pub(crate) fn collect_same_instance_orphans(
     instance_id: &str,
     skip_pids: &[u32],
 ) -> std::collections::HashSet<u32> {
-    extern "C" {
-        fn proc_listallpids(buffer: *mut libc::c_int, buffersize: libc::c_int) -> libc::c_int;
-        fn proc_pidinfo(
-            pid: libc::c_int,
-            flavor: libc::c_int,
-            arg: u64,
-            buffer: *mut libc::c_void,
-            buffersize: libc::c_int,
-        ) -> libc::c_int;
-    }
-
-    #[repr(C)]
-    struct BSDInfo {
-        _flags_status_xstatus: [u8; 12], // pbi_flags + pbi_status + pbi_xstatus
-        pbi_pid: u32,                    // offset 12
-        pbi_ppid: u32,                   // offset 16
-        pbi_uid: u32,                    // offset 20
-        _rest: [u8; 112],
-    }
-    const _: () = assert!(std::mem::size_of::<BSDInfo>() == 136);
-    const PROC_PIDTBSDINFO: libc::c_int = 3;
-
     let my_uid = unsafe { libc::getuid() };
     let my_pid = std::process::id() as i32;
     let mut orphans = std::collections::HashSet::new();
@@ -710,7 +705,10 @@ pub(crate) fn collect_same_instance_orphans(
         if !process_belongs_to_us(upid) || !process_has_sprout_marker(upid, instance_id) {
             continue;
         }
-        // Live child of a tracked harness — not an orphan.
+        // Live child of a tracked harness — not an orphan. If /proc/<pid>/stat
+        // is unreadable (process exiting, transient I/O error), we treat the
+        // process as orphaned — safe because an exiting process will disappear
+        // shortly, and the two-tick grace prevents acting on transient failures.
         if let Some(ppid) = read_ppid_linux(upid) {
             if skip_pids.contains(&ppid) {
                 continue;
@@ -868,25 +866,8 @@ fn extract_sprout_marker_value(_pid: u32) -> Option<String> {
 #[cfg(target_os = "macos")]
 fn desktop_is_alive_for_instance(instance_id: &str) -> bool {
     extern "C" {
-        fn proc_listallpids(buffer: *mut libc::c_int, buffersize: libc::c_int) -> libc::c_int;
         fn proc_name(pid: libc::c_int, buffer: *mut libc::c_void, buffersize: u32) -> libc::c_int;
-        fn proc_pidinfo(
-            pid: libc::c_int,
-            flavor: libc::c_int,
-            arg: u64,
-            buffer: *mut libc::c_void,
-            buffersize: libc::c_int,
-        ) -> libc::c_int;
     }
-
-    #[repr(C)]
-    struct BSDInfo {
-        _pad: [u8; 20],
-        pbi_uid: u32,
-        _rest: [u8; 112],
-    }
-    const _: () = assert!(std::mem::size_of::<BSDInfo>() == 136);
-    const PROC_PIDTBSDINFO: libc::c_int = 3;
 
     let my_uid = unsafe { libc::getuid() };
     let identifier_bytes = instance_id.as_bytes();
@@ -1047,26 +1028,6 @@ fn desktop_is_alive_for_instance(_instance_id: &str) -> bool {
 /// all agents from that dead instance are reaped.
 #[cfg(target_os = "macos")]
 pub(crate) fn reap_dead_instance_agents(our_instance_id: &str, skip_pids: &[u32]) {
-    extern "C" {
-        fn proc_listallpids(buffer: *mut libc::c_int, buffersize: libc::c_int) -> libc::c_int;
-        fn proc_pidinfo(
-            pid: libc::c_int,
-            flavor: libc::c_int,
-            arg: u64,
-            buffer: *mut libc::c_void,
-            buffersize: libc::c_int,
-        ) -> libc::c_int;
-    }
-
-    #[repr(C)]
-    struct BSDInfo {
-        _pad: [u8; 20],
-        pbi_uid: u32,
-        _rest: [u8; 112],
-    }
-    const _: () = assert!(std::mem::size_of::<BSDInfo>() == 136);
-    const PROC_PIDTBSDINFO: libc::c_int = 3;
-
     let my_uid = unsafe { libc::getuid() };
     let my_pid = std::process::id() as i32;
 
