@@ -107,6 +107,8 @@ pub struct ShellParams {
     pub command: String,
     #[serde(default)]
     pub workdir: Option<String>,
+    /// Defaults to 120000 ms (2 min) if omitted; capped at 600000 ms (10 min).
+    /// For long-running commands (git push with hooks, cargo build, test suites), use 300000+.
     #[serde(default)]
     pub timeout_ms: Option<u64>,
 }
