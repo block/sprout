@@ -3,7 +3,6 @@
 //! All functions return `Result<nostr::EventBuilder, SdkError>`.
 //! The caller signs: `builder.sign_with_keys(&keys)?`.
 
-use nostr::{EventBuilder, Kind, Tag};
 use buzz_core::{
     kind::{
         KIND_AGENT_OBSERVER_FRAME, KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_DELETION,
@@ -15,6 +14,7 @@ use buzz_core::{
         OBSERVER_FRAME_TELEMETRY,
     },
 };
+use nostr::{EventBuilder, Kind, Tag};
 use uuid::Uuid;
 
 use crate::{

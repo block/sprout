@@ -5,14 +5,14 @@ use std::sync::Arc;
 
 use tracing::{debug, warn};
 
-use hex;
-use nostr::Filter;
 use buzz_core::filter::filters_match;
 use buzz_core::kind::{
     KIND_AGENT_ENGRAM, KIND_AGENT_OBSERVER_FRAME, KIND_DM_VISIBILITY, KIND_GIFT_WRAP,
     KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
 };
 use buzz_db::EventQuery;
+use hex;
+use nostr::Filter;
 
 use buzz_auth::Scope;
 

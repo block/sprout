@@ -219,8 +219,8 @@ impl RelayMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nostr::{EventBuilder, Keys, Kind};
     use buzz_core::test_helpers::make_event;
+    use nostr::{EventBuilder, Keys, Kind};
 
     fn make_auth_event(keys: &Keys, challenge: &str, relay: &str) -> Event {
         let url: nostr::RelayUrl = relay.parse().expect("url");

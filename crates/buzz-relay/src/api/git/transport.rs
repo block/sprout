@@ -163,9 +163,9 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for GitAuth {
         let pubkey =
             buzz_auth::nip98::verify_nip98_event(&event_json, &expected_url, &event_method, None)
                 .map_err(|e| {
-                    warn!(error = %e, "git NIP-98 auth failed");
-                    (StatusCode::UNAUTHORIZED, "NIP-98 auth failed").into_response()
-                })?;
+                warn!(error = %e, "git NIP-98 auth failed");
+                (StatusCode::UNAUTHORIZED, "NIP-98 auth failed").into_response()
+            })?;
 
         // NOTE: NIP-98 event-ID dedup intentionally NOT implemented here.
         // Git's credential protocol reuses one signed token across multiple requests

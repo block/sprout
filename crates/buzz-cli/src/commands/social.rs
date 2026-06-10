@@ -1,9 +1,9 @@
-use nostr::{EventBuilder, Kind, Tag};
-use serde::Deserialize;
 use buzz_sdk::kind::{
     KIND_BOOKMARK_LIST, KIND_BOOKMARK_SET, KIND_FOLLOW_SET, KIND_MUTE_LIST,
     KIND_NIP65_RELAY_LIST_METADATA, KIND_PIN_LIST,
 };
+use nostr::{EventBuilder, Kind, Tag};
+use serde::Deserialize;
 
 use crate::client::{normalize_write_response, BuzzClient};
 use crate::error::CliError;

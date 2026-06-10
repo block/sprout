@@ -5,8 +5,8 @@
 //!
 //! Prints the JSON auth tag to stdout.
 
-use nostr::{Keys, PublicKey};
 use buzz_sdk::nip_oa;
+use nostr::{Keys, PublicKey};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

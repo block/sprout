@@ -1,8 +1,8 @@
 //! Send an @mention event to a Sprout channel targeting a specific pubkey.
 //! Usage: mention <channel_uuid> <target_pubkey_hex> <message>
 
-use nostr::{EventBuilder, Keys, Kind, Tag};
 use buzz_test_client::BuzzTestClient;
+use nostr::{EventBuilder, Keys, Kind, Tag};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

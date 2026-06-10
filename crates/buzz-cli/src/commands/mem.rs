@@ -19,11 +19,11 @@ use std::time::SystemTime;
 
 use sha2::{Digest, Sha256};
 
-use nostr::PublicKey;
 use buzz_core::engram::{
     self, conversation_key, d_tag, normalize_slug, select_head, validate_and_decrypt, Body, Listing,
 };
 use buzz_core::kind::KIND_AGENT_ENGRAM;
+use nostr::PublicKey;
 
 use crate::client::BuzzClient;
 use crate::error::CliError;

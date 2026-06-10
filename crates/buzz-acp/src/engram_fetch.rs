@@ -11,9 +11,9 @@
 //!   overwrite real, just-unreachable memory with a fresh profile.
 //! - Either way, session creation is never blocked.
 
-use nostr::{Event, Keys, PublicKey};
 use buzz_core::engram::{conversation_key, d_tag, select_head, validate_and_decrypt, Body};
 use buzz_core::kind::KIND_AGENT_ENGRAM;
+use nostr::{Event, Keys, PublicKey};
 
 use crate::relay::RestClient;
 
@@ -166,8 +166,8 @@ fn decode_core_body(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use buzz_core::engram::{build_event, Body};
+    use serde_json::json;
 
     /// Empty array → confirmed absence → Ok(None), so the caller emits the
     /// onboarding nudge. This is the only path that maps to "no core."

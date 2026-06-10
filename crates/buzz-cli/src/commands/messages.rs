@@ -1,5 +1,5 @@
-use nostr::PublicKey;
 use buzz_sdk::{DiffMeta, ThreadRef, VoteDirection};
+use nostr::PublicKey;
 use uuid::Uuid;
 
 use crate::client::{normalize_events, normalize_write_response, BuzzClient};
@@ -490,10 +490,7 @@ pub struct SendDiffParams {
     pub reply_to: Option<String>,
 }
 
-pub async fn cmd_send_diff_message(
-    client: &BuzzClient,
-    p: SendDiffParams,
-) -> Result<(), CliError> {
+pub async fn cmd_send_diff_message(client: &BuzzClient, p: SendDiffParams) -> Result<(), CliError> {
     if let Some(r) = &p.reply_to {
         validate_hex64(r)?;
     }
@@ -738,10 +735,10 @@ pub async fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::{find_root_from_tags, parse_member_pubkeys};
-    use serde_json::json;
     use buzz_sdk::mentions::{
         extract_at_mentions_with_known, extract_at_names, match_names_to_profiles, MentionProfile,
     };
+    use serde_json::json;
 
     const ID_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const ID_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

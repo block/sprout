@@ -427,10 +427,7 @@ pub async fn cmd_archive_channel(client: &BuzzClient, channel_id: &str) -> Resul
     Ok(())
 }
 
-pub async fn cmd_unarchive_channel(
-    client: &BuzzClient,
-    channel_id: &str,
-) -> Result<(), CliError> {
+pub async fn cmd_unarchive_channel(client: &BuzzClient, channel_id: &str) -> Result<(), CliError> {
     let channel_uuid = parse_uuid(channel_id)?;
 
     let builder = buzz_sdk::build_unarchive(channel_uuid)

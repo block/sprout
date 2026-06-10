@@ -1102,26 +1102,26 @@ async fn resume_workflow_after_approval(
         }
     };
 
-    let def: buzz_workflow::WorkflowDef =
-        match serde_json::from_value(workflow.definition.clone()) {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::error!("resume_workflow: failed to parse workflow definition: {e}");
-                if let Err(db_err) = db
-                    .update_workflow_run(
-                        run_id,
-                        RunStatus::Failed,
-                        run.current_step,
-                        &run.execution_trace,
-                        Some(&format!("definition parse error: {e}")),
-                    )
-                    .await
-                {
-                    tracing::error!("resume_workflow: failed to mark run as failed: {db_err}");
-                }
-                return;
+    let def: buzz_workflow::WorkflowDef = match serde_json::from_value(workflow.definition.clone())
+    {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::error!("resume_workflow: failed to parse workflow definition: {e}");
+            if let Err(db_err) = db
+                .update_workflow_run(
+                    run_id,
+                    RunStatus::Failed,
+                    run.current_step,
+                    &run.execution_trace,
+                    Some(&format!("definition parse error: {e}")),
+                )
+                .await
+            {
+                tracing::error!("resume_workflow: failed to mark run as failed: {db_err}");
             }
-        };
+            return;
+        }
+    };
 
     // Reconstruct step_outputs from execution trace for template resolution
     let mut initial_outputs: std::collections::HashMap<String, serde_json::Value> =

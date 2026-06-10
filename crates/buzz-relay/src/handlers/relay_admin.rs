@@ -16,9 +16,7 @@ use std::sync::Arc;
 use nostr::Event;
 use tracing::{info, warn};
 
-use buzz_core::kind::{
-    RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
-};
+use buzz_core::kind::{RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER};
 use buzz_db::relay_members::RemoveResult;
 
 use crate::handlers::side_effects::{

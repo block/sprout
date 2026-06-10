@@ -160,8 +160,8 @@ pub mod relay_members {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use nostr::Keys;
         use buzz_sdk::nip_oa::compute_auth_tag;
+        use nostr::Keys;
 
         /// Valid NIP-OA auth tag → returns Some(owner_pubkey).
         #[test]

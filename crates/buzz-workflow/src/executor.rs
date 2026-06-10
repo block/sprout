@@ -913,8 +913,8 @@ fn shared_http_client() -> &'static reqwest::Client {
 /// POST `{"emoji": emoji}` to `POST /api/messages/{message_id}/reactions`.
 #[cfg(feature = "reqwest")]
 async fn add_reaction_impl(message_id: &str, emoji: &str) -> Result<JsonValue, WorkflowError> {
-    let base_url = std::env::var("BUZZ_RELAY_BASE_URL")
-        .unwrap_or_else(|_| "http://localhost:3000".to_owned());
+    let base_url =
+        std::env::var("BUZZ_RELAY_BASE_URL").unwrap_or_else(|_| "http://localhost:3000".to_owned());
 
     let url = format!("{base_url}/api/messages/{message_id}/reactions");
 

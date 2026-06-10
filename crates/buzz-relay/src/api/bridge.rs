@@ -561,8 +561,7 @@ pub async fn count_events(
                 match state.db.query_events(&q).await {
                     Ok(stored_events) => {
                         for se in stored_events {
-                            if buzz_core::filter::filters_match(std::slice::from_ref(filter), &se)
-                            {
+                            if buzz_core::filter::filters_match(std::slice::from_ref(filter), &se) {
                                 total += 1;
                             }
                         }
@@ -595,8 +594,7 @@ pub async fn count_events(
                 match state.db.query_events(&query).await {
                     Ok(stored_events) => {
                         for se in stored_events {
-                            if buzz_core::filter::filters_match(std::slice::from_ref(filter), &se)
-                            {
+                            if buzz_core::filter::filters_match(std::slice::from_ref(filter), &se) {
                                 total += 1;
                             }
                         }
@@ -751,11 +749,10 @@ async fn handle_bridge_search(
             .map_err(|e| internal_error(&format!("search fetch error: {e}")))?;
 
         // Build lookup map to preserve Typesense relevance ordering.
-        let event_map: std::collections::HashMap<[u8; 32], &buzz_core::StoredEvent> =
-            stored_events
-                .iter()
-                .map(|ev| (ev.event.id.to_bytes(), ev))
-                .collect();
+        let event_map: std::collections::HashMap<[u8; 32], &buzz_core::StoredEvent> = stored_events
+            .iter()
+            .map(|ev| (ev.event.id.to_bytes(), ev))
+            .collect();
 
         for hit_id in &hit_ids {
             let id_array: [u8; 32] = match hit_id.as_slice().try_into() {
@@ -1279,13 +1276,10 @@ mod tests {
             nostr::TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::P)),
             [&viewer],
         );
-        let ev = EventBuilder::new(
-            Kind::Custom(buzz_core::kind::KIND_DM_VISIBILITY as u16),
-            "",
-        )
-        .tags([d_tag, p_tag])
-        .sign_with_keys(&relay)
-        .expect("sign snapshot");
+        let ev = EventBuilder::new(Kind::Custom(buzz_core::kind::KIND_DM_VISIBILITY as u16), "")
+            .tags([d_tag, p_tag])
+            .sign_with_keys(&relay)
+            .expect("sign snapshot");
         let stored = buzz_core::StoredEvent::new(ev.clone(), None);
 
         // Kindless filter — the exact bypass shape: no #p, just the id.
