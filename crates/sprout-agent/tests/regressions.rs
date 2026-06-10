@@ -1019,10 +1019,10 @@ async fn hook_tools_hidden_from_llm() {
 }
 
 /// `_PostCompact` hook fires after a context-handoff and its output is
-/// re-injected into the fresh history as a synthetic tool result. The
-/// next LLM request must therefore see the post-compact text in
-/// `messages` (role=tool) — proving the hook ran on the *new* context,
-/// not the discarded one.
+/// folded into the fresh `[Context Handoff]` user-context block as explicitly
+/// untrusted text. The next LLM request must therefore see the post-compact
+/// text without any orphan `role=tool` messages — proving the hook ran on the
+/// *new* context, not the discarded one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hook_post_compact_injects_after_handoff() {
     // Sequence of canned LLM responses consumed in order:
