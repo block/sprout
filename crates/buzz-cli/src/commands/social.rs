@@ -9,7 +9,7 @@ use crate::client::{normalize_write_response, BuzzClient};
 use crate::error::CliError;
 use crate::validate::{parse_event_id, validate_hex64};
 
-/// A single contact entry (CLI-local, not from sprout-sdk).
+/// A single contact entry (CLI-local, not from buzz-sdk).
 #[derive(Debug, Deserialize)]
 pub struct ContactEntry {
     pub pubkey: String,

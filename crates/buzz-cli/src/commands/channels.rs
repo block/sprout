@@ -195,7 +195,7 @@ impl ChannelSummary {
                 "d" => channel_id = val.map(str::to_string),
                 "name" => name = val.map(str::to_string),
                 "t" => channel_type = val.map(str::to_string),
-                // NIP-29 emits both `private` and `public` (Sprout adds the latter).
+                // NIP-29 emits both `private` and `public` (Buzz adds the latter).
                 // The presence of either tag is the source of truth; tag value is unused.
                 "private" => visibility = Some("private".to_string()),
                 "public" => visibility = Some("public".to_string()),
@@ -632,7 +632,7 @@ mod tests {
     fn from_event_extracts_known_tags() {
         let ev = event(json!([
             ["d", "11111111-1111-1111-1111-111111111111"],
-            ["name", "sprout-chat-composer"],
+            ["name", "buzz-chat-composer"],
             ["t", "stream"],
             ["public"],
             ["about", "About text"],
@@ -641,7 +641,7 @@ mod tests {
         ]));
         let s = ChannelSummary::from_event(&ev).expect("parse");
         assert_eq!(s.channel_id, "11111111-1111-1111-1111-111111111111");
-        assert_eq!(s.name, "sprout-chat-composer");
+        assert_eq!(s.name, "buzz-chat-composer");
         assert_eq!(s.channel_type.as_deref(), Some("stream"));
         assert_eq!(s.visibility.as_deref(), Some("public"));
         assert!(!s.archived);
@@ -701,14 +701,14 @@ mod tests {
 
     #[test]
     fn name_matches_substring_case_insensitive() {
-        assert!(name_matches("Sprout-Chat-Composer", "composer", false));
-        assert!(name_matches("Sprout-Chat-Composer", "sprout", false));
+        assert!(name_matches("Buzz-Chat-Composer", "composer", false));
+        assert!(name_matches("Buzz-Chat-Composer", "buzz", false));
         assert!(!name_matches("design", "composer", false));
     }
 
     #[test]
     fn name_matches_exact_case_insensitive() {
-        assert!(name_matches("Sprout", "sprout", true));
-        assert!(!name_matches("Sprout-Chat", "sprout", true));
+        assert!(name_matches("Buzz", "buzz", true));
+        assert!(!name_matches("Buzz-Chat", "buzz", true));
     }
 }

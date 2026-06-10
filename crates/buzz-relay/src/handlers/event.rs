@@ -24,7 +24,7 @@ use super::ingest::{IngestAuth, IngestError};
 
 /// Increment the rejection counter with a bounded reason label.
 fn reject(reason: &'static str) {
-    metrics::counter!("sprout_events_rejected_total", "reason" => reason).increment(1);
+    metrics::counter!("buzz_events_rejected_total", "reason" => reason).increment(1);
 }
 
 /// Bound the `kind` label to prevent cardinality explosion from arbitrary Nostr kinds.
@@ -192,7 +192,7 @@ pub(crate) async fn dispatch_persistent_event(
     };
     if let Err(e) = state.audit_tx.send(audit_entry).await {
         error!(event_id = %event_id_hex, "Audit channel closed — entry lost: {e}");
-        metrics::counter!("sprout_audit_send_errors_total").increment(1);
+        metrics::counter!("buzz_audit_send_errors_total").increment(1);
     }
 
     // Skip workflow triggering for workflow-execution kinds and relay-signed workflow messages.
@@ -201,7 +201,7 @@ pub(crate) async fn dispatch_persistent_event(
             .event
             .tags
             .iter()
-            .any(|t| t.as_slice().first().map(|s| s.as_str()) == Some("sprout:workflow"));
+            .any(|t| t.as_slice().first().map(|s| s.as_str()) == Some("buzz:workflow"));
 
     if !buzz_core::kind::is_workflow_execution_kind(kind_u32)
         && !buzz_core::kind::is_command_kind(kind_u32)
@@ -215,7 +215,7 @@ pub(crate) async fn dispatch_persistent_event(
             if let Err(e) = workflow_engine.on_event(&workflow_event).await {
                 tracing::error!(event_id = ?workflow_event.event.id, "Workflow trigger failed: {e}");
             } else {
-                metrics::counter!("sprout_workflow_runs_total", "trigger" => trigger_kind)
+                metrics::counter!("buzz_workflow_runs_total", "trigger" => trigger_kind)
                     .increment(1);
             }
         });
@@ -234,7 +234,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     let kind_u32 = event_kind_u32(&event);
     let kind_str = bounded_kind_label(kind_u32);
     debug!(event_id = %event_id_hex, kind = kind_u32, "EVENT");
-    metrics::counter!("sprout_events_received_total", "kind" => kind_str.clone()).increment(1);
+    metrics::counter!("buzz_events_received_total", "kind" => kind_str.clone()).increment(1);
 
     // ── Extract auth from WS connection state ────────────────────────────
     let (conn_id, pubkey_bytes, auth_pubkey, scopes, channel_ids) = {
@@ -362,7 +362,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     match super::ingest::ingest_event(&state, event, ingest_auth).await {
         Ok(result) => {
             if result.accepted {
-                metrics::counter!("sprout_events_stored_total", "kind" => kind_str).increment(1);
+                metrics::counter!("buzz_events_stored_total", "kind" => kind_str).increment(1);
                 info!(
                     event_id = %result.event_id,
                     kind = kind_u32,
@@ -370,7 +370,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
                     "Event ingested"
                 );
             }
-            metrics::histogram!("sprout_event_processing_seconds")
+            metrics::histogram!("buzz_event_processing_seconds")
                 .record(start.elapsed().as_secs_f64());
             conn.send(RelayMessage::ok(
                 &result.event_id,

@@ -1,7 +1,7 @@
 //! Git permission types — ref patterns, protection rules, and policy evaluation inputs.
 //!
-//! This module defines the core data types for the Sprout git permission system.
-//! The permission model: channel role = repo role; `sprout-protect` tags on
+//! This module defines the core data types for the Buzz git permission system.
+//! The permission model: channel role = repo role; `buzz-protect` tags on
 //! kind:30617 add constraints that apply to everyone (including the owner).
 //!
 //! # Architecture
@@ -17,7 +17,7 @@ use std::fmt;
 
 // ── Limits (DoS prevention for untrusted kind:30617 input) ───────────────────
 
-/// Maximum number of `sprout-protect` tags per repo.
+/// Maximum number of `buzz-protect` tags per repo.
 pub const MAX_PROTECTION_RULES: usize = 50;
 /// Maximum character length of a ref pattern.
 pub const MAX_PATTERN_LENGTH: usize = 256;
@@ -244,9 +244,9 @@ pub struct RefUpdate {
 
 // ── Protection Rules ─────────────────────────────────────────────────────────
 
-/// A single protection rule parsed from a `sprout-protect` tag on kind:30617.
+/// A single protection rule parsed from a `buzz-protect` tag on kind:30617.
 ///
-/// Format: `["sprout-protect", "<ref-pattern>", "<rule>", ...]`
+/// Format: `["buzz-protect", "<ref-pattern>", "<rule>", ...]`
 /// Multiple rules per tag are allowed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtectionRule {
@@ -267,7 +267,7 @@ pub struct ProtectionRule {
     pub require_patch: bool,
 }
 
-/// Errors from parsing a `sprout-protect` tag.
+/// Errors from parsing a `buzz-protect` tag.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuleParseError {
     /// Tag has fewer than 2 values (need at least pattern + one rule).
@@ -285,7 +285,7 @@ pub enum RuleParseError {
 impl fmt::Display for RuleParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TooFewValues => write!(f, "sprout-protect tag needs pattern + at least one rule"),
+            Self::TooFewValues => write!(f, "buzz-protect tag needs pattern + at least one rule"),
             Self::TooManyRules => write!(f, "exceeds max {MAX_PROTECTION_RULES} rules per repo"),
             Self::InvalidPattern(e) => write!(f, "invalid pattern: {e}"),
             Self::UnknownRule(r) => write!(f, "unknown rule: {r:?}"),
@@ -296,18 +296,18 @@ impl fmt::Display for RuleParseError {
 
 impl std::error::Error for RuleParseError {}
 
-/// Parse a single `sprout-protect` tag into a `ProtectionRule`.
+/// Parse a single `buzz-protect` tag into a `ProtectionRule`.
 ///
-/// Tag format: `["sprout-protect", "<pattern>", "<rule1>", "<rule2>", ...]`
-/// The first element ("sprout-protect") should already be stripped — pass
+/// Tag format: `["buzz-protect", "<pattern>", "<rule1>", "<rule2>", ...]`
+/// The first element ("buzz-protect") should already be stripped — pass
 /// the remaining values starting with the pattern.
-/// Parse a single `sprout-protect` tag (simple API, discards unknown rules).
+/// Parse a single `buzz-protect` tag (simple API, discards unknown rules).
 pub fn parse_protection_tag(values: &[&str]) -> Result<ProtectionRule, RuleParseError> {
     let (rule, _unknowns) = parse_protection_tag_with_warnings(values)?;
     Ok(rule)
 }
 
-/// Parse a single `sprout-protect` tag, returning unknown rules for logging.
+/// Parse a single `buzz-protect` tag, returning unknown rules for logging.
 pub fn parse_protection_tag_with_warnings(
     values: &[&str],
 ) -> Result<(ProtectionRule, Vec<String>), RuleParseError> {
@@ -378,9 +378,9 @@ pub struct ParsedProtection {
     pub unknown_rules: Vec<String>,
 }
 
-/// Parse all `sprout-protect` tags from a kind:30617 event's tag list.
+/// Parse all `buzz-protect` tags from a kind:30617 event's tag list.
 ///
-/// Returns an error if any `sprout-protect` tag is structurally malformed.
+/// Returns an error if any `buzz-protect` tag is structurally malformed.
 /// Unknown rule strings are skipped but reported in `ParsedProtection::unknown_rules`
 /// so callers can log warnings (helps catch typos while maintaining forward-compat).
 /// Enforces the per-repo rule count limit.
@@ -389,7 +389,7 @@ pub fn parse_protection_tags(tags: &[Vec<String>]) -> Result<ParsedProtection, R
     let mut unknown_rules = Vec::new();
 
     for tag in tags {
-        if tag.first().map(|s| s.as_str()) != Some("sprout-protect") {
+        if tag.first().map(|s| s.as_str()) != Some("buzz-protect") {
             continue;
         }
         if rules.len() >= MAX_PROTECTION_RULES {
@@ -409,7 +409,7 @@ pub fn parse_protection_tags(tags: &[Vec<String>]) -> Result<ParsedProtection, R
 
 // ── Built-in Defaults ────────────────────────────────────────────────────────
 
-/// Built-in default minimum role for an operation when no `sprout-protect` tag matches.
+/// Built-in default minimum role for an operation when no `buzz-protect` tag matches.
 pub fn default_min_role(ref_name: &str, kind: UpdateKind) -> MemberRole {
     let is_branch = ref_name.starts_with("refs/heads/");
     let is_tag = ref_name.starts_with("refs/tags/");

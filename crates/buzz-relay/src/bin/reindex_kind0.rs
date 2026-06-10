@@ -1,7 +1,7 @@
 //! One-shot admin tool: re-index all kind:0 (user metadata) events in Typesense.
 //!
 //! Necessary after the indexer change that appends `display_name`/`name`/`nip05`
-//! values to the indexed content for kind:0 docs (see `sprout-search`'s
+//! values to the indexed content for kind:0 docs (see `buzz-search`'s
 //! `flatten_kind0_for_indexing`). Existing docs need to be rewritten with the
 //! appended tokens before they become searchable by display name.
 //!
@@ -11,7 +11,7 @@
 //! Usage (from the repo root, with .env sourced):
 //!
 //! ```
-//! cargo run --release -p buzz-relay --bin sprout-reindex-kind0
+//! cargo run --release -p buzz-relay --bin buzz-reindex-kind0
 //! ```
 //!
 //! Idempotent — Typesense uses upsert semantics, so running twice is safe.
@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
         .with(fmt::layer())
         .with(
             EnvFilter::from_default_env()
-                .add_directive("sprout_reindex_kind0=info".parse()?)
+                .add_directive("buzz_reindex_kind0=info".parse()?)
                 .add_directive("buzz_relay=info".parse()?),
         )
         .init();

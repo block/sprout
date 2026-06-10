@@ -1,6 +1,6 @@
 //! Local mesh serve→client→inference smoke test.
 //!
-//! Proves the full path Sprout's "Share compute" + "Run on relay mesh" pair
+//! Proves the full path Buzz's "Share compute" + "Run on relay mesh" pair
 //! relies on, on a single box and without a relay or Nostr discovery:
 //!
 //!   1. Start a SERVE node hosting a GGUF (the `serve::start` path desktop

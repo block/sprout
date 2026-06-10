@@ -1,4 +1,4 @@
-//! Network utility functions for Sprout.
+//! Network utility functions for Buzz.
 //!
 //! Provides shared helpers used across crates for SSRF protection and
 //! IP address classification.

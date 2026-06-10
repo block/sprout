@@ -5,7 +5,7 @@
 //!
 //! 1. Validates HMAC signature + 30s TTL (fail-closed)
 //! 2. Resolves kind:30617 → protection rules
-//! 3. Resolves pusher's channel role via sprout-channel binding
+//! 3. Resolves pusher's channel role via buzz-channel binding
 //! 4. Promotes Bot → Member (bots in a channel push as members)
 //! 5. Calls `buzz_core::git_perms::evaluate_push()`
 //! 6. Returns 200 (allow) or 403 (deny with reasons)
@@ -279,7 +279,7 @@ pub async fn hook_policy_check(
         Ok(parsed) => {
             // Log unknown rules as warnings (helps catch typos).
             for unknown in &parsed.unknown_rules {
-                warn!(repo = %req.repo_id, rule = %unknown, "unknown sprout-protect rule (skipped)");
+                warn!(repo = %req.repo_id, rule = %unknown, "unknown buzz-protect rule (skipped)");
             }
             parsed.rules
         }
@@ -293,7 +293,7 @@ pub async fn hook_policy_check(
     // 6. Resolve channel and check archived state (applies to ALL pushers including owner).
     let channel_id = tags
         .iter()
-        .find(|t| t.first().map(|s| s.as_str()) == Some("sprout-channel"))
+        .find(|t| t.first().map(|s| s.as_str()) == Some("buzz-channel"))
         .and_then(|t| t.get(1))
         .and_then(|id| Uuid::parse_str(id).ok());
 
@@ -317,7 +317,7 @@ pub async fn hook_policy_check(
     } else {
         match channel_id {
             None => {
-                warn!(repo = %req.repo_id, "hook callback: no sprout-channel binding");
+                warn!(repo = %req.repo_id, "hook callback: no buzz-channel binding");
                 return (StatusCode::FORBIDDEN, "no channel binding").into_response();
             }
             Some(ch_id) => {

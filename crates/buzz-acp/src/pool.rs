@@ -921,7 +921,7 @@ pub async fn run_prompt_task(
     // When the batch is a single slash-command message (e.g. "@Eva /goal …"),
     // `slash_command` holds the bare command. It is sent as the FIRST prompt
     // content block so ACP connectors' slash-command detection
-    // (`prompt[0].text.startsWith("/")`) fires; the wrapped Sprout context
+    // (`prompt[0].text.startsWith("/")`) fires; the wrapped Buzz context
     // follows as a second block.
     let mut slash_command: Option<String> = None;
     let prompt_text = if let Some(text) = prompt_text {
@@ -1002,7 +1002,7 @@ pub async fn run_prompt_task(
     // ── Send the actual prompt ────────────────────────────────────────────
 
     // Slash-command pass-through sends two text blocks: the bare command
-    // first (so connector detection fires), then the wrapped Sprout context.
+    // first (so connector detection fires), then the wrapped Buzz context.
     let prompt_blocks: Vec<&str> = match slash_command {
         Some(ref cmd) => vec![cmd.as_str(), prompt_text.as_str()],
         None => vec![prompt_text.as_str()],

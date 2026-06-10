@@ -20,7 +20,7 @@ const OBSERVER_BUFFER_CAP: usize = 1_000;
 /// Best-effort metadata attached to observer events.
 #[derive(Clone, Debug, Default)]
 pub struct ObserverContext {
-    /// Sprout channel UUID for the current turn, when channel-scoped.
+    /// Buzz channel UUID for the current turn, when channel-scoped.
     pub channel_id: Option<String>,
     /// ACP session ID associated with the current turn, once known.
     pub session_id: Option<String>,
@@ -63,7 +63,7 @@ pub struct ObserverEvent {
     pub kind: String,
     /// Pool slot index for the agent process that emitted the event.
     pub agent_index: Option<usize>,
-    /// Sprout channel UUID for channel-scoped events.
+    /// Buzz channel UUID for channel-scoped events.
     pub channel_id: Option<String>,
     /// ACP session ID when known.
     pub session_id: Option<String>,

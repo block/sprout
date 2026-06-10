@@ -59,7 +59,7 @@ fn check_pubkey_hex(s: &str, field: &str) -> Result<String, SdkError> {
 
 /// Validate and normalize a NIP-30 custom emoji shortcode.
 ///
-/// Shortcodes are case-insensitive in Sprout's relay-global set; lowercase
+/// Shortcodes are case-insensitive in Buzz's relay-global set; lowercase
 /// normalization prevents `party_parrot` and `Party_Parrot` from colliding.
 pub fn normalize_custom_emoji_shortcode(shortcode: &str) -> Result<String, SdkError> {
     let trimmed = shortcode.trim().trim_matches(':');
@@ -339,7 +339,7 @@ pub fn build_edit(
 
 // ── Builder 6: build_delete_message ──────────────────────────────────────────
 
-/// Build a Sprout-native delete event (kind 9005).
+/// Build a Buzz-native delete event (kind 9005).
 pub fn build_delete_message(
     channel_id: Uuid,
     target_event_id: nostr::EventId,
@@ -432,12 +432,12 @@ pub fn build_remove_reaction(reaction_event_id: nostr::EventId) -> Result<EventB
 /// d-tag for a member's own custom emoji set. Each member publishes one
 /// user-signed kind:30030 under this d-tag; the workspace palette is the
 /// client-side union of every member's set.
-pub const CUSTOM_EMOJI_SET_D_TAG: &str = "sprout:custom-emoji";
+pub const CUSTOM_EMOJI_SET_D_TAG: &str = "buzz:custom-emoji";
 
 /// Build a member's own custom emoji set event (kind:30030, NIP-30/NIP-51).
 ///
 /// User-signed and parameterized-replaceable, keyed by `(pubkey, 30030,
-/// "sprout:custom-emoji")`. Replaces the caller's prior set. The workspace
+/// "buzz:custom-emoji")`. Replaces the caller's prior set. The workspace
 /// palette shown in clients is the union of every member's set, deduped by
 /// `(shortcode, url)` on read. Add/remove is read-own-set → mutate → rebuild.
 pub fn build_custom_emoji_set(emojis: &[CustomEmoji]) -> Result<EventBuilder, SdkError> {

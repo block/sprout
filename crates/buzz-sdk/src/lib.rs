@@ -1,6 +1,6 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
-//! `buzz-sdk` — typed Nostr event builders for Sprout operations.
+//! `buzz-sdk` — typed Nostr event builders for Buzz operations.
 //!
 //! # Mental Model
 //!

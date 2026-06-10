@@ -3,7 +3,7 @@
 //! `buzz-core` — zero-I/O foundation types for the Buzz relay.
 //!
 //! Provides [`StoredEvent`], filter matching, kind constants, and event
-//! verification. All other Sprout crates depend on this one.
+//! verification. All other Buzz crates depend on this one.
 
 /// Channel and membership enums shared across crates.
 pub mod channel;
@@ -18,7 +18,7 @@ pub mod event;
 pub mod filter;
 /// Git permission types — ref patterns, protection rules, policy evaluation.
 pub mod git_perms;
-/// Sprout kind number registry — custom event type constants.
+/// Buzz kind number registry — custom event type constants.
 pub mod kind;
 /// Network utilities — SSRF-safe IP classification.
 pub mod network;

@@ -6,7 +6,7 @@
 //!
 //! ## The 412 sharp edge
 //!
-//! `rust-s3 = "0.37"` is shared across the workspace with `sprout-media`. The
+//! `rust-s3 = "0.37"` is shared across the workspace with `buzz-media`. The
 //! `fail-on-err` Cargo feature is unified ON across the build graph, which
 //! means non-2xx responses arrive here as `S3Error::HttpFailWithBody(code,
 //! body)` *before* the caller sees `ResponseData`. The pointer-CAS path treats
@@ -771,7 +771,7 @@ mod probe {
     //!   BUZZ_GIT_S3_PROBE=1 cargo test -p buzz-relay --lib \
     //!     api::git::store::probe -- --nocapture --test-threads=1
     //!
-    //! Pre-req: `docker compose up minio` and the `sprout-git` bucket exists.
+    //! Pre-req: `docker compose up minio` and the `buzz-git` bucket exists.
 
     use super::*;
 
@@ -784,7 +784,7 @@ mod probe {
             "http://localhost:9000",
             "buzz_dev",
             "buzz_dev_secret",
-            "sprout-git",
+            "buzz-git",
         )
         .expect("connect minio")
     }

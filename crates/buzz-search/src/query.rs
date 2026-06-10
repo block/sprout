@@ -271,7 +271,7 @@ mod tests {
                 {
                     "document": {
                         "id": "abc123",
-                        "content": "hello sprout",
+                        "content": "hello buzz",
                         "kind": 1,
                         "pubkey": "deadbeef",
                         "channel_id": "chan-uuid",
@@ -304,7 +304,7 @@ mod tests {
 
         let h0 = &result.hits[0];
         assert_eq!(h0.event_id, "abc123");
-        assert_eq!(h0.content, "hello sprout");
+        assert_eq!(h0.content, "hello buzz");
         assert_eq!(h0.kind, 1);
         assert_eq!(h0.pubkey, "deadbeef");
         assert_eq!(h0.channel_id.as_deref(), Some("chan-uuid"));

@@ -73,7 +73,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
     let relay_url = state.config.relay_url.clone();
     let auth_svc = Arc::clone(&state.auth);
 
-    metrics::counter!("sprout_auth_attempts_total", "method" => "nip42").increment(1);
+    metrics::counter!("buzz_auth_attempts_total", "method" => "nip42").increment(1);
 
     // Pure NIP-42 verification — crypto only, no DB lookups.
     match auth_svc
@@ -97,7 +97,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 };
                 if !allowed {
                     warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "pubkey not in allowlist");
-                    metrics::counter!("sprout_auth_failures_total", "reason" => "allowlist_denied")
+                    metrics::counter!("buzz_auth_failures_total", "reason" => "allowlist_denied")
                         .increment(1);
                     *conn.auth_state.write().await = AuthState::Failed;
                     conn.send(RelayMessage::ok(
@@ -120,7 +120,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 Ok(owner) => owner,
                 Err(e) => {
                     warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), error = ?e, "not a relay member");
-                    metrics::counter!("sprout_auth_failures_total", "reason" => "not_relay_member")
+                    metrics::counter!("buzz_auth_failures_total", "reason" => "not_relay_member")
                         .increment(1);
                     *conn.auth_state.write().await = AuthState::Failed;
                     conn.send(RelayMessage::ok(
@@ -223,8 +223,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
         }
         Err(e) => {
             warn!(conn_id = %conn_id, error = %e, "NIP-42 auth failed");
-            metrics::counter!("sprout_auth_failures_total", "reason" => "nip42_invalid")
-                .increment(1);
+            metrics::counter!("buzz_auth_failures_total", "reason" => "nip42_invalid").increment(1);
             *conn.auth_state.write().await = AuthState::Failed;
             conn.send(RelayMessage::ok(
                 &event_id_hex,

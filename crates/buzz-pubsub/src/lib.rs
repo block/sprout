@@ -10,7 +10,7 @@
 //!   ├── deadpool-redis pool → PUBLISH, SET, ZADD, etc.
 //!   │
 //!   └── dedicated redis::aio::PubSub connection (NOT from pool)
-//!         └── PSUBSCRIBE sprout:channel:*
+//!         └── PSUBSCRIBE buzz:channel:*
 //!               └── run_subscriber() → broadcast::channel(4096) → N WS receivers
 //! ```
 //!

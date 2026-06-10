@@ -8,7 +8,7 @@ use client::BuzzClient;
 use error::CliError;
 use nostr::Keys;
 
-/// Run the Sprout CLI from raw arguments (including `argv[0]`).
+/// Run the Buzz CLI from raw arguments (including `argv[0]`).
 ///
 /// Returns a process exit code (0 = success).
 ///
@@ -387,7 +387,7 @@ pub enum ChannelsCmd {
     },
     /// Search channels by human-readable name
     #[command(
-        after_help = "Examples:\n  buzz channels search --query composer\n  buzz channels search --query sprout-chat-composer --exact\n  buzz channels search --query design --include-archived"
+        after_help = "Examples:\n  buzz channels search --query composer\n  buzz channels search --query buzz-chat-composer --exact\n  buzz channels search --query design --include-archived"
     )]
     Search {
         /// Search query (case-insensitive substring of channel name)

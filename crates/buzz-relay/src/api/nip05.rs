@@ -29,7 +29,7 @@ pub async fn nostr_nip05(
         None => serde_json::json!({ "names": {}, "relays": {} }),
         Some(n) => {
             let name = n.to_lowercase();
-            // Extract domain from relay_url (e.g. "ws://sprout.block.xyz" → "sprout.block.xyz")
+            // Extract domain from relay_url (e.g. "ws://buzz.block.xyz" → "buzz.block.xyz")
             let domain = extract_domain(&state.config.relay_url);
             match state.db.get_user_by_nip05(&name, &domain).await {
                 Ok(Some(user)) => {
@@ -78,7 +78,7 @@ pub(crate) fn canonicalize_nip05(raw: &str, relay_url: &str) -> Result<String, S
 }
 
 /// Extract the domain (host) from a URL string.
-/// e.g. "ws://localhost:3000" → "localhost", "wss://sprout.block.xyz" → "sprout.block.xyz"
+/// e.g. "ws://localhost:3000" → "localhost", "wss://buzz.block.xyz" → "buzz.block.xyz"
 pub(crate) fn extract_domain(url: &str) -> String {
     url.trim_start_matches("wss://")
         .trim_start_matches("ws://")

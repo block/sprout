@@ -333,7 +333,7 @@ mod tests {
             "http://localhost:9000",
             "buzz_dev",
             "buzz_dev_secret",
-            "sprout-git",
+            "buzz-git",
         )
         .expect("connect minio")
     }

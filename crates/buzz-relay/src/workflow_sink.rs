@@ -103,13 +103,13 @@ impl ActionSink for RelayActionSink {
             //    - Signed by relay keypair (event.pubkey = relay pubkey)
             //    - `p` tag attributes the message to the workflow owner
             //    - `h` tag scopes to the channel (NIP-29, canonical UUID)
-            //    - `sprout:workflow` tag prevents recursive workflow triggering
+            //    - `buzz:workflow` tag prevents recursive workflow triggering
             let tags = vec![
                 Tag::parse(["p", &author_pubkey_hex])
                     .map_err(|e| ActionSinkError::EventBuild(format!("p tag: {e}")))?,
                 Tag::parse(["h", &channel_id_canonical])
                     .map_err(|e| ActionSinkError::EventBuild(format!("h tag: {e}")))?,
-                Tag::parse(["sprout:workflow", "true"])
+                Tag::parse(["buzz:workflow", "true"])
                     .map_err(|e| ActionSinkError::EventBuild(format!("workflow tag: {e}")))?,
             ];
 

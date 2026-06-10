@@ -29,7 +29,7 @@ use tracing::{error, info};
 /// - `GIT_OBJECT_DIRECTORY` — quarantine object store
 /// - `GIT_ALTERNATE_OBJECT_DIRECTORIES` — includes the real object store
 const PRE_RECEIVE_HOOK: &str = r#"#!/usr/bin/env bash
-# Sprout pre-receive hook — FAIL-CLOSED
+# Buzz pre-receive hook — FAIL-CLOSED
 # ANY error, timeout, or non-200 response → reject the push.
 set -eo pipefail
 

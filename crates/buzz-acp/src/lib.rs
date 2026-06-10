@@ -1349,19 +1349,19 @@ async fn tokio_main() -> Result<()> {
                     None
                 }
                 // Remaining branches don't touch pool — evaluated when pool is idle.
-                sprout_event = relay.next_event() => {
+                buzz_event = relay.next_event() => {
                     let _ = result_rx; // end split borrow before relay handling
-                    match sprout_event {
-                        Some(sprout_event) => {
-                            let kind_u32 = sprout_event.event.kind.as_u16() as u32;
+                    match buzz_event {
+                        Some(buzz_event) => {
+                            let kind_u32 = buzz_event.event.kind.as_u16() as u32;
 
                             // ── Membership notification handling ──────────────
                             if kind_u32 == KIND_MEMBER_ADDED_NOTIFICATION
                                 || kind_u32 == KIND_MEMBER_REMOVED_NOTIFICATION
                             {
-                                let ch = sprout_event.channel_id;
-                                let ts = sprout_event.event.created_at.as_secs();
-                                let eid = sprout_event.event.id.to_hex();
+                                let ch = buzz_event.channel_id;
+                                let ts = buzz_event.event.created_at.as_secs();
+                                let eid = buzz_event.event.id.to_hex();
 
                                 // Two-layer membership dedup:
                                 //
@@ -1464,26 +1464,26 @@ async fn tokio_main() -> Result<()> {
                             }
                             // ── End membership notification handling ──────────
 
-                            if config.ignore_self && sprout_event.event.pubkey.to_hex() == pubkey_hex {
-                                tracing::debug!(channel_id = %sprout_event.channel_id, "dropping self-authored event");
+                            if config.ignore_self && buzz_event.event.pubkey.to_hex() == pubkey_hex {
+                                tracing::debug!(channel_id = %buzz_event.channel_id, "dropping self-authored event");
                                 continue;
                             }
 
                             // ── Shutdown command handling ─────────────────────
                             // Check: kind:9, content "!shutdown", from owner, mentions THIS agent.
                             let is_shutdown = kind_u32 == KIND_STREAM_MESSAGE
-                                && sprout_event.event.content.trim() == "!shutdown"
-                                && sprout_event.event.tags.iter().any(|t| {
+                                && buzz_event.event.content.trim() == "!shutdown"
+                                && buzz_event.event.tags.iter().any(|t| {
                                     t.as_slice().first().map(|s| s.as_str()) == Some("p")
                                         && t.as_slice().get(1).map(|s| s.as_str()) == Some(pubkey_hex.as_str())
                                 });
                             if is_shutdown {
                                 let owner = owner_cache.get();
                                 if let Some(owner) = owner {
-                                    if sprout_event.event.pubkey.to_hex() == *owner {
+                                    if buzz_event.event.pubkey.to_hex() == *owner {
                                         tracing::info!(
-                                            channel_id = %sprout_event.channel_id,
-                                            sender = %sprout_event.event.pubkey.to_hex(),
+                                            channel_id = %buzz_event.channel_id,
+                                            sender = %buzz_event.event.pubkey.to_hex(),
                                             "shutdown command from owner — exiting gracefully"
                                         );
                                         let _ = shutdown_tx.send(());
@@ -1505,18 +1505,18 @@ async fn tokio_main() -> Result<()> {
                             // --multiple-event-handling. It is explicit user
                             // intent, not an automatic policy decision.
                             let is_cancel = kind_u32 == KIND_STREAM_MESSAGE
-                                && sprout_event.event.content.trim() == "!cancel"
-                                && sprout_event.event.tags.iter().any(|t| {
+                                && buzz_event.event.content.trim() == "!cancel"
+                                && buzz_event.event.tags.iter().any(|t| {
                                     t.as_slice().first().map(|s| s.as_str()) == Some("p")
                                         && t.as_slice().get(1).map(|s| s.as_str()) == Some(pubkey_hex.as_str())
                                 });
                             if is_cancel {
                                 if let Some(owner) = owner_cache.get() {
-                                    if sprout_event.event.pubkey.to_hex() == *owner {
-                                        let fired = cancel_in_flight_task(&mut pool, sprout_event.channel_id, CancelMode::Stop);
+                                    if buzz_event.event.pubkey.to_hex() == *owner {
+                                        let fired = cancel_in_flight_task(&mut pool, buzz_event.channel_id, CancelMode::Stop);
                                         if !fired {
                                             tracing::warn!(
-                                                channel_id = %sprout_event.channel_id,
+                                                channel_id = %buzz_event.channel_id,
                                                 "!cancel received but no in-flight task — no-op"
                                             );
                                         }
@@ -1539,7 +1539,7 @@ async fn tokio_main() -> Result<()> {
                             // same human). Allowlist is unchanged: owner +
                             // explicit pubkey list only.
                             {
-                                let author = sprout_event.event.pubkey.to_hex();
+                                let author = buzz_event.event.pubkey.to_hex();
                                 let allowed = match &config.respond_to {
                                     RespondTo::Anyone => true,
                                     RespondTo::Nobody => false,
@@ -1554,8 +1554,8 @@ async fn tokio_main() -> Result<()> {
                                 };
                                 if !allowed {
                                     tracing::debug!(
-                                        channel_id = %sprout_event.channel_id,
-                                        author = %sprout_event.event.pubkey.to_hex(),
+                                        channel_id = %buzz_event.channel_id,
+                                        author = %buzz_event.event.pubkey.to_hex(),
                                         mode = %config.respond_to,
                                         "inbound author gate — dropping event"
                                     );
@@ -1564,21 +1564,21 @@ async fn tokio_main() -> Result<()> {
                             }
                             // ── End inbound author gate ──────────────────────
 
-                            let matched = filter::match_event(&sprout_event.event, sprout_event.channel_id, &rules, &pubkey_hex).await;
+                            let matched = filter::match_event(&buzz_event.event, buzz_event.channel_id, &rules, &pubkey_hex).await;
                             let prompt_tag = match matched {
                                 Some(m) => m.prompt_tag,
                                 None => {
-                                    tracing::debug!(channel_id = %sprout_event.channel_id, kind = sprout_event.event.kind.as_u16(), "event matched no rule — dropping");
+                                    tracing::debug!(channel_id = %buzz_event.channel_id, kind = buzz_event.event.kind.as_u16(), "event matched no rule — dropping");
                                     continue;
                                 }
                             };
                             // Capture author pubkey before queue.push() moves
-                            // sprout_event.event (needed for mode gate below).
-                            let author_hex = sprout_event.event.pubkey.to_hex();
-                            let event_id_hex = sprout_event.event.id.to_hex();
+                            // buzz_event.event (needed for mode gate below).
+                            let author_hex = buzz_event.event.pubkey.to_hex();
+                            let event_id_hex = buzz_event.event.id.to_hex();
                             let accepted = queue.push(QueuedEvent {
-                                channel_id: sprout_event.channel_id,
-                                event: sprout_event.event,
+                                channel_id: buzz_event.channel_id,
+                                event: buzz_event.event,
                                 received_at: std::time::Instant::now(),
                                 prompt_tag,
                             });
@@ -1596,7 +1596,7 @@ async fn tokio_main() -> Result<()> {
                             // ── Multiple-event-handling mode gate ─────────────
                             // Event is already queued. If mode requires it AND
                             // the channel has an in-flight task, fire cancel.
-                            if accepted && queue.is_channel_in_flight(sprout_event.channel_id) {
+                            if accepted && queue.is_channel_in_flight(buzz_event.channel_id) {
                                 let should_cancel = match config.multiple_event_handling {
                                     MultipleEventHandling::Queue => false,
                                     MultipleEventHandling::Interrupt => true,
@@ -1608,7 +1608,7 @@ async fn tokio_main() -> Result<()> {
                                     }
                                 };
                                 if should_cancel {
-                                    cancel_in_flight_task(&mut pool, sprout_event.channel_id, CancelMode::Interrupt);
+                                    cancel_in_flight_task(&mut pool, buzz_event.channel_id, CancelMode::Interrupt);
                                 }
                             }
                             // ── End mode gate ────────────────────────────────

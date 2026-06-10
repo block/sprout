@@ -1,4 +1,4 @@
-//! Smart HTTP git transport for Sprout.
+//! Smart HTTP git transport for Buzz.
 //!
 //! Three endpoints implement the git Smart HTTP protocol:
 //! - `GET  /git/{owner}/{repo}/info/refs?service={svc}` — ref advertisement
@@ -72,7 +72,7 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for GitAuth {
                     .status(StatusCode::UNAUTHORIZED)
                     .header(
                         "WWW-Authenticate",
-                        format!("Nostr realm=\"sprout\", method=\"{method}\""),
+                        format!("Nostr realm=\"buzz\", method=\"{method}\""),
                     )
                     .body(Body::from("missing Authorization header"))
                     .unwrap()
@@ -83,7 +83,7 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for GitAuth {
                 .status(StatusCode::UNAUTHORIZED)
                 .header(
                     "WWW-Authenticate",
-                    format!("Nostr realm=\"sprout\", method=\"{method}\""),
+                    format!("Nostr realm=\"buzz\", method=\"{method}\""),
                 )
                 .body(Body::from("expected Authorization: Nostr <base64>"))
                 .unwrap()

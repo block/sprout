@@ -1,4 +1,4 @@
-//! E2E tests for the Sprout REST API.
+//! E2E tests for the Buzz REST API.
 //!
 //! These tests require a running relay instance with `require_auth_token=false`
 //! (dev mode). By default they are marked `#[ignore]` so that `cargo test`

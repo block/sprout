@@ -42,10 +42,10 @@ use std::time::Duration;
 use buzz_test_client::BuzzTestClient;
 use nostr::{Filter, Keys, Kind};
 
-/// Sprout's relay-owned mesh status kind (must match `buzz_core::kind`).
+/// Buzz's relay-owned mesh status kind (must match `buzz_core::kind`).
 const KIND_MESH_LLM_RELAY_STATUS: u16 = 30621;
 const MESH_STATUS_D_TAG: &str = "buzz-relay-mesh";
-const MESH_STATUS_TYPE: &str = "sprout-mesh-status";
+const MESH_STATUS_TYPE: &str = "buzz-mesh-status";
 
 fn relay_url() -> String {
     std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string())
@@ -271,7 +271,7 @@ async fn live_agent_completes_chat_over_mesh() {
 
 /// Assertion 6 (split): a model too large for one node + two serve nodes in the
 /// same mesh → mesh auto-splits → the same chat (assertion 4) completes via the
-/// split route. Auto-split is mesh runtime behavior (no Sprout code); this row
+/// split route. Auto-split is mesh runtime behavior (no Buzz code); this row
 /// only verifies two serve desktops in one mesh produce a working split.
 ///
 /// Runbook only — needs a known too-large-for-one-node fixture + 2 serve nodes.

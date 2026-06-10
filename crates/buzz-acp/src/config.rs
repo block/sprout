@@ -350,7 +350,7 @@ pub struct CliArgs {
     pub no_memory: bool,
 
     /// Disable the [Base] platform-context section prepended to every prompt.
-    /// When set, agents receive only the persona [System] prompt with no Sprout orientation.
+    /// When set, agents receive only the persona [System] prompt with no Buzz orientation.
     #[arg(long, env = "BUZZ_ACP_NO_BASE_PROMPT")]
     pub no_base_prompt: bool,
 

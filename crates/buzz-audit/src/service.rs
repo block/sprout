@@ -13,7 +13,7 @@ use crate::{
     schema::AUDIT_SCHEMA_SQL,
 };
 
-/// Advisory lock key derived from a stable hash of "sprout_audit".
+/// Advisory lock key derived from a stable hash of "buzz_audit".
 const AUDIT_LOCK_KEY: i64 = 0x5370_7275_7441_7564; // "SprutAud" as hex
 
 /// Append-only audit log service backed by Postgres.

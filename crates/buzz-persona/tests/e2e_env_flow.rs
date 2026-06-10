@@ -2,7 +2,7 @@
 //!
 //! These tests exercise the full pack-resolve pipeline and verify that:
 //! - Goose personas emit GOOSE_PROVIDER, GOOSE_MODEL, GOOSE_TEMPERATURE
-//! - Sprout-agent personas emit BUZZ_AGENT_MODEL, BUZZ_AGENT_PROVIDER
+//! - Buzz-agent personas emit BUZZ_AGENT_MODEL, BUZZ_AGENT_PROVIDER
 //! - The import filter strips derived provider/model keys but preserves knobs
 //! - Multi-runtime packs produce correct per-persona env var prefixes
 //! - Models without a provider prefix emit only the model key (no provider)
@@ -94,7 +94,7 @@ You are a test bot.
     );
 }
 
-// ── Test 2: Sprout-agent persona emits BUZZ_AGENT_* vars ───────────────────
+// ── Test 2: Buzz-agent persona emits BUZZ_AGENT_* vars ───────────────────
 
 #[test]
 fn resolve_pack_buzz_agent_persona_emits_buzz_agent_vars() {
@@ -260,12 +260,12 @@ You are a goose bot.
     )
     .unwrap();
 
-    // Sprout-agent persona
+    // Buzz-agent persona
     fs::write(
         root.join("agents/buzz-bot.persona.md"),
         r#"---
 name: "buzz-bot"
-display_name: "Sprout Bot"
+display_name: "Buzz Bot"
 description: "A buzz-agent runtime bot"
 runtime: "buzz-agent"
 model: "openai:gpt-4o"
@@ -309,7 +309,7 @@ You are a buzz bot.
         "goose persona must not emit BUZZ_AGENT_PROVIDER"
     );
 
-    // Sprout-agent persona gets BUZZ_AGENT_* env vars
+    // Buzz-agent persona gets BUZZ_AGENT_* env vars
     let buzz_env: std::collections::HashMap<_, _> = buzz
         .runtime_env_vars
         .iter()

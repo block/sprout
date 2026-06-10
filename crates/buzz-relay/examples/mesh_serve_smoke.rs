@@ -1,6 +1,6 @@
 //! Local mesh-serve inference smoke test.
 //!
-//! Serves a GGUF model through the same `mesh_llm_sdk::serve` path Sprout
+//! Serves a GGUF model through the same `mesh_llm_sdk::serve` path Buzz
 //! desktop uses in "Share compute" mode, then drives one chat completion
 //! against the node's local OpenAI-compatible endpoint. No mesh publish, no
 //! auto-join, no Nostr discovery — pure single-node serve-and-self-consume,

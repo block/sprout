@@ -1,7 +1,7 @@
 //! Pack manifest types and `plugin.json` parser.
 //!
 //! Every persona pack ships a `.plugin/plugin.json` that describes the pack
-//! (OPS metadata) and tells Sprout where to find personas, hooks, and MCP
+//! (OPS metadata) and tells Buzz where to find personas, hooks, and MCP
 //! config.
 //!
 //! ```json
@@ -40,7 +40,7 @@ pub enum ManifestError {
 #[serde(rename_all = "snake_case")]
 pub struct Engines {
     /// Semver range the Buzz runtime must satisfy (e.g. `">=0.9.0"`).
-    #[serde(skip_serializing_if = "Option::is_none", alias = "sprout")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "buzz")]
     pub buzz: Option<String>,
 }
 
@@ -107,7 +107,7 @@ pub struct PackManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engines: Option<Engines>,
 
-    // ── Sprout extensions ─────────────────────────────────────────────────
+    // ── Buzz extensions ─────────────────────────────────────────────────
     /// Paths to `.persona.md` files (pack-relative).
     #[serde(default)]
     pub personas: Vec<String>,
@@ -137,7 +137,7 @@ pub struct PackManifest {
 /// Intentionally permissive (no `deny_unknown_fields`): `plugin.json` is an
 /// OPS superset and may carry fields from other tools (e.g. `ops_category`,
 /// `marketplace_tags`). Unknown fields are silently ignored here; the
-/// validator issues advisory warnings for Sprout-unknown keys.
+/// validator issues advisory warnings for Buzz-unknown keys.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 struct RawManifest {
@@ -240,7 +240,7 @@ mod tests {
             "license": "MIT",
             "homepage": "https://example.com",
             "keywords": ["ai", "bot"],
-            "engines": {"sprout": ">=0.9.0"},
+            "engines": {"buzz": ">=0.9.0"},
             "personas": ["personas/a.persona.md", "personas/b.persona.md"],
             "pack_instructions": "instructions.md",
             "mcp_config": ".mcp.json",

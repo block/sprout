@@ -1,6 +1,6 @@
 #![deny(unsafe_code)]
 
-//! Sprout instance administration CLI.
+//! Buzz instance administration CLI.
 //!
 //! In the pure Nostr architecture, API tokens no longer exist.
 //! Admin operations are performed via signed Nostr events (NIP-43 relay admin commands).

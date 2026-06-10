@@ -59,7 +59,7 @@ fn union_custom_emoji(events: &[serde_json::Value]) -> Vec<EmojiEntry> {
 }
 
 /// List the workspace custom emoji palette: the union of every member's
-/// own kind:30030 set (d=`sprout:custom-emoji`).
+/// own kind:30030 set (d=`buzz:custom-emoji`).
 async fn cmd_list(client: &BuzzClient) -> Result<(), CliError> {
     let filter = serde_json::json!({
         "kinds": [buzz_sdk::kind::KIND_EMOJI_SET],
@@ -322,14 +322,14 @@ mod tests {
         let events = vec![
             serde_json::json!({
                 "tags": [
-                    ["d", "sprout:custom-emoji"],
+                    ["d", "buzz:custom-emoji"],
                     ["emoji", "zort", "https://example.com/zort.png"],
                     ["emoji", "narf", "https://example.com/narf.png"]
                 ]
             }),
             serde_json::json!({
                 "tags": [
-                    ["d", "sprout:custom-emoji"],
+                    ["d", "buzz:custom-emoji"],
                     // exact duplicate (same shortcode+url) — collapses
                     ["emoji", "narf", "https://example.com/narf.png"],
                     // same shortcode, different url — both kept (distinct pair)

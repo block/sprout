@@ -40,7 +40,7 @@ pub struct ProxyState {
     pub guest_store: Arc<GuestStore>,
     /// In-memory invite token registry (temporary access via bearer token).
     pub invite_store: Arc<InviteStore>,
-    /// Event translator: NIP-28 ↔ Sprout internal format.
+    /// Event translator: NIP-28 ↔ Buzz internal format.
     pub translator: Arc<Translator>,
     /// Upstream relay client — used to send events, REQs, and CLOSEs.
     pub upstream: Arc<UpstreamClient>,
@@ -125,7 +125,7 @@ async fn root_handler(
 fn nip11_response() -> impl IntoResponse {
     let nip11 = serde_json::json!({
         "name": "buzz-proxy",
-        "description": "Sprout NIP-28 guest proxy for standard Nostr clients",
+        "description": "Buzz NIP-28 guest proxy for standard Nostr clients",
         "supported_nips": [1, 11, 28, 42],
         "software": "buzz-proxy",
         "version": env!("CARGO_PKG_VERSION"),

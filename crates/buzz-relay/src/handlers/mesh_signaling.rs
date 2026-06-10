@@ -1,6 +1,6 @@
 //! Mesh hole-punch signaling: the relay's only role in the v1 direct-iroh mesh.
 //!
-//! v1 mesh is "Sprout-coordinated direct iroh" — no server-side iroh relay/proxy.
+//! v1 mesh is "Buzz-coordinated direct iroh" — no server-side iroh relay/proxy.
 //! The relay's entire job for connectivity is: when a member asks to dial a peer
 //! it discovered via kind:30621, validate that BOTH ends are relay members, then
 //! emit a *paired* live "call-me-now" so both desktops hole-punch at the same
@@ -176,7 +176,7 @@ pub fn call_me_now_content(
 ) -> String {
     let mut obj = serde_json::json!({
         "v": 1,
-        "type": "sprout-iroh-call-me-now",
+        "type": "buzz-iroh-call-me-now",
         "peer_endpoint_addr": peer_endpoint_addr,
         "attempt_id": attempt_id,
         "expires_at": expires_at,
@@ -406,7 +406,7 @@ mod tests {
     fn call_me_now_content_shape() {
         let s = call_me_now_content("ENDPOINT", None, "att-1", 1234);
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
-        assert_eq!(v["type"], "sprout-iroh-call-me-now");
+        assert_eq!(v["type"], "buzz-iroh-call-me-now");
         assert_eq!(v["peer_endpoint_addr"], "ENDPOINT");
         assert_eq!(v["attempt_id"], "att-1");
         assert_eq!(v["expires_at"], 1234);
@@ -636,7 +636,7 @@ mod tests {
 
         let requester_content: serde_json::Value =
             serde_json::from_str(&requester_event.content).expect("requester content JSON");
-        assert_eq!(requester_content["type"], "sprout-iroh-call-me-now");
+        assert_eq!(requester_content["type"], "buzz-iroh-call-me-now");
         assert_eq!(requester_content["peer_endpoint_addr"], "PEER_ADDR");
         assert_eq!(requester_content["peer_endpoint_id"], "PEER_ID");
         assert_eq!(requester_content["attempt_id"], "attempt-1");
@@ -644,7 +644,7 @@ mod tests {
 
         let target_content: serde_json::Value =
             serde_json::from_str(&target_event.content).expect("target content JSON");
-        assert_eq!(target_content["type"], "sprout-iroh-call-me-now");
+        assert_eq!(target_content["type"], "buzz-iroh-call-me-now");
         assert_eq!(target_content["peer_endpoint_addr"], "SELF_ADDR");
         assert_eq!(target_content["peer_endpoint_id"], "SELF_ID");
         assert_eq!(target_content["attempt_id"], "attempt-1");

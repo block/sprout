@@ -322,14 +322,14 @@ mod tests {
         let persona = json!({
             "triggers": {
                 "mentions": true,
-                "keywords": ["help", "sprout"],
+                "keywords": ["help", "buzz"],
                 "all_messages": false,
             }
         });
         let resolved = resolve_persona_config(&persona, None);
         let t = resolved.triggers.unwrap();
         assert!(t.mentions);
-        assert_eq!(t.keywords, vec!["help", "sprout"]);
+        assert_eq!(t.keywords, vec!["help", "buzz"]);
         assert!(!t.all_messages);
     }
 

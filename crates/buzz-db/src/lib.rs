@@ -1,6 +1,6 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
-//! buzz-db — Postgres event store for Sprout.
+//! buzz-db — Postgres event store for Buzz.
 //!
 //! ## Design invariants
 //! - AUTH events (kind 22242) are never stored — they carry bearer tokens.

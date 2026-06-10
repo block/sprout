@@ -79,8 +79,8 @@ async fn run_rate_limit(
 
 /// Redis-backed rate limiter using fixed-window counters.
 ///
-/// Each key is `sprout:ratelimit:<pubkey_hex>:<suffix>` (pubkey) or
-/// `sprout:ratelimit:ip:<ip>:conn` (IP). The counter and its TTL are managed
+/// Each key is `buzz:ratelimit:<pubkey_hex>:<suffix>` (pubkey) or
+/// `buzz:ratelimit:ip:<ip>:conn` (IP). The counter and its TTL are managed
 /// atomically via a Lua script to prevent keys from persisting without expiry.
 pub struct RedisRateLimiter {
     pool: deadpool_redis::Pool,

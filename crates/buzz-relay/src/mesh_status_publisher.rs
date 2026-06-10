@@ -1,9 +1,9 @@
 //! Relay-signed mesh-LLM status publication.
 //!
-//! The relay owns the Nostr publication surface for Sprout mesh status. mesh-llm
+//! The relay owns the Nostr publication surface for Buzz mesh status. mesh-llm
 //! remains the source of live runtime truth, but the relay sanitizes that status
 //! and republishes a member-readable, relay-signed parameterized event. This
-//! keeps discovery inside Sprout's relay-membership boundary and avoids mesh's
+//! keeps discovery inside Buzz's relay-membership boundary and avoids mesh's
 //! public-relay publisher path.
 
 use std::sync::Arc;
@@ -31,7 +31,7 @@ pub fn mesh_status_d_tag(reporter_pubkey_hex: &str) -> String {
 }
 
 /// Content schema discriminator.
-pub const MESH_STATUS_TYPE: &str = "sprout-mesh-status";
+pub const MESH_STATUS_TYPE: &str = "buzz-mesh-status";
 
 /// Sanitized relay-published mesh status.
 ///
@@ -44,7 +44,7 @@ pub const MESH_STATUS_TYPE: &str = "sprout-mesh-status";
 pub struct BuzzMeshStatus {
     /// Schema version.
     pub v: u32,
-    /// Constant discriminator: `sprout-mesh-status`.
+    /// Constant discriminator: `buzz-mesh-status`.
     #[serde(rename = "type")]
     pub status_type: String,
     /// Unix timestamp when the relay generated this projection.
@@ -313,7 +313,7 @@ mod tests {
             "token": "endpoint-token-a",
             "node_id": "node-a",
             "mesh_id": "mesh-1",
-            "mesh_name": "sprout",
+            "mesh_name": "buzz",
             "hosted_models": ["Qwen3-8B-Q4_K_M"],
             "serving_models": ["Qwen3-8B-Q4_K_M"],
             "my_vram_gb": 12.0,

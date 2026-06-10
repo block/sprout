@@ -11,9 +11,9 @@
 //!     ["HEAD", "ref: refs/heads/<branch>"],   // symbolic HEAD
 //!   ]
 //!
-//! Sprout extension: a `p` tag carrying the pusher's pubkey (or the repo
+//! Buzz extension: a `p` tag carrying the pusher's pubkey (or the repo
 //! owner on creation events) so subscribers can filter by author of state
-//! transition. Not part of NIP-34 but consistent with the rest of sprout's
+//! transition. Not part of NIP-34 but consistent with the rest of buzz's
 //! event-publishing conventions.
 
 use std::collections::BTreeMap;
@@ -37,7 +37,7 @@ pub struct RefStateInputs<'a> {
     /// `ref_name -> oid_hex`. Only `refs/heads/*` and `refs/tags/*` will be
     /// emitted; other ref namespaces are filtered.
     pub refs: &'a BTreeMap<String, String>,
-    /// Pubkey to include in the `p` tag (sprout extension). On push, this is
+    /// Pubkey to include in the `p` tag (buzz extension). On push, this is
     /// the pusher's pubkey from the receive-pack hook. On repo-creation, this
     /// is the kind:30617 author (repo owner). Hex-encoded (64 chars).
     pub actor_pubkey_hex: &'a str,
@@ -106,7 +106,7 @@ pub fn build_ref_state_event(
         ));
     }
 
-    // p-tag: sprout extension (pusher or owner pubkey).
+    // p-tag: buzz extension (pusher or owner pubkey).
     tags.push(Tag::public_key(actor));
 
     let event = EventBuilder::new(Kind::Custom(30618), "")

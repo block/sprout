@@ -1,6 +1,6 @@
 //! Presence tracking — online/away status with TTL.
 //!
-//! Stored as `SET sprout:presence:{pubkey_hex} "online" EX 90`.
+//! Stored as `SET buzz:presence:{pubkey_hex} "online" EX 90`.
 //! TTL is 3x the 30s heartbeat interval so a single missed heartbeat doesn't
 //! cause presence flap. Clean disconnect deletes immediately.
 
@@ -15,7 +15,7 @@ pub const PRESENCE_TTL_SECS: u64 = 90;
 
 /// Returns the Redis key for the presence entry of `pubkey`.
 pub fn presence_key(pubkey: &PublicKey) -> String {
-    format!("sprout:presence:{}", pubkey.to_hex())
+    format!("buzz:presence:{}", pubkey.to_hex())
 }
 
 /// Sets presence status for `pubkey` with a [`PRESENCE_TTL_SECS`]-second TTL.
@@ -88,8 +88,8 @@ mod tests {
     fn test_presence_key_format() {
         let pubkey = make_pubkey();
         let key = presence_key(&pubkey);
-        assert!(key.starts_with("sprout:presence:"));
-        let hex_part = key.strip_prefix("sprout:presence:").unwrap();
+        assert!(key.starts_with("buzz:presence:"));
+        let hex_part = key.strip_prefix("buzz:presence:").unwrap();
         assert_eq!(hex_part.len(), 64);
         assert!(hex_part.chars().all(|c| c.is_ascii_hexdigit()));
     }

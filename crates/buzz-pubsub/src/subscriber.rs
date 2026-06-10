@@ -12,7 +12,7 @@ const BACKOFF_INITIAL_SECS: u64 = 1;
 /// Maximum reconnect backoff (30 seconds).
 const BACKOFF_MAX_SECS: u64 = 30;
 
-/// Pattern-subscribes to `sprout:channel:*` and forwards events to broadcast.
+/// Pattern-subscribes to `buzz:channel:*` and forwards events to broadcast.
 ///
 /// Runs a reconnect loop with exponential backoff (1s → 2s → 4s → … → 30s max).
 /// Logs `error!` on disconnect and `info!` on successful reconnect.
@@ -53,9 +53,9 @@ async fn connect_and_subscribe(
     let client = redis::Client::open(redis_url)?;
     let mut conn = client.get_async_pubsub().await?;
 
-    conn.psubscribe("sprout:channel:*").await?;
+    conn.psubscribe("buzz:channel:*").await?;
 
-    tracing::info!("Redis pub/sub subscriber connected — listening on sprout:channel:*");
+    tracing::info!("Redis pub/sub subscriber connected — listening on buzz:channel:*");
 
     // Note: backoff is NOT reset here on connect. It resets in the outer loop
     // only after this function returns Ok(()) — i.e., after the connection ran
@@ -74,7 +74,7 @@ async fn connect_and_subscribe(
 
         let channel_name = msg.get_channel_name();
         let channel_id = channel_name
-            .strip_prefix("sprout:channel:")
+            .strip_prefix("buzz:channel:")
             .and_then(|s| Uuid::parse_str(s).ok());
 
         let channel_id = match channel_id {

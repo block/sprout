@@ -587,7 +587,7 @@ pub struct ThreadTags {
 ///
 /// NOTE: Only handles NIP-10 marker-based format (preferred). The deprecated
 /// positional format (no markers, `["e", id, relay_url]`) is not supported —
-/// Sprout always generates marker-based tags (see relay messages.rs:762-783).
+/// Buzz always generates marker-based tags (see relay messages.rs:762-783).
 pub fn parse_thread_tags(event: &Event) -> ThreadTags {
     let mut root = None;
     let mut reply = None;
@@ -633,7 +633,7 @@ pub fn parse_thread_tags(event: &Event) -> ThreadTags {
 /// Extract a leading slash command from message content.
 ///
 /// ACP connectors (claude-agent-acp, codex-acp) detect slash commands by
-/// checking whether the **first** prompt content block starts with `/`. Sprout
+/// checking whether the **first** prompt content block starts with `/`. Buzz
 /// users must @mention an agent to reach it, so the wire content is typically
 /// `"@Eva /goal ship it"`. This strips leading mention tokens — `@word`,
 /// multi-word display names from `known_names`, and NIP-27 `nostr:npub1…` /
@@ -661,7 +661,7 @@ pub fn extract_slash_command(content: &str, known_names: &[&str]) -> Option<Stri
         } else if let Some(after_at) = rest.strip_prefix('@') {
             // Known display names first (longest match wins, case-insensitive,
             // must end at whitespace or end-of-string), then a single-word
-            // token of the characters Sprout allows in plain @mentions.
+            // token of the characters Buzz allows in plain @mentions.
             let name_len = names
                 .iter()
                 .find_map(|name| {

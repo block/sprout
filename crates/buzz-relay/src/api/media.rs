@@ -112,7 +112,7 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
 /// Expects:
 ///   - `Authorization: Nostr <base64(kind:24242 event)>` — Blossom auth
 ///   - `X-SHA-256: <hex>` — Required per BUD-11
-///   - `X-Auth-Token: sprout_*` — API token for scope resolution (optional in dev mode)
+///   - `X-Auth-Token: buzz_*` — API token for scope resolution (optional in dev mode)
 ///   - `Content-Type: video/mp4` — routes to video validation path; all other types use image path
 ///   - Raw binary body (the file bytes)
 ///
@@ -191,7 +191,7 @@ pub async fn upload_blob(
         }
         _ => "other",
     };
-    metrics::counter!("sprout_media_uploads_total", "mime" => mime_label.to_owned()).increment(1);
+    metrics::counter!("buzz_media_uploads_total", "mime" => mime_label.to_owned()).increment(1);
 
     // Audit via bounded channel — same pattern as event audit.
     let desc = descriptor.clone();
@@ -213,7 +213,7 @@ pub async fn upload_blob(
         .await
     {
         tracing::error!("Media audit channel closed — entry lost: {e}");
-        metrics::counter!("sprout_audit_send_errors_total").increment(1);
+        metrics::counter!("buzz_audit_send_errors_total").increment(1);
     }
 
     Ok(Json(descriptor))
@@ -593,7 +593,7 @@ fn extract_blossom_auth(headers: &HeaderMap) -> Result<nostr::Event, MediaError>
 /// Resolve permission scopes for an upload caller.
 ///
 /// Resolution order:
-/// 1. `X-Auth-Token: sprout_*` header — API token path (validates owner matches Blossom signer)
+/// 1. `X-Auth-Token: buzz_*` header — API token path (validates owner matches Blossom signer)
 /// 2. If `require_auth_token` is false (dev mode) — check pubkey allowlist, then grant file scopes
 async fn resolve_upload_scopes(
     headers: &HeaderMap,
@@ -604,7 +604,7 @@ async fn resolve_upload_scopes(
     if let Some(token) = headers
         .get("x-auth-token")
         .and_then(|v| v.to_str().ok())
-        .filter(|t| t.starts_with("sprout_"))
+        .filter(|t| t.starts_with("buzz_"))
     {
         let hash: [u8; 32] = Sha256::digest(token.as_bytes()).into();
         let record = state

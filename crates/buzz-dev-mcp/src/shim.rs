@@ -180,7 +180,7 @@ fn build_git_env(info: &KeyInfo) -> Vec<(String, String)> {
         // Identity — npub as display name, NIP-05-style email
         ("user.name", info.npub.clone()),
         ("user.email", email),
-        // Nostr credential helper is additive — it silently declines non-Sprout
+        // Nostr credential helper is additive — it silently declines non-Buzz
         // remotes (exits 0, no credential), so git falls through to system
         // helpers (osxkeychain, store, etc.) for GitHub/GitLab/etc.
         ("credential.helper", "nostr".into()),

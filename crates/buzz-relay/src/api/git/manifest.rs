@@ -118,7 +118,7 @@ pub fn is_safe_refname(s: &str) -> bool {
 }
 
 /// Hex-OID predicate. Accepts both SHA-1 (40 chars) and SHA-256 (64 chars) —
-/// sprout pins SHA-1 today but the predicate is forward-looking. Used
+/// buzz pins SHA-1 today but the predicate is forward-looking. Used
 /// symmetrically by write-side validation and read-side hydration.
 pub fn is_hex_oid(s: &str) -> bool {
     (s.len() == 40 || s.len() == 64) && s.chars().all(|c| c.is_ascii_hexdigit())

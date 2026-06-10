@@ -37,7 +37,7 @@ pub struct ChannelDto {
 /// All relevant information about a mapped channel.
 #[derive(Debug, Clone)]
 pub struct ChannelInfo {
-    /// The Sprout-internal UUID.
+    /// The Buzz-internal UUID.
     pub uuid: Uuid,
     /// Human-readable name.
     pub name: String,
@@ -169,7 +169,7 @@ impl ChannelMap {
 
     // ─── Lookups ─────────────────────────────────────────────────────────────
 
-    /// Look up channel info by Sprout UUID.
+    /// Look up channel info by Buzz UUID.
     pub fn lookup_by_uuid(&self, uuid: &Uuid) -> Option<ChannelInfo> {
         self.by_uuid.get(uuid).map(|r| r.clone())
     }

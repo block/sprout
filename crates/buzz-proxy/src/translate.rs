@@ -1,15 +1,15 @@
-//! Event translation between Sprout internal format and NIP-28 standard format.
+//! Event translation between Buzz internal format and NIP-28 standard format.
 //!
 //! # Overview
 //!
 //! The proxy sits between standard Nostr clients (NIP-28) and the Buzz relay.
-//! Sprout stores messages as kind:9 events with `#h <uuid>` channel tags.
+//! Buzz stores messages as kind:9 events with `#h <uuid>` channel tags.
 //! NIP-28 clients expect kind:42 events with `#e <kind40_event_id>` channel tags.
 //!
 //! This module handles bidirectional translation:
 //!
-//! - **Outbound** (Sprout → client): kind:9 + `#h(uuid)` → kind:42 + `#e(event_id)`
-//! - **Inbound** (client → Sprout): kind:42 + `#e(event_id)` → kind:9 + `#h(uuid)`
+//! - **Outbound** (Buzz → client): kind:9 + `#h(uuid)` → kind:42 + `#e(event_id)`
+//! - **Inbound** (client → Buzz): kind:42 + `#e(event_id)` → kind:9 + `#h(uuid)`
 //!
 //! All translated events are re-signed with deterministic shadow keys so that
 //! each external user maps to a consistent shadow pubkey across sessions.
@@ -32,7 +32,7 @@ use crate::ProxyError;
 
 // ─── Translator ──────────────────────────────────────────────────────────────
 
-/// Translates events and filters between Sprout internal format and NIP-28
+/// Translates events and filters between Buzz internal format and NIP-28
 /// standard format.
 ///
 /// All translated events are re-signed with shadow keys to preserve per-user
@@ -89,7 +89,7 @@ impl Translator {
     }
 }
 
-// ─── Outbound translation (Sprout → NIP-28 client) ───────────────────────────
+// ─── Outbound translation (Buzz → NIP-28 client) ───────────────────────────
 
 impl Translator {
     fn cache_event_mapping(&self, internal_event_id: &str, external_event_id: &str) {
@@ -360,7 +360,7 @@ impl Translator {
         Ok(Some(translated))
     }
 
-    /// Translate a Sprout event to NIP-28 format for delivery to external clients.
+    /// Translate a Buzz event to NIP-28 format for delivery to external clients.
     ///
     /// Returns `Ok(Some(event))` on success, `Ok(None)` if the event should be
     /// silently dropped (unknown kind, no channel tag, etc.), or an error if the
@@ -394,10 +394,10 @@ impl Translator {
     }
 }
 
-// ─── Inbound translation (NIP-28 client → Sprout) ────────────────────────────
+// ─── Inbound translation (NIP-28 client → Buzz) ────────────────────────────
 
 impl Translator {
-    /// Translate a NIP-28 event from an external client into Sprout format.
+    /// Translate a NIP-28 event from an external client into Buzz format.
     ///
     /// # Translation rules
     ///
@@ -665,7 +665,7 @@ impl Translator {
 // ─── Filter translation ───────────────────────────────────────────────────────
 
 impl Translator {
-    /// Translate a NIP-28 REQ filter to Sprout format.
+    /// Translate a NIP-28 REQ filter to Buzz format.
     ///
     /// - kind:42 / kind:1 → kind:9
     /// - Injects `#h` tag filters from `allowed_channels` so the client can
@@ -694,12 +694,12 @@ impl Translator {
 
         // Check for client-supplied #e channel filters and translate to #h UUIDs.
         //
-        // NIP-28 clients filter by channel using `#e <kind40_event_id>`. Sprout
+        // NIP-28 clients filter by channel using `#e <kind40_event_id>`. Buzz
         // uses `#h <uuid>` instead. If the client specified `#e` values, resolve
         // them to UUIDs (intersected with allowed_channels) and use those for the
         // `#h` injection. The `#e` filter must be removed from the translated
         // filter — if both `#e` and `#h` were present, the relay would AND them,
-        // and since Sprout events carry `#h` but not `#e`, zero events would match.
+        // and since Buzz events carry `#h` but not `#e`, zero events would match.
         let e_tag_key = SingleLetterTag::lowercase(Alphabet::E);
         let had_e_filter = f.generic_tags.contains_key(&e_tag_key);
         let client_channel_uuids: Vec<String> =
@@ -714,7 +714,7 @@ impl Translator {
                 Vec::new()
             };
 
-        // Remove the #e tag filter — Sprout uses #h, not #e.
+        // Remove the #e tag filter — Buzz uses #h, not #e.
         f.generic_tags.remove(&e_tag_key);
 
         // Inject #h tag constraints from the allowed channel list.
@@ -824,14 +824,13 @@ mod tests {
 
         // Build a synthetic kind:9 event with an #h tag.
         let h_tag = Tag::parse(["h", TEST_UUID]).unwrap();
-        let sprout_event =
-            EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE as u16), "hello world")
-                .tags([h_tag])
-                .sign_with_keys(&author_keys)
-                .unwrap();
+        let buzz_event = EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE as u16), "hello world")
+            .tags([h_tag])
+            .sign_with_keys(&author_keys)
+            .unwrap();
 
         let result = translator
-            .translate_outbound(&sprout_event, &allowed())
+            .translate_outbound(&buzz_event, &allowed())
             .await
             .expect("outbound translation must not error");
 
@@ -926,13 +925,13 @@ mod tests {
         let author_keys = Keys::generate();
 
         let h_tag = Tag::parse(["h", TEST_UUID]).unwrap();
-        let sprout_event = EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE as u16), "secret")
+        let buzz_event = EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE as u16), "secret")
             .tags([h_tag])
             .sign_with_keys(&author_keys)
             .unwrap();
 
         let result = translator
-            .translate_outbound(&sprout_event, &no_channels())
+            .translate_outbound(&buzz_event, &no_channels())
             .await;
 
         assert!(
@@ -975,14 +974,13 @@ mod tests {
 
         let v2_content = r#"{"text":"hello v2","attachments":[]}"#;
         let h_tag = Tag::parse(["h", TEST_UUID]).unwrap();
-        let sprout_event =
-            EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE_V2 as u16), v2_content)
-                .tags([h_tag])
-                .sign_with_keys(&author_keys)
-                .unwrap();
+        let buzz_event = EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE_V2 as u16), v2_content)
+            .tags([h_tag])
+            .sign_with_keys(&author_keys)
+            .unwrap();
 
         let translated = translator
-            .translate_outbound(&sprout_event, &allowed())
+            .translate_outbound(&buzz_event, &allowed())
             .await
             .unwrap()
             .expect("should produce translated event");
@@ -1178,7 +1176,7 @@ mod tests {
         let channel_h_tag = Tag::parse(["h", TEST_UUID]).unwrap();
         let other_h_tag = Tag::parse(["h", "some-other-value"]).unwrap();
 
-        let sprout_event = EventBuilder::new(
+        let buzz_event = EventBuilder::new(
             Kind::Custom(KIND_STREAM_MESSAGE as u16),
             "message with extra h tag",
         )
@@ -1187,7 +1185,7 @@ mod tests {
         .unwrap();
 
         let result = translator
-            .translate_outbound(&sprout_event, &allowed())
+            .translate_outbound(&buzz_event, &allowed())
             .await
             .expect("outbound translation must not error");
 
@@ -1314,7 +1312,7 @@ mod tests {
         let author_keys = Keys::generate();
 
         let h_tag = Tag::parse(["h", TEST_UUID]).unwrap();
-        let sprout_event = EventBuilder::new(
+        let buzz_event = EventBuilder::new(
             Kind::Custom(KIND_STREAM_MESSAGE_EDIT as u16),
             "edited content",
         )
@@ -1323,7 +1321,7 @@ mod tests {
         .unwrap();
 
         let result = translator
-            .translate_outbound(&sprout_event, &allowed())
+            .translate_outbound(&buzz_event, &allowed())
             .await
             .expect("outbound translation of edit must not error");
 

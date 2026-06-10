@@ -1,6 +1,6 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
-//! Sprout search — Typesense integration for full-text event search.
+//! Buzz search — Typesense integration for full-text event search.
 
 /// Typesense collection schema management.
 pub mod collection;

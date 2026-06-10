@@ -131,7 +131,7 @@ pub async fn handle_side_effects(
 
 /// Validate a standard NIP-09 deletion event before it is stored.
 ///
-/// Sprout accepts standard deletions for self-authored events only. Channel
+/// Buzz accepts standard deletions for self-authored events only. Channel
 /// admin deletions continue to use kind 9005.
 pub async fn validate_standard_deletion_event(
     event: &Event,
@@ -711,7 +711,7 @@ pub async fn emit_group_discovery_events(
                 tags.push(Tag::parse(["p", &pubkey_hex])?);
             }
         }
-        // Sprout channels always require explicit membership
+        // Buzz channels always require explicit membership
         tags.push(Tag::parse(["closed"])?);
         // Channel type tag so clients can distinguish stream/forum/dm without inference
         tags.push(Tag::parse(["t", &channel.channel_type])?);
@@ -2078,7 +2078,7 @@ async fn seed_manifest_pointer(
 ///
 /// The seeded empty manifest is the source of truth; this event is the
 /// derived notification. Fires once per announce, signed by the relay,
-/// carrying the announcer's pubkey in the `p` tag (sprout extension).
+/// carrying the announcer's pubkey in the `p` tag (buzz extension).
 async fn emit_initial_ref_state(
     state: &Arc<AppState>,
     owner_hex: &str,

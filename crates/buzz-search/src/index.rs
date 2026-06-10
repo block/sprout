@@ -73,7 +73,7 @@ pub fn event_to_document(event: &StoredEvent) -> Result<Value, SearchError> {
     let doc = json!({
         "id":         nostr_event.id.to_string(),
         "content":    content_indexed,
-        // Cast to i32 for Typesense schema (int32 field). nostr Kind is u16; all Sprout kinds fit in i32.
+        // Cast to i32 for Typesense schema (int32 field). nostr Kind is u16; all Buzz kinds fit in i32.
         "kind":       event_kind_i32(nostr_event),
         "pubkey":     nostr_event.pubkey.to_string(),
         "channel_id": channel_id_val,

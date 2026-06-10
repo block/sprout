@@ -1,6 +1,6 @@
-//! Sprout V2 kind number registry.
+//! Buzz V2 kind number registry.
 //!
-//! This module is the authoritative source for Sprout kind numbers.
+//! This module is the authoritative source for Buzz kind numbers.
 //! All constants are `u32` — NIP-01 specifies kind as an unsigned integer,
 //! and u32 covers the full range without truncation.
 
@@ -50,7 +50,7 @@ pub const KIND_BOOKMARK_SET: u32 = 30003;
 /// `required_scope_for_kind`), and the generic NIP-33 replace path keeps only the
 /// latest per `(pubkey, d_tag)`.
 pub const KIND_EMOJI_SET: u32 = 30030;
-/// NIP-01: Channel metadata (replaceable). Not used by Sprout today.
+/// NIP-01: Channel metadata (replaceable). Not used by Buzz today.
 pub const KIND_CHANNEL_METADATA: u32 = 41;
 /// NIP-09: Event deletion request.
 pub const KIND_DELETION: u32 = 5;
@@ -80,7 +80,7 @@ pub const KIND_BLOSSOM_AUTH: u32 = 24242;
 /// NIP-98: HTTP auth event (used in nip98.rs, not stored).
 pub const KIND_HTTP_AUTH: u32 = 27235;
 
-// NEW: Sprout command kinds (Pure Nostr plan)
+// NEW: Buzz command kinds (Pure Nostr plan)
 /// Agent metadata + owner reference (replaceable, agent-authored).
 pub const KIND_AGENT_PROFILE: u32 = 10100;
 
@@ -247,7 +247,7 @@ pub const KIND_DM_HIDE: u32 = 41012;
 pub const KIND_DM_CREATED: u32 = 41001;
 
 // Agent job protocol (43000–43999)
-// Not using NIP-90 kinds (5000–6999) — Sprout requires auth chains (depth ≤ 3, breadth ≤ 10).
+// Not using NIP-90 kinds (5000–6999) — Buzz requires auth chains (depth ≤ 3, breadth ≤ 10).
 /// An agent job was requested.
 pub const KIND_JOB_REQUEST: u32 = 43001;
 /// An agent accepted a job request.
@@ -509,7 +509,7 @@ pub const fn is_identity_archive_request_kind(kind: u32) -> bool {
     matches!(kind, KIND_IA_ARCHIVE_REQUEST | KIND_IA_UNARCHIVE_REQUEST)
 }
 
-/// Returns `true` if `kind` is a Sprout command kind that requires transactional execution.
+/// Returns `true` if `kind` is a Buzz command kind that requires transactional execution.
 pub const fn is_command_kind(kind: u32) -> bool {
     matches!(
         kind,
@@ -542,7 +542,7 @@ pub fn event_kind_u32(event: &nostr::Event) -> u32 {
 }
 
 /// Extract the kind from a nostr Event as i32 (for Postgres INT columns).
-/// Safe: all Sprout kinds fit in i32 (max 65535 < i32::MAX).
+/// Safe: all Buzz kinds fit in i32 (max 65535 < i32::MAX).
 pub fn event_kind_i32(event: &nostr::Event) -> i32 {
     event.kind.as_u16() as i32
 }
@@ -563,7 +563,7 @@ const _: () = assert!(
         && KIND_GIT_REPO_STATE <= PARAM_REPLACEABLE_KIND_MAX
 );
 
-// Compile-time: all Sprout kind constants fit in nostr's u16-backed Kind.
+// Compile-time: all Buzz kind constants fit in nostr's u16-backed Kind.
 const _: () = assert!(KIND_AUTH <= u16::MAX as u32);
 const _: () = assert!(KIND_CANVAS <= u16::MAX as u32);
 const _: () = assert!(KIND_HUDDLE_GUIDELINES <= u16::MAX as u32);

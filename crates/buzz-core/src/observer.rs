@@ -1,7 +1,7 @@
 //! Agent observer frame helpers.
 //!
 //! Observer frames are transient, owner-scoped agent telemetry/control messages.
-//! They use a Sprout ephemeral event kind and carry NIP-44 encrypted JSON in the
+//! They use a Buzz ephemeral event kind and carry NIP-44 encrypted JSON in the
 //! event content so relays can route frames without reading ACP internals.
 
 use nostr::{nips::nip44, Event, Keys, PublicKey};

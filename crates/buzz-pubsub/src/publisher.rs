@@ -8,7 +8,7 @@ use crate::error::PubSubError;
 
 /// Returns the Redis pub/sub channel key for `channel_id`.
 pub fn channel_key(channel_id: Uuid) -> String {
-    format!("sprout:channel:{}", channel_id)
+    format!("buzz:channel:{}", channel_id)
 }
 
 /// Returns the number of subscribers that received the message.

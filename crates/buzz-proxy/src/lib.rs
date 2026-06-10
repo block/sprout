@@ -2,7 +2,7 @@
 #![warn(missing_docs)]
 //! `buzz-proxy` — Guest relay proxy for Nostr client compatibility.
 //!
-//! Translates standard Nostr kinds ↔ Sprout custom kinds, derives deterministic
+//! Translates standard Nostr kinds ↔ Buzz custom kinds, derives deterministic
 //! shadow keypairs for external users, and authenticates guests via invite tokens.
 
 /// Bidirectional UUID ↔ NIP-28 kind:40 event ID mapping.
@@ -15,13 +15,13 @@ pub mod guest_store;
 pub mod invite;
 /// Thread-safe invite token registry.
 pub mod invite_store;
-/// Kind translation between standard Nostr and Sprout-internal kinds.
+/// Kind translation between standard Nostr and Buzz-internal kinds.
 pub mod kind_translator;
 /// External-facing NIP-01 WebSocket server for standard Nostr clients.
 pub mod server;
 /// Deterministic shadow keypair derivation and caching.
 pub mod shadow_keys;
-/// Event translation between Sprout internal format and NIP-28 standard format.
+/// Event translation between Buzz internal format and NIP-28 standard format.
 pub mod translate;
 /// Upstream relay WebSocket client with NIP-42 auth and reconnect.
 pub mod upstream;

@@ -11,7 +11,7 @@
 //! ```
 //!
 //! Framework metrics (`http_requests_total`, `http_request_latency_ms`) are
-//! recorded by [`track_metrics`] middleware on the app router. Sprout-specific
+//! recorded by [`track_metrics`] middleware on the app router. Buzz-specific
 //! metrics are recorded inline at their call sites.
 
 use std::time::Instant;

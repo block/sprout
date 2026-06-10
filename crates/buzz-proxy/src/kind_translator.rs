@@ -1,4 +1,4 @@
-//! Kind translation between standard Nostr kinds and Sprout custom kinds.
+//! Kind translation between standard Nostr kinds and Buzz custom kinds.
 //!
 //! # ⚠️ Architectural limitation
 //!
@@ -6,7 +6,7 @@
 //! Nostr event ID is `SHA-256([0, pubkey, created_at, kind, tags, content])`, so
 //! any kind mutation produces a different ID and a broken Schnorr signature.
 //!
-//! This translator is intentionally designed for **Sprout-internal use only**,
+//! This translator is intentionally designed for **Buzz-internal use only**,
 //! where events are re-signed by the proxy's shadow keypair after translation.
 //! It must never be used in a standard Nostr interop path where signature
 //! verification is expected to pass.
@@ -16,7 +16,7 @@ use buzz_core::kind::{
     KIND_STREAM_MESSAGE_V2,
 };
 
-/// Translates Nostr event kinds between standard and Sprout-internal values.
+/// Translates Nostr event kinds between standard and Buzz-internal values.
 pub struct KindTranslator;
 
 impl KindTranslator {
@@ -31,7 +31,7 @@ impl KindTranslator {
     /// # ⚠️ Lossy mapping — round-tripping is NOT lossless
     ///
     /// Multiple standard Nostr kinds collapse onto the same Buzz kind.
-    /// This is intentional: Sprout's internal kind space is smaller than the
+    /// This is intentional: Buzz's internal kind space is smaller than the
     /// full Nostr kind space, and the proxy re-signs events anyway (see module
     /// doc), so the original kind is not preserved.
     ///

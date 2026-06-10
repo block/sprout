@@ -822,7 +822,7 @@ mod tests {
     // events the relay returns, the CLI's parse + match wiring produces
     // the right pubkeys. The async I/O wrapper around them is one
     // straight line; the pure stages it composes are exercised here and
-    // in sprout-sdk.
+    // in buzz-sdk.
 
     /// End-to-end (sans I/O): body text → extracted names → matched
     /// member pubkeys, using realistic 39002 + kind:0 event JSON.

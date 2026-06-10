@@ -4,7 +4,7 @@ use crate::client::{extract_d_tag, normalize_write_response, print_create_respon
 use crate::error::CliError;
 use crate::validate::{parse_uuid, read_or_stdin, sdk_err, validate_uuid};
 
-// TODO(phase-4): Replace raw nostr::EventBuilder usage with sprout-sdk builder functions
+// TODO(phase-4): Replace raw nostr::EventBuilder usage with buzz-sdk builder functions
 
 // ---------------------------------------------------------------------------
 // Read commands — POST /query

@@ -171,18 +171,18 @@ pub trait RateLimiter: Send + Sync {
     ) -> impl std::future::Future<Output = Result<RateLimitResult, AuthError>> + Send;
 }
 
-/// Redis key for pubkey-based rate limit: `sprout:ratelimit:<hex>:<suffix>`
+/// Redis key for pubkey-based rate limit: `buzz:ratelimit:<hex>:<suffix>`
 pub fn rate_limit_key(pubkey: &PublicKey, limit_type: &LimitType) -> String {
     format!(
-        "sprout:ratelimit:{}:{}",
+        "buzz:ratelimit:{}:{}",
         pubkey.to_hex(),
         limit_type.key_suffix()
     )
 }
 
-/// Redis key for IP-based rate limit: `sprout:ratelimit:ip:<ip>:conn`
+/// Redis key for IP-based rate limit: `buzz:ratelimit:ip:<ip>:conn`
 pub fn ip_rate_limit_key(ip: &IpAddr) -> String {
-    format!("sprout:ratelimit:ip:{}:conn", ip)
+    format!("buzz:ratelimit:ip:{}:conn", ip)
 }
 
 /// Always-allow rate limiter for unit tests.
@@ -221,17 +221,14 @@ mod tests {
     fn rate_limit_key_format() {
         let keys = Keys::generate();
         let key = rate_limit_key(&keys.public_key(), &LimitType::Messages);
-        assert!(key.starts_with("sprout:ratelimit:"));
+        assert!(key.starts_with("buzz:ratelimit:"));
         assert!(key.ends_with(":msg"));
     }
 
     #[test]
     fn ip_rate_limit_key_format() {
         let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
-        assert_eq!(
-            ip_rate_limit_key(&ip),
-            "sprout:ratelimit:ip:192.168.1.1:conn"
-        );
+        assert_eq!(ip_rate_limit_key(&ip), "buzz:ratelimit:ip:192.168.1.1:conn");
     }
 
     #[tokio::test]
