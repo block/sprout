@@ -37,7 +37,7 @@ impl DevMcp {
 
     #[tool(
         name = "shell",
-        description = "Run a bash command. Ephemeral process per call. Output tail-truncated to ~8KB for the LLM; full output (first 10MB) saved to artifact file. timeout_ms capped at 600000. On PATH: rg (prefer over grep; flags: -n -i -l -g <glob> -C <n> --files), tree (flags: -d <depth>; shows line counts), and sprout (Sprout relay CLI — run sprout --help for commands)."
+        description = "Run a bash command. Ephemeral process per call. Output tail-truncated to ~8KB for the LLM; full output (first 10MB) saved to artifact file. timeout_ms defaults to 120000 (2 min) if omitted; capped at 600000 (10 min). For long-running commands (git push with hooks, cargo build, test suites), use 300000+. On PATH: rg (prefer over grep; flags: -n -i -l -g <glob> -C <n> --files), tree (flags: -d <depth>; shows line counts), and sprout (Sprout relay CLI — run sprout --help for commands)."
     )]
     async fn shell(
         &self,
