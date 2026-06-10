@@ -3452,4 +3452,82 @@ mod tests {
             "after backpressure removal, replay must be accepted"
         );
     }
+
+    // ── Death-notice builder (PR #935 fix: reply→root marker) ─────────────────
+
+    /// Construct a minimal HarnessRelay for unit-testing `build_death_notice`.
+    /// Only `keys` is exercised; other fields are dummies.
+    fn make_test_relay() -> HarnessRelay {
+        let (cmd_tx, _cmd_rx) = mpsc::channel(1);
+        let (_event_tx, event_rx) = mpsc::channel(1);
+        HarnessRelay {
+            event_rx,
+            observer_control_rx: None,
+            cmd_tx,
+            http: reqwest::Client::new(),
+            relay_url: "ws://localhost:3000".into(),
+            keys: nostr::Keys::generate(),
+            auth_tag: None,
+            bg_handle: None,
+        }
+    }
+
+    #[test]
+    fn death_notice_has_root_marker_not_reply() {
+        let relay = make_test_relay();
+        let channel_id = Uuid::new_v4();
+        let root_id = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+        let event = relay
+            .build_death_notice(channel_id, "agent timed out", Some(root_id))
+            .expect("build_death_notice should succeed");
+
+        // The NIP-10 e-tag must use "root" marker (not "reply").
+        let e_tags: Vec<_> = event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(|s| s.as_str()) == Some("e"))
+            .collect();
+        assert_eq!(e_tags.len(), 1, "expected exactly one e-tag");
+        let e_tag = e_tags[0].as_slice();
+        assert_eq!(e_tag[1], root_id, "e-tag should reference the root event");
+        assert_eq!(e_tag[2], "", "relay hint should be empty");
+        assert_eq!(e_tag[3], "root", "marker must be 'root', not 'reply'");
+    }
+
+    #[test]
+    fn death_notice_has_channel_h_tag() {
+        let relay = make_test_relay();
+        let channel_id = Uuid::new_v4();
+        let event = relay
+            .build_death_notice(channel_id, "agent crashed", None)
+            .expect("build_death_notice should succeed");
+
+        let h_tags: Vec<_> = event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(|s| s.as_str()) == Some("h"))
+            .collect();
+        assert_eq!(h_tags.len(), 1, "expected exactly one h-tag");
+        assert_eq!(
+            h_tags[0].as_slice()[1],
+            channel_id.to_string(),
+            "h-tag should contain the channel UUID"
+        );
+    }
+
+    #[test]
+    fn death_notice_without_thread_root_has_no_e_tag() {
+        let relay = make_test_relay();
+        let channel_id = Uuid::new_v4();
+        let event = relay
+            .build_death_notice(channel_id, "agent exited", None)
+            .expect("build_death_notice should succeed");
+
+        let e_tags: Vec<_> = event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(|s| s.as_str()) == Some("e"))
+            .collect();
+        assert!(e_tags.is_empty(), "no e-tag when thread_root is None");
+    }
 }

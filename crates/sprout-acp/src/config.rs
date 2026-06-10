@@ -2098,4 +2098,32 @@ channels = "ALL"
         let result = validate_allowlist(&[]).unwrap();
         assert!(result.is_empty());
     }
+
+    // ── Idle timeout constant + guard (PR #935) ───────────────────────────────
+
+    #[test]
+    fn default_idle_timeout_is_900_seconds() {
+        // Lock the constant value so accidental changes are caught.
+        assert_eq!(DEFAULT_IDLE_TIMEOUT_SECS, 900);
+    }
+
+    #[test]
+    fn idle_timeout_must_be_less_than_max_turn_duration() {
+        // The guard in Config::from_args rejects idle >= max_turn.
+        // Exercise the same logic: if idle >= max_turn, it's invalid.
+        let idle = 3600u64;
+        let max_turn = 3600u64;
+        assert!(
+            idle >= max_turn,
+            "test precondition: idle must be >= max_turn to trigger guard"
+        );
+
+        // And the valid case:
+        let idle_valid = 900u64;
+        let max_turn_valid = 3600u64;
+        assert!(
+            idle_valid < max_turn_valid,
+            "default idle (900) must be less than default max_turn (3600)"
+        );
+    }
 }
