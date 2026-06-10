@@ -32,19 +32,42 @@ type MockCommandAvailability = {
   resolvedPath?: string | null;
 };
 
+type MockManagedAgentSeed = {
+  pubkey: string;
+  name: string;
+  personaId?: string | null;
+  status?: RawManagedAgent["status"];
+  channelNames?: string[];
+  channelIds?: string[];
+  backend?: RawManagedAgent["backend"];
+};
+
+type MockSearchProfileSeed = {
+  pubkey: string;
+  displayName: string | null;
+  avatarUrl?: string | null;
+  nip05Handle?: string | null;
+  about?: string | null;
+  isAgent?: boolean;
+};
+
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
     acpRuntimesCatalog?: RawAcpRuntimeCatalogEntry[];
+    activePersonaIds?: string[];
     installAcpRuntimeResult?: RawInstallRuntimeResult;
     managedAgentPrereqs?: {
       acp?: MockCommandAvailability;
       mcp?: MockCommandAvailability;
     };
+    managedAgents?: MockManagedAgentSeed[];
     profileReadDelayMs?: number;
     profileReadError?: string;
     profileUpdateError?: string;
+    searchProfiles?: MockSearchProfileSeed[];
     stallWebsocketSends?: boolean;
+    userSearchDelayMs?: number;
     // NIP-IA gate inputs — see tests/helpers/bridge.ts:MockBridgeOptions for
     // semantics. These three drive the archive-button gate matrix in
     // tests/e2e/identity-archive.spec.ts; they're plumbed into:
@@ -88,12 +111,14 @@ type RawProfile = {
   avatar_url: string | null;
   about: string | null;
   nip05_handle: string | null;
+  is_agent?: boolean;
 };
 
 type RawUserProfileSummary = {
   display_name: string | null;
   avatar_url: string | null;
   nip05_handle: string | null;
+  is_agent?: boolean;
 };
 
 type RawUsersBatchResponse = {
@@ -106,6 +131,7 @@ type RawUserSearchResult = {
   display_name: string | null;
   avatar_url: string | null;
   nip05_handle: string | null;
+  is_agent?: boolean;
 };
 
 type RawSearchUsersResponse = {
@@ -153,6 +179,7 @@ type RawChannelDetail = RawChannel & {
 type RawChannelMember = {
   pubkey: string;
   role: "owner" | "admin" | "member" | "guest" | "bot";
+  is_agent?: boolean;
   joined_at: string;
   display_name: string | null;
 };
@@ -297,6 +324,7 @@ type RawRelayAgent = {
   channel_ids: string[];
   capabilities: string[];
   status: PresenceStatus;
+  respond_to?: "owner-only" | "allowlist" | "anyone";
 };
 
 type RawManagedAgent = {
@@ -497,6 +525,10 @@ declare global {
   interface Window {
     __SPROUT_E2E__?: E2eConfig;
     __SPROUT_E2E_COMMANDS__?: string[];
+    __SPROUT_E2E_COMMAND_PAYLOADS__?: Array<{
+      command: string;
+      payload: unknown;
+    }>;
     __SPROUT_E2E_WEBVIEW_ZOOM__?: number;
     __SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
       channelName: string;
@@ -592,6 +624,8 @@ const CHARLIE_PUBKEY =
   "554cef57437abac34522ac2c9f0490d685b72c80478cf9f7ed6f9570ee8624ea";
 const OUTSIDER_PUBKEY =
   "df8e91b86fda13a9a67896df77232f7bdab2ba9c3e165378e1ba3d24c13a328e";
+const PROFILE_ONLY_AGENT_PUBKEY =
+  "8f83d6b7f3d74f7d933ae3a54dd8c6cc85c7f98e531c16e5a827b953441a8d67";
 const MOCK_IDENTITY_PUBKEY = DEFAULT_MOCK_IDENTITY.pubkey;
 
 const mockDisplayNames = new Map<string, string>([
@@ -599,8 +633,14 @@ const mockDisplayNames = new Map<string, string>([
   [ALICE_PUBKEY, "alice"],
   [BOB_PUBKEY, "bob"],
   [CHARLIE_PUBKEY, "charlie"],
+  [PROFILE_ONLY_AGENT_PUBKEY, "mira"],
   [OUTSIDER_PUBKEY, "outsider"],
   [DEFAULT_REAL_IDENTITY.pubkey, DEFAULT_REAL_IDENTITY.username],
+]);
+const mockAgentPubkeys = new Set([
+  ALICE_PUBKEY,
+  CHARLIE_PUBKEY,
+  PROFILE_ONLY_AGENT_PUBKEY,
 ]);
 
 function isoMinutesAgo(minutesAgo: number): string {
@@ -665,6 +705,7 @@ function createMockMember(
   return {
     pubkey,
     role,
+    is_agent: role === "bot" || mockAgentPubkeys.has(pubkey),
     joined_at: isoMinutesAgo(joinedMinutesAgo),
     display_name: mockDisplayNames.get(pubkey) ?? null,
   };
@@ -838,13 +879,82 @@ function resetMockRelayMembers(config: E2eConfig | undefined) {
   ];
 }
 
-function resetMockManagedAgents() {
+function buildSeededManagedAgent(seed: MockManagedAgentSeed): MockManagedAgent {
+  const now = new Date().toISOString();
+  const status = seed.status ?? "stopped";
+
+  return {
+    pubkey: seed.pubkey,
+    name: seed.name,
+    persona_id: seed.personaId ?? null,
+    relay_url: DEFAULT_RELAY_WS_URL,
+    acp_command: "sprout-acp",
+    agent_command: "goose",
+    agent_args: ["acp"],
+    mcp_command: "",
+    turn_timeout_seconds: 320,
+    idle_timeout_seconds: null,
+    max_turn_duration_seconds: null,
+    parallelism: 1,
+    system_prompt: null,
+    model: null,
+    env_vars: {},
+    status,
+    pid: status === "running" ? 42000 + mockManagedAgents.length : null,
+    created_at: now,
+    updated_at: now,
+    last_started_at: status === "running" ? now : null,
+    last_stopped_at: status === "stopped" ? now : null,
+    last_exit_code: null,
+    last_error: null,
+    log_path: `/tmp/mock-agent-${seed.pubkey}.log`,
+    start_on_app_launch: true,
+    backend: seed.backend ?? { type: "local" },
+    backend_agent_id: null,
+    respond_to: "owner-only",
+    respond_to_allowlist: [],
+    private_key_nsec: `nsec1mock${seed.pubkey.slice(0, 20)}`,
+    log_lines: [
+      `sprout-acp starting: relay=${DEFAULT_RELAY_WS_URL} agent_pubkey=${seed.pubkey} parallelism=1`,
+      "profile created; harness not started",
+    ],
+  };
+}
+
+function resetMockManagedAgents(config?: E2eConfig) {
   mockManagedAgents = [];
+
+  for (const seed of config?.mock?.managedAgents ?? []) {
+    mockManagedAgents.push(buildSeededManagedAgent(seed));
+    for (const channel of mockChannels) {
+      const isSeedChannel =
+        seed.channelIds?.includes(channel.id) ||
+        seed.channelNames?.includes(channel.name);
+      if (
+        !isSeedChannel ||
+        channel.members.some((member) => member.pubkey === seed.pubkey)
+      ) {
+        continue;
+      }
+
+      channel.members.push({
+        pubkey: seed.pubkey,
+        role: "bot",
+        is_agent: true,
+        joined_at: new Date().toISOString(),
+        display_name: seed.name,
+      });
+      syncMockChannel(channel);
+      touchMockChannel(channel);
+    }
+  }
+
   syncMockRelayAgentsFromManagedAgents();
 }
 
-function resetMockPersonas() {
+function resetMockPersonas(config?: E2eConfig) {
   const now = new Date().toISOString();
+  const activePersonaIds = new Set(config?.mock?.activePersonaIds ?? []);
   mockPersonas = [
     {
       id: "builtin:solo",
@@ -852,7 +962,7 @@ function resetMockPersonas() {
       avatar_url: null,
       system_prompt: "You are Solo.",
       is_builtin: true,
-      is_active: false,
+      is_active: activePersonaIds.has("builtin:solo"),
       created_at: now,
       updated_at: now,
     },
@@ -862,7 +972,7 @@ function resetMockPersonas() {
       avatar_url: null,
       system_prompt: "You are Kit.",
       is_builtin: true,
-      is_active: false,
+      is_active: activePersonaIds.has("builtin:kit"),
       created_at: now,
       updated_at: now,
     },
@@ -872,7 +982,7 @@ function resetMockPersonas() {
       avatar_url: null,
       system_prompt: "You are Scout.",
       is_builtin: true,
-      is_active: false,
+      is_active: activePersonaIds.has("builtin:scout"),
       created_at: now,
       updated_at: now,
     },
@@ -881,6 +991,25 @@ function resetMockPersonas() {
 
 function resetMockTeams() {
   mockTeams = [];
+}
+
+function seedMockSearchProfiles(config?: E2eConfig) {
+  for (const seed of config?.mock?.searchProfiles ?? []) {
+    const pubkey = seed.pubkey.toLowerCase();
+    const profile = {
+      pubkey,
+      display_name: seed.displayName,
+      avatar_url: seed.avatarUrl ?? null,
+      about: seed.about ?? null,
+      nip05_handle: seed.nip05Handle ?? null,
+      is_agent: seed.isAgent ?? false,
+    };
+    mockProfiles.set(pubkey, profile);
+    applyMockDisplayName(pubkey, seed.displayName);
+    if (seed.isAgent) {
+      mockAgentPubkeys.add(pubkey);
+    }
+  }
 }
 
 function getMockProfileByPubkey(pubkey: string): RawProfile | null {
@@ -900,6 +1029,7 @@ function getMockProfileByPubkey(pubkey: string): RawProfile | null {
     avatar_url: null,
     about: null,
     nip05_handle: null,
+    is_agent: mockAgentPubkeys.has(normalizedPubkey),
   };
 }
 
@@ -973,6 +1103,7 @@ const mockChannels: MockChannel[] = [
       createMockMember(MOCK_IDENTITY_PUBKEY, "owner", 1440),
       createMockMember(ALICE_PUBKEY, "admin", 1200),
       createMockMember(BOB_PUBKEY, "member", 960),
+      createMockMember(PROFILE_ONLY_AGENT_PUBKEY, "member", 840),
     ],
   }),
   createMockChannel({
@@ -1289,6 +1420,7 @@ let mockRelayAgents: RawRelayAgent[] = [
     ],
     capabilities: ["search", "summaries", "workflows"],
     status: "online",
+    respond_to: "anyone",
   },
   {
     pubkey: CHARLIE_PUBKEY,
@@ -1298,6 +1430,7 @@ let mockRelayAgents: RawRelayAgent[] = [
     channel_ids: ["9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"],
     capabilities: ["code", "reviews"],
     status: "away",
+    respond_to: "anyone",
   },
 ];
 
@@ -1529,6 +1662,18 @@ const mockProfiles = new Map<string, RawProfile>([
       avatar_url: null,
       about: null,
       nip05_handle: null,
+      is_agent: false,
+    },
+  ],
+  [
+    PROFILE_ONLY_AGENT_PUBKEY,
+    {
+      pubkey: PROFILE_ONLY_AGENT_PUBKEY,
+      display_name: "mira",
+      avatar_url: null,
+      about: null,
+      nip05_handle: null,
+      is_agent: true,
     },
   ],
 ]);
@@ -1538,6 +1683,7 @@ const mockPresence = new Map<string, PresenceStatus>([
   [ALICE_PUBKEY, "online"],
   [BOB_PUBKEY, "away"],
   [CHARLIE_PUBKEY, "online"],
+  [PROFILE_ONLY_AGENT_PUBKEY, "online"],
   [OUTSIDER_PUBKEY, "offline"],
 ]);
 const mockFeedOverrides: RawHomeFeedResponse["feed"] = {
@@ -1570,6 +1716,7 @@ function syncMockRelayAgentsFromManagedAgents() {
           agent.status === "running" || agent.status === "deployed"
             ? "online"
             : "offline",
+        respond_to: agent.respond_to,
       };
     },
   );
@@ -2769,6 +2916,7 @@ async function handleGetUsersBatch(
         display_name: profile.display_name,
         avatar_url: profile.avatar_url,
         nip05_handle: profile.nip05_handle,
+        is_agent: profile.is_agent ?? false,
       };
     }
 
@@ -2791,6 +2939,12 @@ async function handleGetUsersBatch(
       display_name: content.display_name ?? content.name ?? null,
       avatar_url: content.picture ?? null,
       nip05_handle: content.nip05 ?? null,
+      is_agent: Array.isArray(ev.tags)
+        ? ev.tags.some(
+            (tag) =>
+              Array.isArray(tag) && tag[0] === "auth" && tag.length === 4,
+          )
+        : false,
     };
   }
   const missing = args.pubkeys.filter((p) => !found.has(p.toLowerCase()));
@@ -2804,15 +2958,23 @@ async function handleSearchUsers(
   },
   config: E2eConfig | undefined,
 ) {
+  const userSearchDelayMs = config?.mock?.userSearchDelayMs ?? 0;
+  if (userSearchDelayMs > 0) {
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, userSearchDelayMs);
+    });
+  }
+
   const identity = getIdentity(config);
   if (!identity) {
     const normalizedQuery = args.query.trim().toLowerCase();
-    if (normalizedQuery.length === 0) {
-      return { users: [] } satisfies RawSearchUsersResponse;
-    }
 
     const results = listMockProfiles()
       .filter((profile) => {
+        if (normalizedQuery.length === 0) {
+          return true;
+        }
+
         const displayName = profile.display_name?.toLowerCase() ?? "";
         const nip05Handle = profile.nip05_handle?.toLowerCase() ?? "";
         const pubkey = profile.pubkey.toLowerCase();
@@ -2834,6 +2996,7 @@ async function handleSearchUsers(
         display_name: profile.display_name,
         avatar_url: profile.avatar_url,
         nip05_handle: profile.nip05_handle,
+        is_agent: profile.is_agent ?? false,
       }));
 
     return {
@@ -2843,9 +3006,12 @@ async function handleSearchUsers(
 
   // NIP-50 search on kind:0 profiles
   const limit = args.limit ?? 8;
-  const events = await relayQuery(config, [
-    { kinds: [0], search: args.query, limit },
-  ]);
+  const normalizedQuery = args.query.trim();
+  const filter =
+    normalizedQuery.length === 0
+      ? { kinds: [0], limit }
+      : { kinds: [0], search: args.query, limit };
+  const events = await relayQuery(config, [filter]);
   const users = events.map((ev) => {
     const content = JSON.parse(ev.content ?? "{}");
     return {
@@ -2853,6 +3019,12 @@ async function handleSearchUsers(
       display_name: content.display_name ?? content.name ?? null,
       avatar_url: content.picture ?? null,
       nip05_handle: content.nip05 ?? null,
+      is_agent: Array.isArray(ev.tags)
+        ? ev.tags.some(
+            (tag) =>
+              Array.isArray(tag) && tag[0] === "auth" && tag.length === 4,
+          )
+        : false,
     };
   });
   return { users };
@@ -3179,6 +3351,7 @@ async function handleGetChannelMembers(
       | "member"
       | "guest"
       | "bot",
+    is_agent: (t[3] ?? t[2]) === "bot",
     display_name: null,
     avatar_url: null,
     joined_at: new Date().toISOString(),
@@ -3419,6 +3592,10 @@ async function handleAddChannelMembers(
       channel.members.push({
         pubkey,
         role: args.role ?? "member",
+        is_agent:
+          args.role === "bot" ||
+          mockAgentPubkeys.has(pubkey) ||
+          mockManagedAgents.some((agent) => agent.pubkey === pubkey),
         joined_at: new Date().toISOString(),
         display_name: mockDisplayNames.get(pubkey) ?? null,
       });
@@ -4349,6 +4526,8 @@ async function handleCreateManagedAgent(args: {
   };
 
   mockManagedAgents.unshift(managedAgent);
+  applyMockDisplayName(pubkey, name);
+  mockAgentPubkeys.add(pubkey);
   syncMockRelayAgentsFromManagedAgents();
 
   return {
@@ -4392,12 +4571,23 @@ async function handleStartManagedAgent(args: {
   }
 
   const now = new Date().toISOString();
-  agent.status = "running";
-  agent.pid = agent.pid ?? 42000 + mockManagedAgents.indexOf(agent);
+  if (agent.backend.type === "provider") {
+    agent.status = "deployed";
+    agent.pid = null;
+    agent.backend_agent_id =
+      agent.backend_agent_id ?? `mock-provider-${agent.pubkey.slice(0, 12)}`;
+  } else {
+    agent.status = "running";
+    agent.pid = agent.pid ?? 42000 + mockManagedAgents.indexOf(agent);
+  }
   agent.updated_at = now;
   agent.last_started_at = now;
   agent.last_error = null;
-  agent.log_lines.push(`started mock harness at ${now}`);
+  agent.log_lines.push(
+    agent.backend.type === "provider"
+      ? `deployed mock provider harness at ${now}`
+      : `started mock harness at ${now}`,
+  );
   syncMockRelayAgentsFromManagedAgents();
   return cloneManagedAgent(agent);
 }
@@ -5282,15 +5472,17 @@ export function maybeInstallE2eTauriMocks() {
   }
 
   resetMockRelayMembers(config);
-  resetMockManagedAgents();
-  resetMockPersonas();
+  resetMockManagedAgents(config);
+  resetMockPersonas(config);
   resetMockTeams();
+  seedMockSearchProfiles(config);
   resetMockWorkflows();
   resetMockMesh();
   resetMockUserStatuses();
   mockWebsocketSendMutexWedged = false;
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
+  window.__SPROUT_E2E_COMMAND_PAYLOADS__ = [];
   window.__SPROUT_E2E_SIGNED_EVENTS__ = [];
   window.__SPROUT_E2E_WEBVIEW_ZOOM__ = 1;
   window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__ = ({
@@ -5407,6 +5599,17 @@ export function maybeInstallE2eTauriMocks() {
     const activeConfig = getConfig();
     const identity = getActiveIdentity(activeConfig);
     window.__SPROUT_E2E_COMMANDS__?.push(command);
+    const loggedPayload = (() => {
+      try {
+        return JSON.parse(JSON.stringify(payload ?? null));
+      } catch {
+        return null;
+      }
+    })();
+    window.__SPROUT_E2E_COMMAND_PAYLOADS__?.push({
+      command,
+      payload: loggedPayload,
+    });
 
     switch (command) {
       case "mesh_availability":

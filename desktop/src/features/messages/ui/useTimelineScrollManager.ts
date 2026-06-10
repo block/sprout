@@ -34,7 +34,7 @@ export function useTimelineScrollManager({
   const previousTimelineHeightRef = React.useRef<number | null>(null);
   const previousScrollTopRef = React.useRef(0);
   const lockedScrollTopRef = React.useRef<number | null>(null);
-  const previousLastMessageIdRef = React.useRef<string | undefined>(undefined);
+  const previousLastMessageKeyRef = React.useRef<string | undefined>(undefined);
   const previousMessageCountRef = React.useRef(0);
   const handledTargetMessageIdRef = React.useRef<string | null>(null);
   const [isAtBottom, setIsAtBottom] = React.useState(true);
@@ -51,7 +51,7 @@ export function useTimelineScrollManager({
     previousTimelineHeightRef.current = null;
     previousScrollTopRef.current = 0;
     lockedScrollTopRef.current = null;
-    previousLastMessageIdRef.current = undefined;
+    previousLastMessageKeyRef.current = undefined;
     previousMessageCountRef.current = 0;
     handledTargetMessageIdRef.current = null;
     setIsAtBottom(true);
@@ -97,6 +97,9 @@ export function useTimelineScrollManager({
 
   const latestMessage =
     messages.length > 0 ? messages[messages.length - 1] : undefined;
+  const latestMessageKey = latestMessage
+    ? (latestMessage.renderKey ?? latestMessage.id)
+    : undefined;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: timelineRef is a stable React ref passed from the parent — its identity never changes
   const syncScrollState = React.useCallback(() => {
@@ -294,18 +297,19 @@ export function useTimelineScrollManager({
         scrollToBottom("auto");
       }
       hasInitializedRef.current = true;
-      previousLastMessageIdRef.current = latestMessage?.id;
+      previousLastMessageKeyRef.current = latestMessageKey;
       previousMessageCountRef.current = messages.length;
       return;
     }
 
-    const previousLastMessageId = previousLastMessageIdRef.current;
+    const previousLastMessageKey = previousLastMessageKeyRef.current;
     const previousMessageCount = previousMessageCountRef.current;
     const hasNewLatestMessage =
-      latestMessage !== undefined && latestMessage.id !== previousLastMessageId;
+      latestMessage !== undefined &&
+      latestMessageKey !== previousLastMessageKey;
 
     if (!hasNewLatestMessage) {
-      previousLastMessageIdRef.current = latestMessage?.id;
+      previousLastMessageKeyRef.current = latestMessageKey;
       previousMessageCountRef.current = messages.length;
       return;
     }
@@ -327,11 +331,12 @@ export function useTimelineScrollManager({
       });
     }
 
-    previousLastMessageIdRef.current = latestMessage.id;
+    previousLastMessageKeyRef.current = latestMessageKey;
     previousMessageCountRef.current = messages.length;
   }, [
     isLoading,
     latestMessage,
+    latestMessageKey,
     messages.length,
     scrollToBottom,
     targetMessageId,

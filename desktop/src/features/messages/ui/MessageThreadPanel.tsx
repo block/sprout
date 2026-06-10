@@ -25,6 +25,7 @@ import { useComposerHeightPadding } from "./useComposerHeightPadding";
 import { useTimelineScrollManager } from "./useTimelineScrollManager";
 
 type MessageThreadPanelProps = {
+  agentPubkeys?: ReadonlySet<string>;
   canResetWidth: boolean;
   channel: Channel | null;
   channelId: string | null;
@@ -87,6 +88,7 @@ function canManageMessage(
 }
 
 export function MessageThreadPanel({
+  agentPubkeys,
   canResetWidth,
   channel,
   channelId,
@@ -277,6 +279,7 @@ export function MessageThreadPanel({
             <div className="px-3 pb-1 pt-0" data-testid="message-thread-head">
               <div className="rounded-2xl">
                 <MessageRow
+                  agentPubkeys={agentPubkeys}
                   channelId={channelId}
                   isFollowingThread={isFollowingThread}
                   layoutVariant="thread-reply"
@@ -318,9 +321,10 @@ export function MessageThreadPanel({
                           entry.summary &&
                             "group/message -mx-1 rounded-2xl px-1 py-1 transition-colors hover:bg-muted/50 focus-within:bg-muted/50",
                         )}
-                        key={entry.message.id}
+                        key={entry.message.renderKey ?? entry.message.id}
                       >
                         <MessageRow
+                          agentPubkeys={agentPubkeys}
                           channelId={channelId}
                           hoverBackground={!entry.summary}
                           layoutVariant="thread-reply"
@@ -395,6 +399,7 @@ export function MessageThreadPanel({
             <MessageComposer
               channelId={channelId}
               channelName={channelName}
+              channelType={channel?.channelType ?? null}
               disabled={disabled || isSending || !channelId}
               draftKey={`thread:${threadHead.id}`}
               editTarget={editTarget}

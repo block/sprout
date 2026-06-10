@@ -42,16 +42,41 @@ type MockCommandAvailability = {
   resolvedPath?: string | null;
 };
 
+type MockManagedAgentSeed = {
+  pubkey: string;
+  name: string;
+  personaId?: string | null;
+  status?: "running" | "stopped" | "deployed" | "not_deployed";
+  channelNames?: string[];
+  channelIds?: string[];
+  backend?:
+    | { type: "local" }
+    | { type: "provider"; id: string; config: Record<string, unknown> };
+};
+
+type MockSearchProfileSeed = {
+  pubkey: string;
+  displayName: string | null;
+  avatarUrl?: string | null;
+  nip05Handle?: string | null;
+  about?: string | null;
+  isAgent?: boolean;
+};
+
 type MockBridgeOptions = {
   acpRuntimesCatalog?: Record<string, unknown>[];
+  activePersonaIds?: string[];
   managedAgentPrereqs?: {
     acp?: MockCommandAvailability;
     mcp?: MockCommandAvailability;
   };
+  managedAgents?: MockManagedAgentSeed[];
   profileReadDelayMs?: number;
   profileReadError?: string;
   profileUpdateError?: string;
+  searchProfiles?: MockSearchProfileSeed[];
   stallWebsocketSends?: boolean;
+  userSearchDelayMs?: number;
   // NIP-IA gate inputs — drive the archive-button gate matrix in
   // tests/e2e/identity-archive.spec.ts.
   /**

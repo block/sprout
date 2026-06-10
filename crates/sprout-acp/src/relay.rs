@@ -114,6 +114,13 @@ const REST_RETRY_BASE_DELAYS: [Duration; 3] = [
     Duration::from_millis(2000),
 ];
 
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 impl RestClient {
     // ── NIP-98 signing ────────────────────────────────────────────────────
 
@@ -370,6 +377,7 @@ enum RelayCommand {
     Subscribe {
         channel_id: Uuid,
         filter: ChannelFilter,
+        replay_since: Option<u64>,
     },
     /// Unsubscribe from a channel (sends a NIP-01 CLOSE).
     Unsubscribe { channel_id: Uuid },
@@ -635,8 +643,27 @@ impl HarnessRelay {
         channel_id: Uuid,
         filter: ChannelFilter,
     ) -> Result<(), RelayError> {
+        self.subscribe_channel_from(channel_id, filter, None).await
+    }
+
+    /// Subscribe to events in a channel, replaying from a known timestamp.
+    ///
+    /// Used for channels discovered from membership notifications: the mention
+    /// that invited an agent can be published immediately after the membership
+    /// event, before this subscription is active. Replaying from the membership
+    /// event timestamp closes that race.
+    pub async fn subscribe_channel_from(
+        &mut self,
+        channel_id: Uuid,
+        filter: ChannelFilter,
+        replay_since: Option<u64>,
+    ) -> Result<(), RelayError> {
         self.cmd_tx
-            .send(RelayCommand::Subscribe { channel_id, filter })
+            .send(RelayCommand::Subscribe {
+                channel_id,
+                filter,
+                replay_since,
+            })
             .await
             .map_err(|_| RelayError::ConnectionClosed)?;
         debug!("queued subscribe for channel {channel_id}");
@@ -888,12 +915,12 @@ struct BgState {
     /// (Finding #22). Used as the floor `since` for membership notification
     /// replay so events predating this session are never re-delivered.
     startup_watermark: Option<u64>,
-    /// Wall-clock timestamp when each channel was first subscribed.
+    /// Replay floor captured when each channel was first subscribed.
     /// Used as the `since` fallback on reconnect for channels that have no
     /// `last_seen` or `channel_dropped_since`. This prevents channels joined
-    /// after startup from replaying from `startup_watermark` (which could be
-    /// hours old), while still allowing startup-era channels to use the
-    /// startup watermark via their `subscribe_since ≈ startup_watermark`.
+    /// after startup from replaying from an hours-old `startup_watermark`.
+    /// Startup-era channels use the startup watermark; dynamic channels use
+    /// the membership notification timestamp that caused the subscription.
     subscribe_since: HashMap<Uuid, u64>,
 }
 
@@ -977,20 +1004,22 @@ impl BgState {
 /// arm here is a logic error.
 fn apply_command_to_state(state: &mut BgState, cmd: RelayCommand) {
     match cmd {
-        RelayCommand::Subscribe { channel_id, filter } => {
+        RelayCommand::Subscribe {
+            channel_id,
+            filter,
+            replay_since,
+        } => {
             state
                 .active_subscriptions
                 .insert(channel_id, channel_sub_id(channel_id));
             state.active_filters.insert(channel_id, filter);
             state.subscribe_since.entry(channel_id).or_insert_with(|| {
-                // Use startup_watermark as floor when available — closes the
+                // Use an explicit replay floor when available (dynamic
+                // membership), otherwise startup_watermark closes the startup
                 // blind spot between watermark capture and first REQ.
-                state.startup_watermark.unwrap_or_else(|| {
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs()
-                })
+                replay_since
+                    .or(state.startup_watermark)
+                    .unwrap_or_else(unix_now_secs)
             });
         }
         RelayCommand::Unsubscribe { channel_id } => {
@@ -1040,19 +1069,18 @@ async fn execute_connected_command(
     cmd: RelayCommand,
 ) -> bool {
     match cmd {
-        RelayCommand::Subscribe { channel_id, filter } => {
+        RelayCommand::Subscribe {
+            channel_id,
+            filter,
+            replay_since,
+        } => {
             // Seed subscribe_since BEFORE computing since — on first
             // subscribe, this provides the fallback timestamp that
-            // closes the startup blind spot. Use startup_watermark as
-            // floor when available so events between watermark capture
-            // and this REQ are not missed.
+            // closes the startup/dynamic-membership blind spot.
             state.subscribe_since.entry(channel_id).or_insert_with(|| {
-                state.startup_watermark.unwrap_or_else(|| {
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs()
-                })
+                replay_since
+                    .or(state.startup_watermark)
+                    .unwrap_or_else(unix_now_secs)
             });
             let since = state
                 .last_seen
@@ -1070,7 +1098,14 @@ async fn execute_connected_command(
             } else {
                 // Send failed — record intent so reconnect restores it.
                 warn!("subscribe REQ failed for channel {channel_id} — recording intent for reconnect");
-                apply_command_to_state(state, RelayCommand::Subscribe { channel_id, filter });
+                apply_command_to_state(
+                    state,
+                    RelayCommand::Subscribe {
+                        channel_id,
+                        filter,
+                        replay_since,
+                    },
+                );
                 false
             }
         }
@@ -3349,6 +3384,38 @@ mod tests {
         assert!(
             !state.channel_dropped_since.contains_key(&channel_id),
             "channel_dropped_since should be cleared after resubscribe"
+        );
+    }
+
+    #[test]
+    fn dynamic_subscribe_records_membership_replay_floor() {
+        let mut state = BgState::new();
+        state.startup_watermark = Some(2_000);
+        let channel_id = Uuid::new_v4();
+        let membership_ts = 10_000;
+        let filter = ChannelFilter {
+            kinds: Some(vec![9]),
+            require_mention: true,
+        };
+
+        apply_command_to_state(
+            &mut state,
+            RelayCommand::Subscribe {
+                channel_id,
+                filter,
+                replay_since: Some(membership_ts),
+            },
+        );
+
+        assert_eq!(
+            state.subscribe_since.get(&channel_id).copied(),
+            Some(membership_ts),
+            "dynamic channel subscriptions should replay from the membership notification, not startup"
+        );
+        assert_eq!(
+            state.channel_since(&channel_id),
+            Some(membership_ts),
+            "channel_since should use the dynamic replay floor until an event is seen"
         );
     }
 

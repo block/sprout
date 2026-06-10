@@ -32,6 +32,7 @@ import {
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
 import { getSproutCodeBlockClipboardText } from "@/shared/lib/codeBlockClipboard";
 import { cn } from "@/shared/lib/cn";
+import type { ChannelType } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
 import { ComposerAttachments, DropZoneOverlay } from "./ComposerAttachments";
@@ -41,10 +42,13 @@ import {
   type MentionSuggestion,
 } from "./MentionAutocomplete";
 import { MessageComposerToolbar } from "./MessageComposerToolbar";
+import { NonMemberMentionDialog } from "./NonMemberMentionDialog";
+import { useMentionSendFlow } from "./useMentionSendFlow";
 
 type MessageComposerProps = {
   channelId?: string | null;
   channelName: string;
+  channelType?: ChannelType | null;
   containerClassName?: string;
   disabled?: boolean;
   draftKey?: string;
@@ -95,6 +99,7 @@ type MessageComposerProps = {
 export function MessageComposer({
   channelId = null,
   channelName,
+  channelType = null,
   containerClassName,
   disabled = false,
   draftKey,
@@ -138,7 +143,9 @@ export function MessageComposer({
     content: string;
     pendingImeta: ImetaMedia[];
   } | null>(null);
-  const mentions = useMentions(channelId, undefined, profiles);
+  const mentions = useMentions(channelId, undefined, profiles, {
+    channelType,
+  });
   const channelLinks = useChannelLinks();
   const customEmoji = useCustomEmoji();
   const emojiAutocomplete = useEmojiAutocomplete(customEmoji);
@@ -195,6 +202,7 @@ export function MessageComposer({
     placeholder: computedPlaceholder,
     editable: !disabled,
     mentionNames: mentions.knownNames,
+    agentMentionNames: mentions.agentKnownNames,
     channelNames: channelLinks.knownChannelNames,
     customEmoji,
     onSubmit: () => submitMessageRef.current(),
@@ -222,6 +230,22 @@ export function MessageComposer({
         notifyTyping();
       }
     },
+  });
+
+  const mentionSendFlow = useMentionSendFlow({
+    channelId,
+    channelLinks,
+    channelType,
+    contentRef,
+    customEmoji,
+    drafts,
+    emojiAutocomplete,
+    mentions,
+    onSendRef,
+    richText,
+    setContent,
+    setIsEmojiPickerOpen,
+    setPendingImeta: media.setPendingImeta,
   });
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: effectiveDraftKey is the sole trigger
@@ -496,63 +520,28 @@ export function MessageComposer({
       (!trimmed && !hasMedia) ||
       disabledRef.current ||
       isSendingRef.current ||
-      isUploadingRef.current
+      isUploadingRef.current ||
+      mentionSendFlow.isPreparingMentionSend
     ) {
       return;
     }
 
-    const pubkeys = mentions.extractMentionPubkeys(trimmed);
-
-    // Send semantics use `undefined` for "no attachments" (no imeta tags
-    // emitted on the publish), which is what `buildOutgoingMessage`
-    // returns by default.
-    const { content: finalContent, mediaTags } = buildOutgoingMessage(
+    await mentionSendFlow.sendMessageWithMentionFlow({
+      pendingImeta: currentPendingImeta,
+      sentDraftKey: effectiveDraftKeyRef.current,
       trimmed,
-      currentPendingImeta,
-    );
-
-    // NIP-30: attach ["emoji", shortcode, url] tags for custom emoji in the
-    // final content, so the event is self-contained.
-    const outgoingTags = mergeOutgoingTags(
-      mediaTags,
-      buildCustomEmojiTags(finalContent, customEmoji),
-    );
-
-    const savedContent = trimmed;
-    const savedImeta = [...currentPendingImeta];
-
-    setContent("");
-    contentRef.current = "";
-    richText.clearContent();
-    media.setPendingImeta([]);
-    mentions.clearMentions();
-    channelLinks.clearChannels();
-    emojiAutocomplete.clearEmojis();
-    setIsEmojiPickerOpen(false);
-
-    const sentDraftKey = effectiveDraftKeyRef.current;
-    try {
-      await onSendRef.current(finalContent, pubkeys, outgoingTags);
-      if (sentDraftKey) {
-        drafts.clearDraft(sentDraftKey);
-      }
-    } catch {
-      setContent(savedContent);
-      contentRef.current = savedContent;
-      richText.setContent(savedContent);
-      media.setPendingImeta(savedImeta);
-    }
+    });
   }, [
-    drafts.clearDraft,
+    channelLinks.clearChannels,
     customEmoji,
+    emojiAutocomplete.clearEmojis,
     media.pendingImetaRef,
     media.setPendingImeta,
-    mentions.extractMentionPubkeys,
+    mentionSendFlow.isPreparingMentionSend,
+    mentionSendFlow.sendMessageWithMentionFlow,
     mentions.clearMentions,
-    channelLinks.clearChannels,
     richText.clearContent,
     richText.setContent,
-    emojiAutocomplete.clearEmojis,
   ]);
   submitMessageRef.current = submitMessage;
 
@@ -696,8 +685,15 @@ export function MessageComposer({
     () =>
       disabled ||
       media.isUploading ||
+      mentionSendFlow.isPreparingMentionSend ||
       (content.trim().length === 0 && media.pendingImeta.length === 0),
-    [disabled, media.isUploading, content, media.pendingImeta.length],
+    [
+      disabled,
+      media.isUploading,
+      mentionSendFlow.isPreparingMentionSend,
+      content,
+      media.pendingImeta.length,
+    ],
   );
 
   const handleCaptureSelection = React.useCallback(() => {
@@ -710,157 +706,171 @@ export function MessageComposer({
 
   // ── Render ──────────────────────────────────────────────────────────
   return (
-    <footer
-      className={cn(
-        "relative z-10 shrink-0 bg-transparent px-4 pb-2 pt-0",
-        showTopBorder ? "border-t border-border/40 pt-3" : "",
-        containerClassName,
-      )}
-    >
-      <div
-        aria-hidden="true"
-        className="absolute inset-x-0 bottom-0 h-5 bg-background"
-      />
-      <div className="relative flex w-full flex-col gap-3">
-        <form
-          className="relative isolate rounded-2xl border border-border/50 bg-background/80 px-3 pb-2 pt-3 shadow-none backdrop-blur-md supports-[backdrop-filter]:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55 sm:px-4"
-          data-testid="message-composer"
-          onDragEnter={media.handleDragEnter}
-          onDragLeave={media.handleDragLeave}
-          onDragOver={media.handleDragOver}
-          onDrop={(e) => {
-            void media.handleDrop(e);
-          }}
-          onSubmit={(event) => {
-            handleSubmit(event);
-          }}
-        >
-          {media.isDragOver && <DropZoneOverlay />}
-          <EmojiAutocomplete
-            onSelect={applyEmojiInsert}
-            selectedIndex={emojiAutocomplete.emojiSelectedIndex}
-            suggestions={
-              emojiAutocomplete.isEmojiAutocompleteOpen
-                ? emojiAutocomplete.emojiSuggestions
-                : []
-            }
-          />
-          <ChannelAutocomplete
-            onSelect={applyChannelInsert}
-            selectedIndex={channelLinks.channelSelectedIndex}
-            suggestions={
-              channelLinks.isChannelOpen ? channelLinks.channelSuggestions : []
-            }
-          />
-          <MentionAutocomplete
-            onSelect={applyMentionInsert}
-            selectedIndex={mentions.mentionSelectedIndex}
-            suggestions={mentions.isMentionOpen ? mentions.suggestions : []}
-          />
-          {editTarget ? (
-            <div
-              className="mb-3 flex items-start justify-between gap-3 rounded-2xl border border-primary/30 bg-primary/5 px-3 py-2"
-              data-testid="edit-target"
-            >
-              <div className="min-w-0">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                  Editing message
-                </p>
-                <p className="truncate text-sm text-foreground/80">
-                  {editTarget.body}
-                </p>
-              </div>
-              <Button
-                className="shrink-0"
-                onClick={onCancelEdit}
-                size="sm"
-                type="button"
-                variant="ghost"
+    <>
+      <footer
+        className={cn(
+          "relative z-10 shrink-0 bg-transparent px-4 pb-2 pt-0",
+          showTopBorder ? "border-t border-border/40 pt-3" : "",
+          containerClassName,
+        )}
+      >
+        <div
+          aria-hidden="true"
+          className="absolute inset-x-0 bottom-0 h-5 bg-background"
+        />
+        <div className="relative flex w-full flex-col gap-3">
+          <form
+            className="relative isolate rounded-2xl border border-border/50 bg-background/80 px-3 pb-2 pt-3 shadow-none backdrop-blur-md supports-[backdrop-filter]:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55 sm:px-4"
+            data-testid="message-composer"
+            onDragEnter={media.handleDragEnter}
+            onDragLeave={media.handleDragLeave}
+            onDragOver={media.handleDragOver}
+            onDrop={(e) => {
+              void media.handleDrop(e);
+            }}
+            onSubmit={(event) => {
+              handleSubmit(event);
+            }}
+          >
+            {media.isDragOver && <DropZoneOverlay />}
+            <EmojiAutocomplete
+              onSelect={applyEmojiInsert}
+              selectedIndex={emojiAutocomplete.emojiSelectedIndex}
+              suggestions={
+                emojiAutocomplete.isEmojiAutocompleteOpen
+                  ? emojiAutocomplete.emojiSuggestions
+                  : []
+              }
+            />
+            <ChannelAutocomplete
+              onSelect={applyChannelInsert}
+              selectedIndex={channelLinks.channelSelectedIndex}
+              suggestions={
+                channelLinks.isChannelOpen
+                  ? channelLinks.channelSuggestions
+                  : []
+              }
+            />
+            <MentionAutocomplete
+              onSelect={applyMentionInsert}
+              selectedIndex={mentions.mentionSelectedIndex}
+              suggestions={mentions.isMentionOpen ? mentions.suggestions : []}
+            />
+            {editTarget ? (
+              <div
+                className="mb-3 flex items-start justify-between gap-3 rounded-2xl border border-primary/30 bg-primary/5 px-3 py-2"
+                data-testid="edit-target"
               >
-                Cancel
-              </Button>
-            </div>
-          ) : replyTarget ? (
-            <div
-              className="mb-3 flex items-start justify-between gap-3 rounded-2xl border border-border/70 bg-muted/40 px-3 py-2"
-              data-testid="reply-target"
-            >
-              <div className="min-w-0">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                  Replying to {replyTarget.author}
-                </p>
-                <p className="truncate text-sm text-foreground/80">
-                  {replyTarget.body}
-                </p>
-              </div>
-              {onCancelReply ? (
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                    Editing message
+                  </p>
+                  <p className="truncate text-sm text-foreground/80">
+                    {editTarget.body}
+                  </p>
+                </div>
                 <Button
-                  aria-label="Cancel reply"
-                  className="h-7 w-7 shrink-0 px-0"
-                  onClick={onCancelReply}
-                  size="icon"
+                  className="shrink-0"
+                  onClick={onCancelEdit}
+                  size="sm"
                   type="button"
                   variant="ghost"
                 >
-                  <X className="h-4 w-4" />
+                  Cancel
                 </Button>
-              ) : null}
-            </div>
-          ) : null}
-
-          {media.uploadState.status === "error" ? (
-            <div className="mb-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">
-              Upload failed: {media.uploadState.message}
-              <button
-                className="ml-2 underline"
-                onClick={() => media.setUploadState({ status: "idle" })}
-                type="button"
+              </div>
+            ) : replyTarget ? (
+              <div
+                className="mb-3 flex items-start justify-between gap-3 rounded-2xl border border-border/70 bg-muted/40 px-3 py-2"
+                data-testid="reply-target"
               >
-                Dismiss
-              </button>
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                    Replying to {replyTarget.author}
+                  </p>
+                  <p className="truncate text-sm text-foreground/80">
+                    {replyTarget.body}
+                  </p>
+                </div>
+                {onCancelReply ? (
+                  <Button
+                    aria-label="Cancel reply"
+                    className="h-7 w-7 shrink-0 px-0"
+                    onClick={onCancelReply}
+                    size="icon"
+                    type="button"
+                    variant="ghost"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+
+            {media.uploadState.status === "error" ? (
+              <div className="mb-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                Upload failed: {media.uploadState.message}
+                <button
+                  className="ml-2 underline"
+                  onClick={() => media.setUploadState({ status: "idle" })}
+                  type="button"
+                >
+                  Dismiss
+                </button>
+              </div>
+            ) : null}
+
+            {(media.pendingImeta.length > 0 || media.isUploading) && (
+              <div className="mb-2 flex items-center gap-2">
+                <ComposerAttachments
+                  attachments={media.pendingImeta}
+                  isUploading={media.isUploading}
+                  uploadingCount={media.uploadingCount}
+                  onRemove={media.removeAttachment}
+                />
+              </div>
+            )}
+
+            {/* biome-ignore lint/a11y/noStaticElementInteractions: keydown handler bridges Tiptap editor to autocomplete and submit */}
+            <div
+              className="rich-text-composer max-h-32 overflow-y-auto"
+              data-testid="message-input-scroll"
+              ref={composerScrollRef}
+              onKeyDown={handleEditorKeyDown}
+            >
+              <EditorContent editor={richText.editor} />
             </div>
-          ) : null}
 
-          {(media.pendingImeta.length > 0 || media.isUploading) && (
-            <div className="mb-2 flex items-center gap-2">
-              <ComposerAttachments
-                attachments={media.pendingImeta}
-                isUploading={media.isUploading}
-                uploadingCount={media.uploadingCount}
-                onRemove={media.removeAttachment}
-              />
-            </div>
-          )}
+            <MessageComposerToolbar
+              composerDisabled={disabled}
+              editor={richText.editor}
+              extraActions={toolbarExtraActions}
+              formattingDisabled={disabled}
+              isEmojiPickerOpen={isEmojiPickerOpen}
+              isFormattingOpen={isFormattingOpen}
+              isSending={isSending}
+              isUploading={media.isUploading}
+              onCaptureSelection={handleCaptureSelection}
+              onEmojiPickerOpenChange={setIsEmojiPickerOpen}
+              onEmojiSelect={insertEmoji}
+              onFormattingToggle={handleFormattingToggle}
+              onOpenMentionPicker={openMentionPicker}
+              onPaperclip={handlePaperclipClick}
+              sendDisabled={sendDisabled}
+            />
+          </form>
+        </div>
+      </footer>
 
-          {/* biome-ignore lint/a11y/noStaticElementInteractions: keydown handler bridges Tiptap editor to autocomplete and submit */}
-          <div
-            className="rich-text-composer max-h-32 overflow-y-auto"
-            data-testid="message-input-scroll"
-            ref={composerScrollRef}
-            onKeyDown={handleEditorKeyDown}
-          >
-            <EditorContent editor={richText.editor} />
-          </div>
-
-          <MessageComposerToolbar
-            composerDisabled={disabled}
-            editor={richText.editor}
-            extraActions={toolbarExtraActions}
-            formattingDisabled={disabled}
-            isEmojiPickerOpen={isEmojiPickerOpen}
-            isFormattingOpen={isFormattingOpen}
-            isSending={isSending}
-            isUploading={media.isUploading}
-            onCaptureSelection={handleCaptureSelection}
-            onEmojiPickerOpenChange={setIsEmojiPickerOpen}
-            onEmojiSelect={insertEmoji}
-            onFormattingToggle={handleFormattingToggle}
-            onOpenMentionPicker={openMentionPicker}
-            onPaperclip={handlePaperclipClick}
-            sendDisabled={sendDisabled}
-          />
-        </form>
-      </div>
-    </footer>
+      <NonMemberMentionDialog
+        error={mentionSendFlow.nonMemberPromptError}
+        isInvitePending={mentionSendFlow.isInvitePending}
+        names={mentionSendFlow.pendingNonMemberNames}
+        onDismiss={mentionSendFlow.dismissNonMemberPrompt}
+        onDoNothing={mentionSendFlow.sendWithoutInviting}
+        onInvite={mentionSendFlow.inviteNonMembers}
+        open={mentionSendFlow.pendingNonMemberSend !== null}
+      />
+    </>
   );
 }

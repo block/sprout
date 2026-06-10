@@ -21,6 +21,7 @@ import {
   useHideDmMutation,
   useOpenDmMutation,
 } from "@/features/channels/hooks";
+import { useMembershipNotifications } from "@/features/channels/useMembershipNotifications";
 import { useUnreadChannels } from "@/features/channels/useUnreadChannels";
 import { getThreadReference } from "@/features/messages/lib/threading";
 import { useThreadFollows } from "@/features/messages/lib/useThreadFollows";
@@ -213,6 +214,7 @@ export function AppShell() {
   usePresenceSubscription();
   useUserStatusSubscription();
   useWorkspaceEmojiLiveUpdates();
+  useMembershipNotifications(identityQuery.data?.pubkey);
   const presenceSession = usePresenceSession(deferredPubkey);
   const selfStatusQuery = useUserStatusQuery(
     deferredPubkey ? [deferredPubkey] : [],

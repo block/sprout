@@ -9,6 +9,7 @@ import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { resolveUserLabel } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { cn } from "@/shared/lib/cn";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import { Button } from "@/shared/ui/button";
 import { isPositiveEmojiParticle } from "@/shared/ui/EmojiBurstProvider";
 import {
@@ -44,15 +45,6 @@ function resolveLabel(
   return resolveUserLabel({ pubkey, currentPubkey, profiles });
 }
 
-function resolvePersonaSuffix(
-  pubkey: string | undefined,
-  personaLookup: Map<string, string> | undefined,
-): string {
-  if (!pubkey || !personaLookup) return "";
-  const personaName = personaLookup.get(pubkey.toLowerCase());
-  return personaName ? ` (${personaName})` : "";
-}
-
 function resolveAvatarUrl(
   pubkey: string | undefined,
   profiles: UserProfileLookup | undefined,
@@ -61,34 +53,41 @@ function resolveAvatarUrl(
   return profiles[pubkey.toLowerCase()]?.avatarUrl ?? null;
 }
 
-function resolveLabelWithSuffix(
+function resolveDisplayLabel(
   pubkey: string | undefined,
   currentPubkey: string | undefined,
   profiles: UserProfileLookup | undefined,
-  suffix = "",
 ): string {
-  return `${resolveLabel(pubkey, currentPubkey, profiles)}${suffix}`;
+  return resolveLabel(pubkey, currentPubkey, profiles);
 }
 
 function ProfileName({
   children,
   highlight = false,
+  isAgent = false,
   pubkey,
 }: {
   children: React.ReactNode;
   highlight?: boolean;
+  isAgent?: boolean;
   pubkey: string | undefined;
 }) {
+  const isAgentMention = highlight && isAgent;
   const node = (
     <span
+      data-mention={highlight ? "" : undefined}
       className={cn(
         pubkey && "cursor-pointer",
         highlight
-          ? cn(MENTION_CHIP_BASE_CLASSES, MENTION_CHIP_HOVER_CLASSES)
+          ? cn(
+              MENTION_CHIP_BASE_CLASSES,
+              MENTION_CHIP_HOVER_CLASSES,
+              isAgentMention && "agent-mention-highlight",
+            )
           : "rounded-xs transition-colors hover:text-foreground",
       )}
     >
-      {highlight ? "@" : null}
+      {highlight && !isAgentMention ? "@" : null}
       {children}
     </span>
   );
@@ -194,24 +193,28 @@ function describeSystemEvent(
   currentPubkey: string | undefined,
   profiles: UserProfileLookup | undefined,
   personaLookup?: Map<string, string>,
+  agentPubkeys?: ReadonlySet<string>,
 ): SystemMessageDescription | null {
-  const personaSuffix = resolvePersonaSuffix(payload.target, personaLookup);
-  const actorLabel = resolveLabelWithSuffix(
+  const isTargetAgent =
+    payload.target !== undefined &&
+    (agentPubkeys?.has(normalizePubkey(payload.target)) === true ||
+      profiles?.[normalizePubkey(payload.target)]?.isAgent === true ||
+      personaLookup?.has(normalizePubkey(payload.target)) === true);
+  const actorLabel = resolveDisplayLabel(
     payload.actor,
     currentPubkey,
     profiles,
   );
-  const targetLabel = resolveLabelWithSuffix(
+  const targetLabel = resolveDisplayLabel(
     payload.target,
     currentPubkey,
     profiles,
-    personaSuffix,
   );
   const actorName = (
     <ProfileName pubkey={payload.actor}>{actorLabel}</ProfileName>
   );
   const targetName = (
-    <ProfileName highlight pubkey={payload.target}>
+    <ProfileName highlight isAgent={isTargetAgent} pubkey={payload.target}>
       {targetLabel}
     </ProfileName>
   );
@@ -272,12 +275,14 @@ function describeSystemEvent(
 export const SystemMessageRow = React.memo(function SystemMessageRow({
   message,
   currentPubkey,
+  agentPubkeys,
   profiles,
   personaLookup,
   onToggleReaction,
 }: {
   message: TimelineMessage;
   currentPubkey?: string;
+  agentPubkeys?: ReadonlySet<string>;
   profiles?: UserProfileLookup;
   /** Map from lowercase pubkey → persona display name for bot members. */
   personaLookup?: Map<string, string>;
@@ -311,6 +316,7 @@ export const SystemMessageRow = React.memo(function SystemMessageRow({
     currentPubkey,
     profiles,
     personaLookup,
+    agentPubkeys,
   );
   if (!description) {
     return null;

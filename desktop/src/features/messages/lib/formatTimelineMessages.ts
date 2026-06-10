@@ -14,6 +14,7 @@ import {
   resolveUserLabel,
   type UserProfileLookup,
 } from "@/features/profile/lib/identity";
+import { getMentionTagPubkey } from "@/shared/lib/resolveMentionNames";
 import {
   KIND_JOB_ACCEPTED,
   KIND_JOB_CANCEL,
@@ -347,6 +348,7 @@ export function formatTimelineMessages(
     const role = roleByPubkey.get(authorPubkey.toLowerCase());
     return {
       id: event.id,
+      renderKey: event.localKey ?? event.id,
       createdAt: event.created_at,
       pubkey: authorPubkey,
       author,
@@ -428,6 +430,23 @@ export function collectMessageAuthorPubkeys(events: RelayEvent[]) {
           requireChannelTagForPTags: true,
         }).toLowerCase(),
       );
+    }
+  }
+
+  return [...pubkeys];
+}
+
+export function collectMessageMentionPubkeys(
+  events: Array<{ tags?: string[][] }>,
+) {
+  const pubkeys = new Set<string>();
+
+  for (const event of events) {
+    for (const tag of event.tags ?? []) {
+      const pubkey = getMentionTagPubkey(tag);
+      if (pubkey) {
+        pubkeys.add(pubkey);
+      }
     }
   }
 

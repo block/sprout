@@ -15,6 +15,7 @@ import { useLoadOlderOnScroll } from "./useLoadOlderOnScroll";
 import { useTimelineScrollManager } from "./useTimelineScrollManager";
 
 type MessageTimelineProps = {
+  agentPubkeys?: ReadonlySet<string>;
   channelId?: string | null;
   messages: TimelineMessage[];
   directMessageIntro?: {
@@ -60,6 +61,7 @@ type MessageTimelineProps = {
 };
 
 export const MessageTimeline = React.memo(function MessageTimeline({
+  agentPubkeys,
   channelId,
   directMessageIntro = null,
   messages,
@@ -228,6 +230,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
 
             {showMessageList ? (
               <TimelineMessageList
+                agentPubkeys={agentPubkeys}
                 channelId={channelId}
                 currentPubkey={currentPubkey}
                 followThreadById={followThreadById}

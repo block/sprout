@@ -65,6 +65,8 @@ pub struct RelayAgentInfo {
     pub channel_ids: Vec<String>,
     pub capabilities: Vec<String>,
     pub status: String,
+    #[serde(default)]
+    pub respond_to: Option<RespondTo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

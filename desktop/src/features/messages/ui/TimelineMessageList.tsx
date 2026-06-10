@@ -15,6 +15,7 @@ import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { SystemMessageRow } from "./SystemMessageRow";
 
 type TimelineMessageListProps = {
+  agentPubkeys?: ReadonlySet<string>;
   channelId?: string | null;
   currentPubkey?: string;
   followThreadById?: (rootId: string) => void;
@@ -44,6 +45,7 @@ type TimelineMessageListProps = {
 };
 
 export const TimelineMessageList = React.memo(function TimelineMessageList({
+  agentPubkeys,
   channelId,
   currentPubkey,
   followThreadById,
@@ -77,6 +79,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   for (let i = 0; i < entries.length; i++) {
     const { message, summary } = entries[i];
     const prev = i > 0 ? entries[i - 1]?.message : null;
+    const messageRenderKey = message.renderKey ?? message.id;
 
     if (!prev || !isSameDay(prev.createdAt, message.createdAt)) {
       currentDayGroup = {
@@ -90,9 +93,10 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
     if (message.kind === KIND_SYSTEM_MESSAGE) {
       const footer = messageFooters?.[message.id] ?? null;
       currentDayGroup?.elements.push(
-        <div key={message.id} className="flex flex-col gap-1">
+        <div key={messageRenderKey} className="flex flex-col gap-1">
           <SystemMessageRow
             message={message}
+            agentPubkeys={agentPubkeys}
             currentPubkey={currentPubkey}
             onToggleReaction={onToggleReaction}
             personaLookup={personaLookup}
@@ -106,7 +110,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
       const isHighlighted = message.id === highlightedMessageId;
       currentDayGroup?.elements.push(
         <div
-          key={message.id}
+          key={messageRenderKey}
           className={cn(
             "group/message relative -mx-1 flex flex-col gap-0 rounded-2xl px-1 py-1 transition-colors hover:bg-muted/50 focus-within:bg-muted/50",
             isHighlighted &&
@@ -114,6 +118,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
           )}
         >
           <MessageRow
+            agentPubkeys={agentPubkeys}
             channelId={channelId}
             highlighted={false}
             hoverBackground={false}
@@ -161,8 +166,9 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
       const footer = messageFooters?.[message.id] ?? null;
 
       currentDayGroup?.elements.push(
-        <div key={message.id} className="flex flex-col gap-1">
+        <div key={messageRenderKey} className="flex flex-col gap-1">
           <MessageRow
+            agentPubkeys={agentPubkeys}
             channelId={channelId}
             highlighted={message.id === highlightedMessageId || isSearchActive}
             message={message}

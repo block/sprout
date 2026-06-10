@@ -177,8 +177,21 @@ pub async fn search_users(
     let trimmed = query.trim();
     let max = limit.unwrap_or(8).min(50) as usize;
 
-    if trimmed.is_empty() || max == 0 {
+    if max == 0 {
         return Ok(SearchUsersResponse { users: Vec::new() });
+    }
+
+    if trimmed.is_empty() {
+        let events = query_relay(
+            &state,
+            &[serde_json::json!({
+                "kinds": [0],
+                "limit": max,
+            })],
+        )
+        .await?;
+
+        return Ok(nostr_convert::list_user_search_results(&events, max));
     }
 
     // NIP-50 full-text search on kind:0 profiles. The relay's HTTP bridge

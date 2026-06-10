@@ -272,6 +272,7 @@ pub async fn send_channel_message(
     parent_event_id: Option<String>,
     media_tags: Option<Vec<Vec<String>>>,
     emoji_tags: Option<Vec<Vec<String>>>,
+    mention_tags: Option<Vec<Vec<String>>>,
     mention_pubkeys: Option<Vec<String>>,
     kind: Option<u32>,
     state: State<'_, AppState>,
@@ -282,14 +283,19 @@ pub async fn send_channel_message(
     let mention_refs: Vec<&str> = mentions.iter().map(|s| s.as_str()).collect();
     let media = media_tags.unwrap_or_default();
     let emoji = emoji_tags.unwrap_or_default();
+    let mention_refs_only = mention_tags.unwrap_or_default();
     let kind_num = kind.unwrap_or(sprout_core::kind::KIND_STREAM_MESSAGE);
 
     let mut resolved_root: Option<String> = None;
 
     let builder = match kind_num {
-        sprout_core::kind::KIND_FORUM_POST => {
-            events::build_forum_post(channel_uuid, content.trim(), &mention_refs, &media)?
-        }
+        sprout_core::kind::KIND_FORUM_POST => events::build_forum_post(
+            channel_uuid,
+            content.trim(),
+            &mention_refs,
+            &media,
+            &mention_refs_only,
+        )?,
         sprout_core::kind::KIND_FORUM_COMMENT => {
             let parent_id = parent_event_id
                 .as_deref()
@@ -302,6 +308,7 @@ pub async fn send_channel_message(
                 &thread_ref,
                 &mention_refs,
                 &media,
+                &mention_refs_only,
             )?
         }
         _ => {
@@ -320,6 +327,7 @@ pub async fn send_channel_message(
                 &mention_refs,
                 &media,
                 &emoji,
+                &mention_refs_only,
             )?
         }
     };

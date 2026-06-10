@@ -31,7 +31,11 @@ import {
   useChannelMessagesQuery,
   useToggleReactionMutation,
 } from "@/features/messages/hooks";
-import { formatTimelineMessages } from "@/features/messages/lib/formatTimelineMessages";
+import { splitOutgoingTags } from "@/features/messages/lib/imetaMediaMarkdown";
+import {
+  collectMessageMentionPubkeys,
+  formatTimelineMessages,
+} from "@/features/messages/lib/formatTimelineMessages";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { resolveUserLabel } from "@/features/profile/lib/identity";
 import { deleteMessage, sendChannelMessage } from "@/shared/api/tauri";
@@ -129,7 +133,9 @@ export function HomeView({
     () => [
       ...new Set([
         ...feedItems.map((item) => item.pubkey),
+        ...collectMessageMentionPubkeys(feedItems),
         ...threadContext.events.map((event) => event.pubkey),
+        ...collectMessageMentionPubkeys(threadContext.events),
         ...(channelMessages ?? [])
           .filter((event) => event.kind === KIND_REACTION)
           .map((event) => event.pubkey),
@@ -439,12 +445,20 @@ export function HomeView({
               const itemToReply = selectedItem;
               setIsSendingReply(true);
               try {
+                const {
+                  mediaTags: imetaTags,
+                  emojiTags,
+                  mentionTags,
+                } = splitOutgoingTags(mediaTags);
                 const result = await sendChannelMessage(
                   channelId,
                   content,
                   parentEventId,
-                  mediaTags,
+                  imetaTags,
                   mentionPubkeys,
+                  undefined,
+                  emojiTags,
+                  mentionTags,
                 );
                 const authorPubkey = currentPubkey ?? itemToReply.item.pubkey;
                 const reply: InboxReply = {

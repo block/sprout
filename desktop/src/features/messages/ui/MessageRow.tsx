@@ -7,6 +7,7 @@ import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { parseImetaTags } from "@/features/messages/lib/parseImeta";
@@ -43,7 +44,9 @@ export const MessageRow = React.memo(
     onUnfollowThread,
     profiles,
     searchQuery,
+    agentPubkeys,
   }: {
+    agentPubkeys?: ReadonlySet<string>;
     channelId?: string | null;
     highlighted?: boolean;
     hoverBackground?: boolean;
@@ -85,6 +88,31 @@ export const MessageRow = React.memo(
       () => resolveMentionPubkeysByName(message.tags, profiles),
       [profiles, message.tags],
     );
+    const resolvedAgentPubkeys = React.useMemo(() => {
+      const pubkeys = new Set(agentPubkeys ?? []);
+
+      for (const [pubkey, profile] of Object.entries(profiles ?? {})) {
+        if (profile.isAgent) {
+          pubkeys.add(normalizePubkey(pubkey));
+        }
+      }
+
+      return pubkeys;
+    }, [agentPubkeys, profiles]);
+    const agentMentionPubkeysByName = React.useMemo(() => {
+      if (!mentionPubkeysByName) {
+        return undefined;
+      }
+
+      const values: Record<string, string> = {};
+      for (const [name, pubkey] of Object.entries(mentionPubkeysByName)) {
+        if (resolvedAgentPubkeys.has(normalizePubkey(pubkey))) {
+          values[name] = pubkey;
+        }
+      }
+
+      return Object.keys(values).length > 0 ? values : undefined;
+    }, [resolvedAgentPubkeys, mentionPubkeysByName]);
 
     const imetaByUrl = React.useMemo(
       () => (message.tags ? parseImetaTags(message.tags) : undefined),
@@ -155,6 +183,7 @@ export const MessageRow = React.memo(
               content={message.body}
               customEmoji={customEmoji}
               imetaByUrl={imetaByUrl}
+              agentMentionPubkeysByName={agentMentionPubkeysByName}
               mentionNames={mentionNames}
               mentionPubkeysByName={mentionPubkeysByName}
               searchQuery={searchQuery}

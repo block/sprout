@@ -15,6 +15,8 @@ export const KIND_JOB_ERROR = 43006;
 export const KIND_FORUM_POST = 45001;
 export const KIND_FORUM_COMMENT = 45003;
 export const KIND_APPROVAL_REQUEST = 46010;
+export const KIND_MEMBER_ADDED_NOTIFICATION = 44100;
+export const KIND_MEMBER_REMOVED_NOTIFICATION = 44101;
 export const KIND_TYPING_INDICATOR = 20002;
 // NIP-78 application-specific data. All use kind 30078; the relay
 // differentiates them by d-tag ("read-state:<slotId>", "channel-sections", "channel-mutes", "channel-stars").

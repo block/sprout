@@ -22,6 +22,8 @@ pub struct UserProfileSummaryInfo {
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
     pub nip05_handle: Option<String>,
+    #[serde(default)]
+    pub is_agent: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -36,6 +38,8 @@ pub struct UserSearchResultInfo {
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
     pub nip05_handle: Option<String>,
+    #[serde(default)]
+    pub is_agent: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -127,6 +131,8 @@ pub struct ChannelDetailInfo {
 pub struct ChannelMemberInfo {
     pub pubkey: String,
     pub role: String,
+    #[serde(default)]
+    pub is_agent: bool,
     /// Optional — kind:39002 events do not carry per-member join timestamps,
     /// so this is `None` when populated from a NIP-29 members event.
     #[serde(default)]

@@ -146,12 +146,15 @@ export function useUsersBatchQuery(
 export function useUserSearchQuery(
   query: string,
   options?: {
+    allowEmpty?: boolean;
     enabled?: boolean;
     limit?: number;
   },
 ) {
   const normalizedQuery = query.trim().toLowerCase();
-  const enabled = (options?.enabled ?? true) && normalizedQuery.length > 0;
+  const enabled =
+    (options?.enabled ?? true) &&
+    (options?.allowEmpty === true || normalizedQuery.length > 0);
 
   return useQuery<UserSearchResult[]>({
     enabled,

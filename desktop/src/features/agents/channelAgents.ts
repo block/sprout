@@ -118,12 +118,16 @@ export async function attachManagedAgentToChannel(
   let restarted = false;
 
   if (ensureRunning) {
-    // Remote (provider-backed) agents don't need restart — the harness
-    // auto-discovers new channels via membership notifications.
+    // Provider-backed agents use startManagedAgent as the deploy operation.
+    // Already-deployed providers auto-discover new channel membership via the
+    // harness; not-yet-deployed providers need the deploy call before the
+    // first mention can reach them.
     const isRemote = input.agent.backend.type === "provider";
-    if (isRemote) {
-      // No-op: remote agents pick up channel membership changes automatically.
+    if (isRemote && input.agent.status !== "deployed") {
+      agent = await startManagedAgent(input.agent.pubkey);
+      started = true;
     } else if (
+      !isRemote &&
       membershipAdded &&
       (input.agent.status === "running" || input.agent.status === "deployed")
     ) {
@@ -131,6 +135,7 @@ export async function attachManagedAgentToChannel(
       agent = await startManagedAgent(input.agent.pubkey);
       restarted = true;
     } else if (
+      !isRemote &&
       input.agent.status !== "running" &&
       input.agent.status !== "deployed"
     ) {

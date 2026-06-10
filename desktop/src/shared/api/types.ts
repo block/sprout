@@ -37,6 +37,7 @@ export type ChannelDetail = Channel & {
 export type ChannelMember = {
   pubkey: string;
   role: ChannelRole;
+  isAgent: boolean;
   joinedAt: string;
   displayName: string | null;
 };
@@ -119,6 +120,7 @@ export type UserProfileSummary = {
   displayName: string | null;
   avatarUrl: string | null;
   nip05Handle: string | null;
+  isAgent?: boolean;
 };
 
 export type UsersBatchResponse = {
@@ -131,6 +133,7 @@ export type UserSearchResult = {
   displayName: string | null;
   avatarUrl: string | null;
   nip05Handle: string | null;
+  isAgent: boolean;
 };
 
 export type UpdateProfileInput = {
@@ -154,6 +157,8 @@ export type UserStatusLookup = Record<string, UserStatus | null>;
 
 export type RelayEvent = {
   id: string;
+  /** Local-only render identity for optimistic events that are later acknowledged. */
+  localKey?: string;
   pubkey: string;
   created_at: number;
   kind: number;
@@ -256,6 +261,7 @@ export type RelayAgent = {
   channelIds: string[];
   capabilities: string[];
   status: "online" | "away" | "offline";
+  respondTo: RespondToMode | null;
 };
 
 export type ManagedAgentBackend =

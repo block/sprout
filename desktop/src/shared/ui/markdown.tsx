@@ -140,6 +140,7 @@ type MarkdownProps = {
   customEmoji?: CustomEmoji[];
   imetaByUrl?: ImetaLookup;
   interactive?: boolean;
+  agentMentionPubkeysByName?: Record<string, string>;
   mentionNames?: string[];
   mentionPubkeysByName?: Record<string, string>;
   searchQuery?: string;
@@ -668,6 +669,7 @@ function createMarkdownComponents(
   onOpenMessageLink: (link: ParsedMessageLink) => void,
   imetaByUrl?: ImetaLookup,
   mentionPubkeysByName?: Record<string, string>,
+  agentMentionPubkeysByName?: Record<string, string>,
   interactive = true,
 ): Components {
   const paragraphClassName =
@@ -909,6 +911,12 @@ function createMarkdownComponents(
       const mentionText = String(children ?? "");
       const mentionName = mentionText.replace(/^@/, "").trim().toLowerCase();
       const pubkey = mentionPubkeysByName?.[mentionName];
+      const isAgentMention =
+        pubkey !== undefined &&
+        agentMentionPubkeysByName?.[mentionName] === pubkey;
+      const renderedMentionText = isAgentMention
+        ? mentionText.replace(/^@/, "")
+        : children;
       const mentionNode = (
         <span
           data-mention=""
@@ -916,9 +924,10 @@ function createMarkdownComponents(
             "cursor-pointer",
             MENTION_CHIP_BASE_CLASSES,
             MENTION_CHIP_HOVER_CLASSES,
+            isAgentMention && "agent-mention-highlight",
           )}
         >
-          {children}
+          {renderedMentionText}
         </span>
       );
 
@@ -1026,6 +1035,7 @@ function MarkdownInner({
   customEmoji,
   imetaByUrl,
   interactive = true,
+  agentMentionPubkeysByName,
   mentionNames,
   mentionPubkeysByName,
   searchQuery,
@@ -1063,6 +1073,7 @@ function MarkdownInner({
         },
         imetaByUrl,
         mentionPubkeysByName,
+        agentMentionPubkeysByName,
         interactive,
       ),
     [
@@ -1071,6 +1082,7 @@ function MarkdownInner({
       channels,
       imetaByUrl,
       mentionPubkeysByName,
+      agentMentionPubkeysByName,
       interactive,
     ],
   );
@@ -1185,6 +1197,7 @@ export const Markdown = React.memo(
     prev.customEmoji === next.customEmoji &&
     prev.interactive === next.interactive &&
     prev.tight === next.tight &&
+    prev.agentMentionPubkeysByName === next.agentMentionPubkeysByName &&
     prev.mentionPubkeysByName === next.mentionPubkeysByName &&
     shallowArrayEqual(prev.mentionNames, next.mentionNames) &&
     shallowArrayEqual(prev.channelNames, next.channelNames) &&

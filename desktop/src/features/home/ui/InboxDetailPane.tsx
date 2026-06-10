@@ -200,6 +200,12 @@ export function InboxDetailPane({
           id: replyTarget.id,
         }
       : null;
+  const composerChannelType =
+    item.item.channelType === "dm" ||
+    item.item.channelType === "stream" ||
+    item.item.channelType === "forum"
+      ? item.item.channelType
+      : null;
   const channelContextName = contextChannelName ?? item.channelLabel;
   const contextLabel = channelContextName ?? formatInboxTypeLabel(item);
   const hasChannelContext = Boolean(channelContextName);
@@ -341,6 +347,7 @@ export function InboxDetailPane({
             <MessageComposer
               channelId={item.item.channelId}
               channelName={item.channelLabel ?? "channel"}
+              channelType={composerChannelType}
               containerClassName="px-4 pb-4 sm:px-4"
               disabled={!canReply}
               draftKey={`inbox-reply:${item.id}`}

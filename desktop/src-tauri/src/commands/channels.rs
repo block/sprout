@@ -287,21 +287,31 @@ pub async fn get_channel_members(
         .await
         .unwrap_or_default();
 
-        // Build pubkey → display_name map from kind:0 events
-        let mut name_map = std::collections::HashMap::new();
+        // Build pubkey → profile display metadata from kind:0 events.
+        let mut profile_map = std::collections::HashMap::new();
         for ev in &profile_events {
             let pk = ev.pubkey.to_hex();
             if let Ok(profile) = nostr_convert::profile_info_from_event(ev) {
-                if let Some(name) = profile.display_name {
-                    name_map.insert(pk, name);
-                }
+                profile_map.insert(
+                    pk,
+                    (
+                        profile.display_name,
+                        nostr_convert::profile_has_valid_oa_owner(ev),
+                    ),
+                );
             }
         }
 
-        // Populate display_name on each member
+        // Populate profile-derived fields on each member.
         for member in &mut response.members {
-            if member.display_name.is_none() {
-                member.display_name = name_map.get(&member.pubkey).cloned();
+            if member.role == "bot" {
+                member.is_agent = true;
+            }
+            if let Some((display_name, is_agent)) = profile_map.get(&member.pubkey) {
+                if member.display_name.is_none() {
+                    member.display_name = display_name.clone();
+                }
+                member.is_agent = member.is_agent || *is_agent;
             }
         }
     }

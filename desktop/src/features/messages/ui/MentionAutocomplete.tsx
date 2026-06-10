@@ -1,16 +1,19 @@
 import * as React from "react";
+import { Bot } from "lucide-react";
 
-import { truncatePubkey } from "@/features/profile/lib/identity";
 import { Badge } from "@/shared/ui/badge";
 import { cn } from "@/shared/lib/cn";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 export type MentionSuggestion = {
-  pubkey: string;
+  pubkey?: string;
+  personaId?: string;
+  kind?: "identity" | "persona";
   displayName: string;
   avatarUrl?: string | null;
+  isAgent?: boolean;
+  notInChannel?: boolean;
   role?: string | null;
-  personaName?: string | null;
 };
 
 type MentionAutocompleteProps = {
@@ -50,43 +53,76 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
         className="max-h-48 overflow-y-auto rounded-xl border bg-popover p-1 shadow-lg"
         ref={listRef}
       >
-        {suggestions.map((suggestion, index) => (
-          <button
-            className={cn(
-              "flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-1.5 text-left text-sm",
-              index === selectedIndex
-                ? "bg-accent text-accent-foreground"
-                : "text-popover-foreground hover:bg-accent/50",
-            )}
-            data-testid={`mention-suggestion-${suggestion.pubkey}`}
-            key={suggestion.pubkey}
-            onMouseDown={(event) => {
-              event.preventDefault();
-              onSelect(suggestion);
-            }}
-            tabIndex={-1}
-            type="button"
-          >
-            <UserAvatar
-              avatarUrl={suggestion.avatarUrl ?? null}
-              displayName={suggestion.displayName}
-              size="xs"
-            />
-            <span className="truncate font-medium">
-              {suggestion.displayName}
-            </span>
-            {suggestion.personaName ? (
-              <span className="text-xs text-muted-foreground">
-                ({suggestion.personaName})
+        {suggestions.map((suggestion, index) => {
+          const suggestionKey =
+            suggestion.pubkey ??
+            (suggestion.personaId ? `persona-${suggestion.personaId}` : null) ??
+            suggestion.displayName;
+          const agentLabel = "agent";
+
+          return (
+            <button
+              className={cn(
+                "flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-1.5 text-left text-sm",
+                index === selectedIndex
+                  ? "bg-accent text-accent-foreground"
+                  : "text-popover-foreground hover:bg-accent/50",
+              )}
+              data-testid={`mention-suggestion-${suggestionKey}`}
+              key={suggestionKey}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                onSelect(suggestion);
+              }}
+              tabIndex={-1}
+              type="button"
+            >
+              <UserAvatar
+                avatarUrl={suggestion.avatarUrl ?? null}
+                displayName={suggestion.displayName}
+                size="xs"
+              />
+              <span className="flex min-w-0 flex-1 items-center gap-2">
+                <span className="flex min-w-0 flex-1 items-baseline gap-1">
+                  <span className="truncate font-medium">
+                    {suggestion.displayName}
+                  </span>
+                  {suggestion.isAgent ? (
+                    <span
+                      className={cn(
+                        "inline-flex shrink-0 items-center gap-1 text-xs",
+                        index === selectedIndex
+                          ? "text-accent-foreground/70"
+                          : "text-muted-foreground",
+                      )}
+                    >
+                      <Bot
+                        aria-hidden="true"
+                        className="h-3 w-3"
+                        data-testid="mention-agent-icon"
+                      />
+                      {agentLabel}
+                    </span>
+                  ) : suggestion.role ? (
+                    <Badge variant="secondary">{suggestion.role}</Badge>
+                  ) : null}
+                </span>
+                {suggestion.notInChannel ? (
+                  <span
+                    className={cn(
+                      "ml-auto shrink-0 text-xs",
+                      index === selectedIndex
+                        ? "text-accent-foreground/65"
+                        : "text-muted-foreground",
+                    )}
+                  >
+                    not in channel
+                  </span>
+                ) : null}
               </span>
-            ) : suggestion.role ? (
-              <Badge variant="secondary">{suggestion.role}</Badge>
-            ) : null}
-            <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground/50">
-              {truncatePubkey(suggestion.pubkey)}
-            </span>
-          </button>
-        ))}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

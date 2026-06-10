@@ -30,6 +30,7 @@ import {
 } from "@/features/messages/hooks";
 import {
   collectMessageAuthorPubkeys,
+  collectMessageMentionPubkeys,
   formatTimelineMessages,
 } from "@/features/messages/lib/formatTimelineMessages";
 import { buildThreadPanelData } from "@/features/messages/lib/threadPanel";
@@ -53,6 +54,7 @@ import {
   THREAD_PANEL_SINGLE_COLUMN_BREAKPOINT_PX,
   useThreadPanelWidth,
 } from "@/shared/hooks/useThreadPanelWidth";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
   mergeAgentNamesIntoProfiles,
   useChannelActivityTyping,
@@ -156,6 +158,10 @@ export function ChannelScreen({
     () => collectMessageAuthorPubkeys(resolvedMessages),
     [resolvedMessages],
   );
+  const messageMentionPubkeys = React.useMemo(
+    () => collectMessageMentionPubkeys(resolvedMessages),
+    [resolvedMessages],
+  );
   const latestMessageEvent = React.useMemo(
     () => resolvedMessages[resolvedMessages.length - 1] ?? null,
     [resolvedMessages],
@@ -176,11 +182,17 @@ export function ChannelScreen({
     () => [
       ...new Set([
         ...messageAuthorPubkeys,
+        ...messageMentionPubkeys,
         ...activeDmParticipantPubkeys,
         ...typingEntries.map((entry) => entry.pubkey),
       ]),
     ],
-    [activeDmParticipantPubkeys, messageAuthorPubkeys, typingEntries],
+    [
+      activeDmParticipantPubkeys,
+      messageAuthorPubkeys,
+      messageMentionPubkeys,
+      typingEntries,
+    ],
   );
   const messageProfilesQuery = useUsersBatchQuery(messageProfilePubkeys, {
     enabled: messageProfilePubkeys.length > 0,
@@ -191,6 +203,21 @@ export function ChannelScreen({
   const managedAgents = managedAgentsQuery.data ?? [];
   const relayAgentsQuery = useRelayAgentsQuery();
   const relayAgents = relayAgentsQuery.data ?? [];
+  const agentPubkeys = React.useMemo(() => {
+    const pubkeys = new Set<string>();
+    for (const member of channelMembers ?? []) {
+      if (member.role === "bot" || member.isAgent) {
+        pubkeys.add(normalizePubkey(member.pubkey));
+      }
+    }
+    for (const agent of managedAgents) {
+      pubkeys.add(normalizePubkey(agent.pubkey));
+    }
+    for (const agent of relayAgents) {
+      pubkeys.add(normalizePubkey(agent.pubkey));
+    }
+    return pubkeys;
+  }, [channelMembers, managedAgents, relayAgents]);
   const {
     botTypingEntries,
     channelAgentSessionAgents: activeChannelAgentSessionAgents,
@@ -512,6 +539,7 @@ export function ChannelScreen({
               <React.Suspense fallback={<ViewLoadingFallback kind="channel" />}>
                 <ChannelPane
                   activeChannel={activeChannel}
+                  agentPubkeys={agentPubkeys}
                   agentSessionAgents={channelAgentSessionAgents}
                   botTypingEntries={botTypingEntries}
                   channelFind={channelFind}

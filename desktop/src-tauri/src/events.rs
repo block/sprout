@@ -76,6 +76,23 @@ fn mention_tags(mentions: &[&str]) -> Result<Vec<Tag>, String> {
     Ok(tags)
 }
 
+fn mention_reference_tags(mentions: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), String> {
+    for mention in mentions {
+        if mention.first().map(String::as_str) != Some("mention") {
+            return Err(format!(
+                "mention reference tags must use 'mention' prefix (got {:?})",
+                mention.first()
+            ));
+        }
+        let Some(pubkey) = mention.get(1) else {
+            return Err("mention reference tag missing pubkey".into());
+        };
+        check_pubkey(pubkey)?;
+        tags.push(tag(vec!["mention", &pubkey.to_ascii_lowercase()])?);
+    }
+    Ok(())
+}
+
 /// Validate and append imeta tags. Rejects any tag whose first element is not "imeta"
 /// to prevent injection of arbitrary tags (e.g., forged "h", "e", or "p" tags).
 fn imeta_tags(media_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), String> {
@@ -277,6 +294,7 @@ pub fn build_message(
     mentions: &[&str],
     media_tags: &[Vec<String>],
     custom_emoji_tags: &[Vec<String>],
+    mention_ref_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
     check_content(content)?;
     let mut tags = vec![tag(vec!["h", &channel_id.to_string()])?];
@@ -286,6 +304,7 @@ pub fn build_message(
     tags.extend(mention_tags(mentions)?);
     imeta_tags(media_tags, &mut tags)?;
     emoji_tags(custom_emoji_tags, &mut tags)?;
+    mention_reference_tags(mention_ref_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::Custom(9), content).tags(tags))
 }
 
@@ -295,11 +314,13 @@ pub fn build_forum_post(
     content: &str,
     mentions: &[&str],
     media_tags: &[Vec<String>],
+    mention_ref_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
     check_content(content)?;
     let mut tags = vec![tag(vec!["h", &channel_id.to_string()])?];
     tags.extend(mention_tags(mentions)?);
     imeta_tags(media_tags, &mut tags)?;
+    mention_reference_tags(mention_ref_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::Custom(45001), content).tags(tags))
 }
 
@@ -310,12 +331,14 @@ pub fn build_forum_comment(
     thread_ref: &ThreadRef,
     mentions: &[&str],
     media_tags: &[Vec<String>],
+    mention_ref_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
     check_content(content)?;
     let mut tags = vec![tag(vec!["h", &channel_id.to_string()])?];
     tags.extend(thread_tags(thread_ref)?);
     tags.extend(mention_tags(mentions)?);
     imeta_tags(media_tags, &mut tags)?;
+    mention_reference_tags(mention_ref_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::Custom(45003), content).tags(tags))
 }
 
