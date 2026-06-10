@@ -10,7 +10,7 @@
 //! into the right provider-native shape on our behalf (see Goose's
 //! `providers::utils::convert_image` for a reference implementation).
 
-use crate::paths::resolve_within;
+use crate::paths::resolve_path;
 use crate::shell::SharedState;
 use base64::Engine;
 use image::{
@@ -140,7 +140,7 @@ async fn load_source(
             Some(w) => PathBuf::from(w),
             None => state.cwd.clone(),
         };
-        let target = resolve_within(&workspace_root, src).map_err(invalid_params)?;
+        let target = resolve_path(&workspace_root, src).map_err(invalid_params)?;
         let meta = std::fs::metadata(&target).map_err(|e| {
             ErrorData::internal_error(format!("cannot stat {}: {e}", target.display()), None)
         })?;
@@ -685,9 +685,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_path_outside_workspace() {
+    async fn allows_path_outside_workspace() {
         let dir = tempdir().unwrap();
         let state = make_state(dir.path());
+        // /etc/hosts exists but is not an image — we expect a format error,
+        // not a path-escape error, proving the traversal limit is gone.
         let res = run(
             &state,
             ViewImageParams {
@@ -700,7 +702,7 @@ mod tests {
         .unwrap_err();
         let msg = format!("{res:?}");
         assert!(
-            msg.contains("escapes workspace") || msg.contains("not accessible"),
+            msg.contains("unsupported image format") || msg.contains("empty image"),
             "{msg}"
         );
     }

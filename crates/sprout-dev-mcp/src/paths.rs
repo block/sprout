@@ -1,11 +1,10 @@
 //! Path resolution and file I/O shared across dev-mcp tools.
 //!
-//! `resolve_within` canonicalises a user-supplied path against a workspace
-//! root and rejects any result that escapes the root (e.g. via `..`, absolute
-//! paths, or symlinks). All tools that touch the filesystem must funnel
-//! through this helper so the escape policy stays consistent.
+//! `resolve_path` resolves and canonicalizes a user-supplied path against a
+//! workspace root. No containment enforcement — the resolved path may land
+//! anywhere on the filesystem (consistent with the `shell` tool's posture).
 //!
-//! `read_text_file` builds on `resolve_within` to provide the full
+//! `read_text_file` builds on `resolve_path` to provide the full
 //! resolve → stat → size-check → read → UTF-8 decode pipeline shared by
 //! `read_file` and `str_replace`.
 
@@ -15,10 +14,10 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
 
-/// Resolve `path` (absolute or relative) against `root` and require the
-/// canonicalised result to live under the canonicalised `root`. Returns an
-/// error string suitable for `ErrorData::invalid_params` on rejection.
-pub(crate) fn resolve_within(root: &Path, path: &str) -> Result<PathBuf, String> {
+/// Resolve `path` (absolute or relative) against `root` and canonicalize
+/// the result. Returns an error string suitable for `ErrorData::invalid_params`
+/// if the path cannot be resolved.
+pub(crate) fn resolve_path(root: &Path, path: &str) -> Result<PathBuf, String> {
     let raw = Path::new(path);
     let candidate: PathBuf = if raw.is_absolute() {
         raw.to_path_buf()
@@ -26,19 +25,9 @@ pub(crate) fn resolve_within(root: &Path, path: &str) -> Result<PathBuf, String>
         root.join(raw)
     };
 
-    let root_canon = std::fs::canonicalize(root)
-        .map_err(|e| format!("workdir not accessible: {} ({e})", root.display()))?;
-
     let resolved = std::fs::canonicalize(&candidate)
         .map_err(|e| format!("path not accessible: {} ({e})", candidate.display()))?;
 
-    if !resolved.starts_with(&root_canon) {
-        return Err(format!(
-            "path escapes workspace: {} not within {}",
-            resolved.display(),
-            root_canon.display()
-        ));
-    }
     Ok(resolved)
 }
 
@@ -54,7 +43,7 @@ pub(crate) fn read_text_file(
         Some(w) => PathBuf::from(w),
         None => state.cwd.clone(),
     };
-    let target = match resolve_within(&workspace_root, path) {
+    let target = match resolve_path(&workspace_root, path) {
         Ok(t) => t,
         Err(e) => return Err(ErrorData::invalid_params(e, None)),
     };
@@ -132,11 +121,11 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn resolve_within_rejects_escape() {
+    fn resolve_path_allows_outside_workspace() {
         let dir = tempdir().expect("tempdir");
         let inside = dir.path().join("file.txt");
         fs::write(&inside, b"x").expect("write");
-        // Symlink targeting outside the dir should be rejected.
+        // Symlink targeting outside the dir should now resolve successfully.
         #[cfg(unix)]
         {
             let outside = std::env::temp_dir().join("dev-mcp-paths-escape-target");
@@ -144,12 +133,13 @@ mod tests {
             fs::write(&outside, b"y").expect("write outside");
             let link = dir.path().join("link.txt");
             std::os::unix::fs::symlink(&outside, &link).expect("symlink");
-            let err = resolve_within(dir.path(), "link.txt").unwrap_err();
-            assert!(err.contains("escapes workspace"), "got: {err}");
+            let resolved = resolve_path(dir.path(), "link.txt").expect("resolve");
+            let outside_canon = std::fs::canonicalize(&outside).expect("canonicalize");
+            assert_eq!(resolved, outside_canon);
             let _ = fs::remove_file(&outside);
         }
         // Resolves a normal path inside.
-        let p = resolve_within(dir.path(), "file.txt").expect("resolve");
+        let p = resolve_path(dir.path(), "file.txt").expect("resolve");
         assert!(p.ends_with("file.txt"));
     }
 }

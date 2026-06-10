@@ -255,12 +255,14 @@ mod tests {
     }
 
     #[test]
-    fn run_rejects_path_outside_workspace() {
+    fn run_allows_path_outside_workspace() {
         let dir = tempdir().expect("tempdir");
         let state = make_state(dir.path());
+        // /etc/hosts is readable but won't contain our old_str — we expect
+        // a "not found" error, not a path-escape error.
         let p = StrReplaceParams {
             path: "/etc/hosts".into(),
-            old_str: "x".into(),
+            old_str: "UNIQUE_STRING_NOT_IN_HOSTS_FILE_abc123".into(),
             new_str: "y".into(),
             replace_all: false,
             workdir: Some(dir.path().display().to_string()),
@@ -268,8 +270,8 @@ mod tests {
         let err = run(&state, p).unwrap_err();
         let msg = format!("{err:?}");
         assert!(
-            msg.contains("escapes workspace") || msg.contains("not accessible"),
-            "msg: {msg}"
+            msg.contains("not found"),
+            "expected 'not found' error (proving path resolved), got: {msg}"
         );
     }
 

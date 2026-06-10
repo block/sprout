@@ -128,7 +128,7 @@ mod tests {
     }
 
     #[test]
-    fn read_rejects_path_escape() {
+    fn read_allows_absolute_path() {
         let dir = tempdir().expect("tempdir");
         let state = make_state(dir.path());
         let p = ReadFileParams {
@@ -137,11 +137,10 @@ mod tests {
             limit: None,
             workdir: Some(dir.path().display().to_string()),
         };
-        let err = run(&state, p).unwrap_err();
-        let msg = format!("{err:?}");
+        let out = run(&state, p).expect("ok");
         assert!(
-            msg.contains("escapes workspace") || msg.contains("not accessible"),
-            "msg: {msg}"
+            out.contains("localhost"),
+            "expected /etc/hosts content, got: {out}"
         );
     }
 
