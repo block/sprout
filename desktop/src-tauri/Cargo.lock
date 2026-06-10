@@ -825,6 +825,48 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
+name = "buzz-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "hmac 0.13.0",
+ "nostr",
+ "percent-encoding",
+ "rand 0.10.1",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "subtle",
+ "thiserror 2.0.18",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "buzz-persona"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "buzz-sdk"
+version = "0.1.0"
+dependencies = [
+ "buzz-core",
+ "nostr",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
 name = "bytemuck"
 version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8179,26 +8221,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sprout-core"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "hex",
- "hmac 0.13.0",
- "nostr",
- "percent-encoding",
- "rand 0.10.1",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "subtle",
- "thiserror 2.0.18",
- "url",
- "uuid",
- "zeroize",
-]
-
-[[package]]
 name = "sprout-desktop"
 version = "0.3.16"
 dependencies = [
@@ -8207,6 +8229,9 @@ dependencies = [
  "audioadapter-buffers",
  "axum",
  "base64 0.22.1",
+ "buzz-core",
+ "buzz-persona",
+ "buzz-sdk",
  "bzip2 0.6.1",
  "chrono",
  "ctrlc",
@@ -8232,9 +8257,6 @@ dependencies = [
  "serde_yaml",
  "sha2 0.11.0",
  "sherpa-onnx",
- "sprout-core",
- "sprout-persona",
- "sprout-sdk",
  "strip-ansi-escapes",
  "tar",
  "tauri",
@@ -8258,28 +8280,6 @@ dependencies = [
  "windows-sys 0.61.2",
  "zeroize",
  "zip 8.6.0",
-]
-
-[[package]]
-name = "sprout-persona"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "serde_yaml",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "sprout-sdk"
-version = "0.1.0"
-dependencies = [
- "nostr",
- "serde",
- "serde_json",
- "sprout-core",
- "thiserror 2.0.18",
- "uuid",
 ]
 
 [[package]]
