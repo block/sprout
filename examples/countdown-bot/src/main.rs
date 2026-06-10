@@ -99,7 +99,7 @@ impl Config {
                             .context(
                                 "SPROUT_OWNER_PRIVATE_KEY must be an nsec or hex private key",
                             )?;
-                        sprout_sdk::nip_oa::compute_auth_tag(
+                        buzz_sdk::nip_oa::compute_auth_tag(
                             &owner_keys,
                             &bot_keys.public_key(),
                             "",
@@ -107,10 +107,10 @@ impl Config {
                     }
                 };
 
-                let owner = sprout_sdk::nip_oa::verify_auth_tag(&tag_json, &bot_keys.public_key())
+                let owner = buzz_sdk::nip_oa::verify_auth_tag(&tag_json, &bot_keys.public_key())
                     .context("SPROUT_AUTH_TAG is not valid for SPROUT_BOT_PRIVATE_KEY")?;
                 eprintln!("owner-attested auth tag verified; owner={}", owner.to_hex());
-                Some(sprout_sdk::nip_oa::parse_auth_tag(&tag_json)?)
+                Some(buzz_sdk::nip_oa::parse_auth_tag(&tag_json)?)
             }
             other => bail!(
                 "SPROUT_BOT_AUTH_MODE must be 'standalone' or 'owner-attested', got {other:?}"
@@ -159,7 +159,7 @@ fn build_auth_event(config: &Config, challenge: &str) -> Result<Event> {
 }
 
 async fn publish_profile(ws: &mut Ws, config: &Config) -> Result<()> {
-    let builder = sprout_sdk::builders::build_profile(
+    let builder = buzz_sdk::builders::build_profile(
         Some(BOT_DISPLAY_NAME),
         Some(BOT_NAME),
         Some(BOT_ICON_DATA_URL),
@@ -239,7 +239,7 @@ async fn maybe_reply(
         return Ok(());
     };
 
-    let builder = sprout_sdk::builders::build_message(
+    let builder = buzz_sdk::builders::build_message(
         config.channel_id.parse()?,
         &reply,
         None,
