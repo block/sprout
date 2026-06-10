@@ -11,6 +11,7 @@ import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { parseImetaTags } from "@/features/messages/lib/parseImeta";
 import { customEmojiFromTags } from "@/shared/api/customEmoji";
+import { isEmojiOnlyMessage } from "@/shared/lib/emojiOnly";
 import {
   resolveMentionNames,
   resolveMentionPubkeysByName,
@@ -95,6 +96,10 @@ export const MessageRow = React.memo(
       () => (message.tags ? customEmojiFromTags(message.tags) : undefined),
       [message.tags],
     );
+    const emojiOnly = React.useMemo(
+      () => isEmojiOnlyMessage(message.body, customEmoji),
+      [message.body, customEmoji],
+    );
 
     const { channels } = useChannelNavigation();
     const channelNames = React.useMemo(
@@ -151,7 +156,11 @@ export const MessageRow = React.memo(
           return (
             <Markdown
               channelNames={channelNames}
-              className="max-w-full text-[15px] leading-6"
+              className={cn(
+                "max-w-full text-[15px] leading-6",
+                emojiOnly &&
+                  "text-4xl leading-tight [&_img[data-custom-emoji]]:h-[1.45em] [&_img[data-custom-emoji]]:align-middle [&_button:has(img[data-custom-emoji])]:align-middle",
+              )}
               content={message.body}
               customEmoji={customEmoji}
               imetaByUrl={imetaByUrl}
