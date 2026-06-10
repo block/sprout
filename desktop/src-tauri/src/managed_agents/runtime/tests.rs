@@ -1,5 +1,57 @@
 use crate::managed_agents::known_acp_runtime;
 
+// ── buffer_contains_identifier tests ────────────────────────────────────
+
+#[test]
+fn identifier_prefix_does_not_match_longer_id() {
+    // DMG identifier should NOT match inside a dev desktop's config JSON.
+    let buf = br#""identifier":"xyz.block.sprout.app.dev""#;
+    let id = b"xyz.block.sprout.app";
+    assert!(!super::buffer_contains_identifier(buf, id));
+}
+
+#[test]
+fn identifier_prefix_does_not_match_worktree_slug() {
+    // Main dev identifier should NOT match inside a worktree desktop's buffer.
+    let buf = br#""identifier":"xyz.block.sprout.app.dev.my-branch""#;
+    let id = b"xyz.block.sprout.app.dev";
+    assert!(!super::buffer_contains_identifier(buf, id));
+}
+
+#[test]
+fn identifier_exact_match_with_quote_boundary() {
+    // Exact match followed by closing quote — should match.
+    let buf = br#""identifier":"xyz.block.sprout.app.dev""#;
+    let id = b"xyz.block.sprout.app.dev";
+    assert!(super::buffer_contains_identifier(buf, id));
+}
+
+#[test]
+fn identifier_match_with_null_boundary() {
+    // In KERN_PROCARGS2, entries are null-delimited.
+    let mut buf = b"SPROUT_MANAGED_AGENT=xyz.block.sprout.app.dev".to_vec();
+    buf.push(0);
+    buf.extend_from_slice(b"OTHER_VAR=value");
+    let id = b"xyz.block.sprout.app.dev";
+    assert!(super::buffer_contains_identifier(&buf, id));
+}
+
+#[test]
+fn identifier_at_end_of_buffer_does_not_match() {
+    // No trailing byte to confirm boundary — conservative non-match.
+    let buf = b"xyz.block.sprout.app.dev";
+    let id = b"xyz.block.sprout.app.dev";
+    assert!(!super::buffer_contains_identifier(buf, id));
+}
+
+#[test]
+fn identifier_empty_returns_false() {
+    let buf = b"anything";
+    assert!(!super::buffer_contains_identifier(buf, b""));
+}
+
+// ── marker_entry tests ──────────────────────────────────────────────────
+
 #[test]
 fn marker_entry_is_namespaced_by_instance_id() {
     // The spawn stamp and the sweep matcher must produce identical bytes;

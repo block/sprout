@@ -239,6 +239,10 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     // known agent binaries that are still running.
     managed_agents::sweep_system_agent_processes(&managed_agents::current_instance_id(app), &[]);
 
+    // Dead-instance reaping: find agents belonging to Sprout instances
+    // whose desktop process is no longer running and reap them.
+    managed_agents::reap_dead_instance_agents(&managed_agents::current_instance_id(app), &[]);
+
     if changed {
         save_managed_agents(app, &records)?;
     }

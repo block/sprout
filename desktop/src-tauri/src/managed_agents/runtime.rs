@@ -395,23 +395,31 @@ pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32])
 
     let my_uid = unsafe { libc::getuid() };
 
-    let count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
-    if count <= 0 {
-        return;
+    // Loop until the buffer is large enough to hold all PIDs. Under a fork
+    // storm the process table can outgrow the initial estimate between the
+    // probe and the fill call.
+    let mut pids: Vec<libc::c_int>;
+    loop {
+        let count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
+        if count <= 0 {
+            return;
+        }
+        let buf_len = (count as usize) * 2;
+        pids = vec![0; buf_len];
+        let actual = unsafe {
+            proc_listallpids(
+                pids.as_mut_ptr(),
+                (buf_len * std::mem::size_of::<libc::c_int>()) as libc::c_int,
+            )
+        };
+        if actual <= 0 {
+            return;
+        }
+        pids.truncate(actual as usize);
+        if (actual as usize) < buf_len {
+            break;
+        }
     }
-
-    let buf_len = (count as usize) * 2;
-    let mut pids: Vec<libc::c_int> = vec![0; buf_len];
-    let actual = unsafe {
-        proc_listallpids(
-            pids.as_mut_ptr(),
-            (buf_len * std::mem::size_of::<libc::c_int>()) as libc::c_int,
-        )
-    };
-    if actual <= 0 {
-        return;
-    }
-    pids.truncate(actual as usize);
 
     let my_pid = std::process::id() as i32;
     let mut orphans: Vec<i32> = Vec::new();
@@ -509,6 +517,665 @@ pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32])
 
 #[cfg(not(unix))]
 pub(crate) fn sweep_system_agent_processes(_instance_id: &str, _skip_pids: &[u32]) {}
+
+/// Periodic-sweep variant with two-tick grace: only reaps same-instance orphans
+/// that were also seen orphaned on the previous tick. This prevents killing a
+/// legitimately-starting agent that spawned between the skip-list snapshot and
+/// the process scan.
+#[cfg(unix)]
+pub(crate) fn sweep_system_agent_processes_with_grace(
+    instance_id: &str,
+    skip_pids: &[u32],
+    prev_orphans: &std::collections::HashSet<u32>,
+) {
+    let current = collect_same_instance_orphans(instance_id, skip_pids);
+    // Only reap PIDs seen orphaned on two consecutive ticks.
+    let confirmed: Vec<i32> = current
+        .iter()
+        .filter(|pid| prev_orphans.contains(pid))
+        .map(|&pid| pid as i32)
+        .collect();
+    if !confirmed.is_empty() {
+        eprintln!(
+            "sprout-desktop: periodic sweep confirmed {} orphaned agent process(es), cleaning up",
+            confirmed.len()
+        );
+        sigterm_then_sigkill(&confirmed);
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn sweep_system_agent_processes_with_grace(
+    _instance_id: &str,
+    _skip_pids: &[u32],
+    _prev_orphans: &std::collections::HashSet<u32>,
+) {
+}
+
+/// Collect PIDs of same-instance agent processes that appear orphaned (not in
+/// `skip_pids`). Returns the set for use in two-tick grace logic — does NOT
+/// kill anything.
+#[cfg(target_os = "macos")]
+pub(crate) fn collect_same_instance_orphans(
+    instance_id: &str,
+    skip_pids: &[u32],
+) -> std::collections::HashSet<u32> {
+    extern "C" {
+        fn proc_listallpids(buffer: *mut libc::c_int, buffersize: libc::c_int) -> libc::c_int;
+        fn proc_pidinfo(
+            pid: libc::c_int,
+            flavor: libc::c_int,
+            arg: u64,
+            buffer: *mut libc::c_void,
+            buffersize: libc::c_int,
+        ) -> libc::c_int;
+    }
+
+    #[repr(C)]
+    struct BSDInfo {
+        _pad: [u8; 20],
+        pbi_uid: u32,
+        _rest: [u8; 112],
+    }
+    const _: () = assert!(std::mem::size_of::<BSDInfo>() == 136);
+    const PROC_PIDTBSDINFO: libc::c_int = 3;
+
+    let my_uid = unsafe { libc::getuid() };
+    let my_pid = std::process::id() as i32;
+    let mut orphans = std::collections::HashSet::new();
+
+    let mut pids: Vec<libc::c_int>;
+    loop {
+        let count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
+        if count <= 0 {
+            return orphans;
+        }
+        let buf_len = (count as usize) * 2;
+        pids = vec![0; buf_len];
+        let actual = unsafe {
+            proc_listallpids(
+                pids.as_mut_ptr(),
+                (buf_len * std::mem::size_of::<libc::c_int>()) as libc::c_int,
+            )
+        };
+        if actual <= 0 {
+            return orphans;
+        }
+        pids.truncate(actual as usize);
+        if (actual as usize) < buf_len {
+            break;
+        }
+    }
+
+    for &pid in &pids {
+        if pid <= 0 || pid == my_pid {
+            continue;
+        }
+        let upid = pid as u32;
+        if skip_pids.contains(&upid) {
+            continue;
+        }
+        if !process_belongs_to_us(upid) {
+            continue;
+        }
+        let mut info = std::mem::MaybeUninit::<BSDInfo>::zeroed();
+        let ret = unsafe {
+            proc_pidinfo(
+                pid,
+                PROC_PIDTBSDINFO,
+                0,
+                info.as_mut_ptr() as *mut libc::c_void,
+                std::mem::size_of::<BSDInfo>() as libc::c_int,
+            )
+        };
+        if ret <= 0 {
+            continue;
+        }
+        let info = unsafe { info.assume_init() };
+        if info.pbi_uid != my_uid {
+            continue;
+        }
+        if process_has_sprout_marker(upid, instance_id) {
+            orphans.insert(upid);
+        }
+    }
+    orphans
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) fn collect_same_instance_orphans(
+    instance_id: &str,
+    skip_pids: &[u32],
+) -> std::collections::HashSet<u32> {
+    let my_uid = unsafe { libc::getuid() };
+    let my_pid = std::process::id() as i32;
+    let mut orphans = std::collections::HashSet::new();
+
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return orphans;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        let Ok(pid) = name_str.parse::<i32>() else {
+            continue;
+        };
+        if pid <= 0 || pid == my_pid {
+            continue;
+        }
+        let upid = pid as u32;
+        if skip_pids.contains(&upid) {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        use std::os::unix::fs::MetadataExt;
+        if meta.uid() != my_uid {
+            continue;
+        }
+        if process_belongs_to_us(upid) && process_has_sprout_marker(upid, instance_id) {
+            orphans.insert(upid);
+        }
+    }
+    orphans
+}
+
+#[cfg(not(unix))]
+pub(crate) fn collect_same_instance_orphans(
+    _instance_id: &str,
+    _skip_pids: &[u32],
+) -> std::collections::HashSet<u32> {
+    std::collections::HashSet::new()
+}
+
+/// Binary names for the Sprout desktop/Tauri process. Used by dead-instance
+/// detection to confirm the owning desktop is still alive. The release .app
+/// bundle reports as "Sprout"; `tauri dev` reports as "sprout-desktop".
+const DESKTOP_BINARY_NAMES: &[&str] = &["Sprout", "sprout-desktop", "sprout_desktop"];
+
+/// Check if a process name matches a known Sprout desktop binary.
+fn is_desktop_binary(name: &str) -> bool {
+    DESKTOP_BINARY_NAMES.contains(&name)
+}
+
+/// Check whether `buf` contains `id` as a complete identifier — not as a
+/// prefix of a longer dotted name. The identifier appears in the Tauri config
+/// JSON as `"identifier":"xyz.block.sprout.app.dev"`, so a valid match is
+/// followed by a non-identifier byte (not `[A-Za-z0-9._-]`). This prevents
+/// `xyz.block.sprout.app` from matching inside `xyz.block.sprout.app.dev`.
+fn buffer_contains_identifier(buf: &[u8], id: &[u8]) -> bool {
+    if id.is_empty() {
+        return false;
+    }
+    buf.windows(id.len()).enumerate().any(|(i, w)| {
+        if w != id {
+            return false;
+        }
+        // Check the byte immediately after the match.
+        let after_idx = i + id.len();
+        if after_idx >= buf.len() {
+            // End of buffer — no trailing context to confirm boundary.
+            // Treat as non-match to be conservative (the JSON always has a
+            // closing quote after the identifier).
+            return false;
+        }
+        let next = buf[after_idx];
+        // Identifier chars that would indicate a longer id continues.
+        !next.is_ascii_alphanumeric() && next != b'.' && next != b'_' && next != b'-'
+    })
+}
+
+/// Extract the `SPROUT_MANAGED_AGENT` value from a process's environment.
+/// Returns `None` if the process doesn't have the marker or can't be read.
+#[cfg(target_os = "macos")]
+fn extract_sprout_marker_value(pid: u32) -> Option<String> {
+    let prefix = b"SPROUT_MANAGED_AGENT=";
+
+    let mut mib: [libc::c_int; 3] = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
+    let mut buf_size: libc::size_t = 0;
+
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            std::ptr::null_mut(),
+            &mut buf_size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return None;
+    }
+
+    let mut buf: Vec<u8> = vec![0; buf_size];
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            &mut buf_size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return None;
+    }
+    buf.truncate(buf_size);
+
+    if buf.len() < std::mem::size_of::<libc::c_int>() {
+        return None;
+    }
+    let mut n_args: libc::c_int = 0;
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            buf.as_ptr(),
+            &mut n_args as *mut libc::c_int as *mut u8,
+            std::mem::size_of::<libc::c_int>(),
+        );
+    }
+    let mut pos = std::mem::size_of::<libc::c_int>();
+
+    // Skip exec path.
+    while pos < buf.len() && buf[pos] != 0 {
+        pos += 1;
+    }
+    while pos < buf.len() && buf[pos] == 0 {
+        pos += 1;
+    }
+    // Skip argc argument strings.
+    let mut args_remaining = n_args;
+    while args_remaining > 0 && pos < buf.len() {
+        while pos < buf.len() && buf[pos] != 0 {
+            pos += 1;
+        }
+        while pos < buf.len() && buf[pos] == 0 {
+            pos += 1;
+        }
+        args_remaining -= 1;
+    }
+    // Search environment entries for our marker.
+    for entry in buf[pos..].split(|&b| b == 0) {
+        if entry.starts_with(prefix) {
+            return String::from_utf8(entry[prefix.len()..].to_vec()).ok();
+        }
+    }
+    None
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn extract_sprout_marker_value(pid: u32) -> Option<String> {
+    let prefix = b"SPROUT_MANAGED_AGENT=";
+    let data = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+    for entry in data.split(|&b| b == 0) {
+        if entry.starts_with(prefix) {
+            return String::from_utf8(entry[prefix.len()..].to_vec()).ok();
+        }
+    }
+    None
+}
+
+#[cfg(not(unix))]
+fn extract_sprout_marker_value(_pid: u32) -> Option<String> {
+    None
+}
+
+/// Check if a Sprout desktop process is still alive for the given instance ID.
+/// Scans all user-owned processes named "Sprout" or "sprout-desktop" and checks
+/// whether any has the identifier in its command-line args (KERN_PROCARGS2 buffer
+/// includes both argv and environ — the `--config` JSON from `tauri dev` contains
+/// the identifier string).
+#[cfg(target_os = "macos")]
+fn desktop_is_alive_for_instance(instance_id: &str) -> bool {
+    extern "C" {
+        fn proc_listallpids(buffer: *mut libc::c_int, buffersize: libc::c_int) -> libc::c_int;
+        fn proc_name(pid: libc::c_int, buffer: *mut libc::c_void, buffersize: u32) -> libc::c_int;
+        fn proc_pidinfo(
+            pid: libc::c_int,
+            flavor: libc::c_int,
+            arg: u64,
+            buffer: *mut libc::c_void,
+            buffersize: libc::c_int,
+        ) -> libc::c_int;
+    }
+
+    #[repr(C)]
+    struct BSDInfo {
+        _pad: [u8; 20],
+        pbi_uid: u32,
+        _rest: [u8; 112],
+    }
+    const _: () = assert!(std::mem::size_of::<BSDInfo>() == 136);
+    const PROC_PIDTBSDINFO: libc::c_int = 3;
+
+    let my_uid = unsafe { libc::getuid() };
+    let identifier_bytes = instance_id.as_bytes();
+
+    let mut pids: Vec<libc::c_int>;
+    loop {
+        let count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
+        if count <= 0 {
+            return false;
+        }
+        let buf_len = (count as usize) * 2;
+        pids = vec![0; buf_len];
+        let actual = unsafe {
+            proc_listallpids(
+                pids.as_mut_ptr(),
+                (buf_len * std::mem::size_of::<libc::c_int>()) as libc::c_int,
+            )
+        };
+        if actual <= 0 {
+            return false;
+        }
+        pids.truncate(actual as usize);
+        if (actual as usize) < buf_len {
+            break;
+        }
+    }
+
+    for &pid in &pids {
+        if pid <= 0 {
+            continue;
+        }
+        // Check binary name — only look at desktop binaries.
+        let mut name_buf = [0u8; 1024];
+        let len = unsafe {
+            proc_name(
+                pid,
+                name_buf.as_mut_ptr() as *mut libc::c_void,
+                name_buf.len() as u32,
+            )
+        };
+        if len <= 0 {
+            continue;
+        }
+        let name = String::from_utf8_lossy(&name_buf[..len as usize]);
+        if !is_desktop_binary(&name) {
+            continue;
+        }
+        // Verify UID.
+        let mut info = std::mem::MaybeUninit::<BSDInfo>::zeroed();
+        let ret = unsafe {
+            proc_pidinfo(
+                pid,
+                PROC_PIDTBSDINFO,
+                0,
+                info.as_mut_ptr() as *mut libc::c_void,
+                std::mem::size_of::<BSDInfo>() as libc::c_int,
+            )
+        };
+        if ret <= 0 {
+            continue;
+        }
+        let info = unsafe { info.assume_init() };
+        if info.pbi_uid != my_uid {
+            continue;
+        }
+        // Check if this desktop process's args/env contain the identifier.
+        // The KERN_PROCARGS2 buffer holds argv + environ as null-delimited strings.
+        let mut mib: [libc::c_int; 3] = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+        let mut buf_size: libc::size_t = 0;
+        if unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                3,
+                std::ptr::null_mut(),
+                &mut buf_size,
+                std::ptr::null_mut(),
+                0,
+            )
+        } != 0
+        {
+            continue;
+        }
+        let mut args_buf: Vec<u8> = vec![0; buf_size];
+        if unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                3,
+                args_buf.as_mut_ptr() as *mut libc::c_void,
+                &mut buf_size,
+                std::ptr::null_mut(),
+                0,
+            )
+        } != 0
+        {
+            continue;
+        }
+        args_buf.truncate(buf_size);
+        // Boundary-anchored search: the identifier in the config JSON is
+        // followed by a non-identifier char (typically `"`). A raw substring
+        // match would let `...app` match inside `...app.dev`.
+        if buffer_contains_identifier(&args_buf, identifier_bytes) {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn desktop_is_alive_for_instance(instance_id: &str) -> bool {
+    let my_uid = unsafe { libc::getuid() };
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        let Ok(pid) = name_str.parse::<u32>() else {
+            continue;
+        };
+        // Check ownership.
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        use std::os::unix::fs::MetadataExt;
+        if meta.uid() != my_uid {
+            continue;
+        }
+        // Check binary name via /proc/<pid>/comm.
+        let Ok(comm) = std::fs::read_to_string(format!("/proc/{pid}/comm")) else {
+            continue;
+        };
+        if !is_desktop_binary(comm.trim()) {
+            continue;
+        }
+        // Check cmdline for the identifier with boundary anchoring.
+        let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+            continue;
+        };
+        if buffer_contains_identifier(&cmdline, instance_id.as_bytes()) {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(not(unix))]
+fn desktop_is_alive_for_instance(_instance_id: &str) -> bool {
+    false
+}
+
+/// Reap agent processes belonging to dead Sprout desktop instances.
+///
+/// Scans all user processes for `SPROUT_MANAGED_AGENT=*`, groups them by
+/// instance ID, and for each foreign instance (≠ `our_instance_id`) checks
+/// whether a Sprout desktop binary is still alive for that instance. If not,
+/// all agents from that dead instance are reaped.
+#[cfg(target_os = "macos")]
+pub(crate) fn reap_dead_instance_agents(our_instance_id: &str, skip_pids: &[u32]) {
+    extern "C" {
+        fn proc_listallpids(buffer: *mut libc::c_int, buffersize: libc::c_int) -> libc::c_int;
+        fn proc_pidinfo(
+            pid: libc::c_int,
+            flavor: libc::c_int,
+            arg: u64,
+            buffer: *mut libc::c_void,
+            buffersize: libc::c_int,
+        ) -> libc::c_int;
+    }
+
+    #[repr(C)]
+    struct BSDInfo {
+        _pad: [u8; 20],
+        pbi_uid: u32,
+        _rest: [u8; 112],
+    }
+    const _: () = assert!(std::mem::size_of::<BSDInfo>() == 136);
+    const PROC_PIDTBSDINFO: libc::c_int = 3;
+
+    let my_uid = unsafe { libc::getuid() };
+    let my_pid = std::process::id() as i32;
+
+    let mut pids: Vec<libc::c_int>;
+    loop {
+        let count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
+        if count <= 0 {
+            return;
+        }
+        let buf_len = (count as usize) * 2;
+        pids = vec![0; buf_len];
+        let actual = unsafe {
+            proc_listallpids(
+                pids.as_mut_ptr(),
+                (buf_len * std::mem::size_of::<libc::c_int>()) as libc::c_int,
+            )
+        };
+        if actual <= 0 {
+            return;
+        }
+        pids.truncate(actual as usize);
+        if (actual as usize) < buf_len {
+            break;
+        }
+    }
+
+    // Collect (pid, instance_id) for all foreign agent processes.
+    let mut foreign_agents: HashMap<String, Vec<i32>> = HashMap::new();
+
+    for &pid in &pids {
+        if pid <= 0 || pid == my_pid {
+            continue;
+        }
+        let upid = pid as u32;
+        if skip_pids.contains(&upid) {
+            continue;
+        }
+        if !process_belongs_to_us(upid) {
+            continue;
+        }
+        // Verify UID.
+        let mut info = std::mem::MaybeUninit::<BSDInfo>::zeroed();
+        let ret = unsafe {
+            proc_pidinfo(
+                pid,
+                PROC_PIDTBSDINFO,
+                0,
+                info.as_mut_ptr() as *mut libc::c_void,
+                std::mem::size_of::<BSDInfo>() as libc::c_int,
+            )
+        };
+        if ret <= 0 {
+            continue;
+        }
+        let info = unsafe { info.assume_init() };
+        if info.pbi_uid != my_uid {
+            continue;
+        }
+        // Extract the instance ID from this agent's env.
+        let Some(agent_instance_id) = extract_sprout_marker_value(upid) else {
+            continue;
+        };
+        // Skip agents belonging to our own instance (handled by sweep_system_agent_processes).
+        if agent_instance_id == our_instance_id {
+            continue;
+        }
+        foreign_agents
+            .entry(agent_instance_id)
+            .or_default()
+            .push(pid);
+    }
+
+    // For each foreign instance, check if its desktop is still alive.
+    for (instance_id, agent_pids) in &foreign_agents {
+        if desktop_is_alive_for_instance(instance_id) {
+            continue;
+        }
+        eprintln!(
+            "sprout-desktop: reaping {} orphaned agent(s) from dead instance '{instance_id}'",
+            agent_pids.len()
+        );
+        sigterm_then_sigkill(agent_pids);
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) fn reap_dead_instance_agents(our_instance_id: &str, skip_pids: &[u32]) {
+    let my_uid = unsafe { libc::getuid() };
+    let my_pid = std::process::id() as i32;
+    let mut foreign_agents: HashMap<String, Vec<i32>> = HashMap::new();
+
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        let Ok(pid) = name_str.parse::<i32>() else {
+            continue;
+        };
+        if pid <= 0 || pid == my_pid {
+            continue;
+        }
+        let upid = pid as u32;
+        if skip_pids.contains(&upid) {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        use std::os::unix::fs::MetadataExt;
+        if meta.uid() != my_uid {
+            continue;
+        }
+        if !process_belongs_to_us(upid) {
+            continue;
+        }
+        let Some(agent_instance_id) = extract_sprout_marker_value(upid) else {
+            continue;
+        };
+        if agent_instance_id == our_instance_id {
+            continue;
+        }
+        foreign_agents
+            .entry(agent_instance_id)
+            .or_default()
+            .push(pid);
+    }
+
+    for (instance_id, agent_pids) in &foreign_agents {
+        if desktop_is_alive_for_instance(instance_id) {
+            continue;
+        }
+        eprintln!(
+            "sprout-desktop: reaping {} orphaned agent(s) from dead instance '{instance_id}'",
+            agent_pids.len()
+        );
+        sigterm_then_sigkill(agent_pids);
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn reap_dead_instance_agents(_our_instance_id: &str, _skip_pids: &[u32]) {}
 
 /// Kill stale agent processes from a previous session whose PID is still alive
 /// but not tracked in the current `runtimes` map. Updates the record fields and
