@@ -14,7 +14,7 @@ use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
 use nostr::Filter;
-use sprout_auth::{generate_challenge, AuthContext};
+use buzz_auth::{generate_challenge, AuthContext};
 
 use crate::handlers;
 use crate::protocol::{ClientMessage, RelayMessage};

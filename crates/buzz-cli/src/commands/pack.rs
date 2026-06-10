@@ -1,4 +1,4 @@
-//! `sprout pack` subcommands — local persona pack operations.
+//! `buzz pack` subcommands — local persona pack operations.
 //!
 //! These commands operate on local pack directories. No relay connection needed.
 
@@ -6,7 +6,7 @@ use std::path::Path;
 
 use crate::error::CliError;
 
-/// Run `sprout pack validate <path>`.
+/// Run `buzz pack validate <path>`.
 ///
 /// Calls `validate_pack()` from the persona crate, prints diagnostics,
 /// and exits with the appropriate code:
@@ -21,14 +21,14 @@ pub fn cmd_validate(path: &str) -> Result<(), CliError> {
         return Err(CliError::Usage(format!("not a directory: {path}")));
     }
 
-    let report = sprout_persona::validate::validate_pack(pack_dir);
+    let report = buzz_persona::validate::validate_pack(pack_dir);
 
     for diag in &report.diagnostics {
         match diag {
-            sprout_persona::validate::ValidationDiagnostic::Error(msg) => {
+            buzz_persona::validate::ValidationDiagnostic::Error(msg) => {
                 eprintln!("  ERROR: {msg}");
             }
-            sprout_persona::validate::ValidationDiagnostic::Warning(msg) => {
+            buzz_persona::validate::ValidationDiagnostic::Warning(msg) => {
                 eprintln!("  WARN:  {msg}");
             }
         }
@@ -45,7 +45,7 @@ pub fn cmd_validate(path: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Run `sprout pack inspect <path>`.
+/// Run `buzz pack inspect <path>`.
 ///
 /// Loads and resolves a pack, then pretty-prints a summary of each persona's
 /// effective configuration.
@@ -59,7 +59,7 @@ pub fn cmd_inspect(path: &str) -> Result<(), CliError> {
     }
 
     // Resolve the pack — shows fully effective config (post-merge, post-split).
-    let pack = sprout_persona::resolve::resolve_pack(pack_dir)
+    let pack = buzz_persona::resolve::resolve_pack(pack_dir)
         .map_err(|e| CliError::Other(format!("failed to resolve pack: {e}")))?;
 
     // Header

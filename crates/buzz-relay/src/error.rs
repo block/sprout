@@ -15,15 +15,15 @@ pub enum RelayError {
 
     /// A database operation failed.
     #[error("Database error: {0}")]
-    Database(#[from] sprout_db::DbError),
+    Database(#[from] buzz_db::DbError),
 
     /// An authentication error from the auth service.
     #[error("Auth error: {0}")]
-    Auth(#[from] sprout_auth::AuthError),
+    Auth(#[from] buzz_auth::AuthError),
 
     /// A pub/sub error from the pubsub service.
     #[error("PubSub error: {0}")]
-    PubSub(#[from] sprout_pubsub::PubSubError),
+    PubSub(#[from] buzz_pubsub::PubSubError),
 
     /// The relay has reached its maximum number of concurrent connections.
     #[error("Connection limit reached")]

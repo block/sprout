@@ -7,14 +7,14 @@ use tracing::{debug, warn};
 
 use hex;
 use nostr::Filter;
-use sprout_core::filter::filters_match;
-use sprout_core::kind::{
+use buzz_core::filter::filters_match;
+use buzz_core::kind::{
     KIND_AGENT_ENGRAM, KIND_AGENT_OBSERVER_FRAME, KIND_DM_VISIBILITY, KIND_GIFT_WRAP,
     KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
 };
-use sprout_db::EventQuery;
+use buzz_db::EventQuery;
 
-use sprout_auth::Scope;
+use buzz_auth::Scope;
 
 use crate::connection::{AuthState, ConnectionState};
 use crate::protocol::RelayMessage;
@@ -224,7 +224,7 @@ pub async fn handle_req(
             // Result-level read auth: a viewer-private snapshot (kind:30622) is
             // delivered only to its owner, even if reached via a kindless
             // `ids:[…]` subscription that skips the filter-level `#p` gate.
-            if !sprout_core::filter::reader_authorized_for_event(&stored.event, &viewer_hex) {
+            if !buzz_core::filter::reader_authorized_for_event(&stored.event, &viewer_hex) {
                 continue;
             }
 
@@ -378,7 +378,7 @@ async fn handle_search_req(
                 break;
             }
 
-            let search_query = sprout_search::SearchQuery {
+            let search_query = buzz_search::SearchQuery {
                 q: search_text.clone(),
                 filter_by: Some(filter_by.clone()),
                 sort_by: None, // Typesense default = relevance (text_match score)
@@ -414,7 +414,7 @@ async fn handle_search_req(
                     }
                 };
 
-                let event_map: std::collections::HashMap<[u8; 32], &sprout_core::StoredEvent> =
+                let event_map: std::collections::HashMap<[u8; 32], &buzz_core::StoredEvent> =
                     events
                         .iter()
                         .map(|ev| (ev.event.id.to_bytes(), ev))
@@ -441,7 +441,7 @@ async fn handle_search_req(
                             continue;
                         }
                     }
-                    if !sprout_core::filter::reader_authorized_for_event(
+                    if !buzz_core::filter::reader_authorized_for_event(
                         &stored.event,
                         reader_pubkey_hex,
                     ) {
@@ -497,7 +497,7 @@ pub fn filter_fully_pushable(filter: &Filter) -> bool {
         !ks.is_empty()
             && ks
                 .iter()
-                .all(|k| sprout_core::kind::is_parameterized_replaceable(k.as_u16() as u32))
+                .all(|k| buzz_core::kind::is_parameterized_replaceable(k.as_u16() as u32))
     });
 
     for (tag_key, tag_values) in filter.generic_tags.iter() {
@@ -647,7 +647,7 @@ fn filter_to_query_params(filter: &Filter, channel_id: Option<uuid::Uuid>) -> Ev
         !ks.is_empty()
             && ks
                 .iter()
-                .all(|&k| sprout_core::kind::is_parameterized_replaceable(k as u32))
+                .all(|&k| buzz_core::kind::is_parameterized_replaceable(k as u32))
     });
     let d_tag_key = nostr::SingleLetterTag::lowercase(nostr::Alphabet::D);
     let (d_tag, d_tags) = if filter_is_nip33_only {
@@ -874,7 +874,7 @@ mod tests {
         let authed = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let other = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         let snapshot_id = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-        let dm_vis = nostr::Kind::Custom(sprout_core::kind::KIND_DM_VISIBILITY as u16);
+        let dm_vis = nostr::Kind::Custom(buzz_core::kind::KIND_DM_VISIBILITY as u16);
 
         // Knowing another viewer's snapshot id must NOT authorize reading it:
         // ids alone, or ids + someone else's #p, are both rejected.
@@ -896,7 +896,7 @@ mod tests {
         // The ids exemption still applies to other p-gated kinds (member notifs).
         let member_notif_ids = Filter::new()
             .kind(nostr::Kind::Custom(
-                sprout_core::kind::KIND_MEMBER_ADDED_NOTIFICATION as u16,
+                buzz_core::kind::KIND_MEMBER_ADDED_NOTIFICATION as u16,
             ))
             .id(nostr::EventId::from_hex(snapshot_id).unwrap());
         assert!(p_gated_filters_authorized(&[member_notif_ids], authed));
@@ -930,20 +930,20 @@ mod tests {
         let other = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
         let missing_p = Filter::new().kind(nostr::Kind::Custom(
-            sprout_core::kind::KIND_AGENT_OBSERVER_FRAME as u16,
+            buzz_core::kind::KIND_AGENT_OBSERVER_FRAME as u16,
         ));
         assert!(!p_gated_filters_authorized(&[missing_p], authed));
 
         let wrong_p = Filter::new()
             .kind(nostr::Kind::Custom(
-                sprout_core::kind::KIND_AGENT_OBSERVER_FRAME as u16,
+                buzz_core::kind::KIND_AGENT_OBSERVER_FRAME as u16,
             ))
             .custom_tags(p_tag, [other]);
         assert!(!p_gated_filters_authorized(&[wrong_p], authed));
 
         let matching_p = Filter::new()
             .kind(nostr::Kind::Custom(
-                sprout_core::kind::KIND_AGENT_OBSERVER_FRAME as u16,
+                buzz_core::kind::KIND_AGENT_OBSERVER_FRAME as u16,
             ))
             .custom_tags(p_tag, [authed]);
         assert!(p_gated_filters_authorized(&[matching_p], authed));
@@ -1158,7 +1158,7 @@ mod tests {
         let (agent, _, _) = three_pubkeys();
         let f = Filter::new()
             .kind(nostr::Kind::Custom(
-                sprout_core::kind::KIND_AGENT_OBSERVER_FRAME as u16,
+                buzz_core::kind::KIND_AGENT_OBSERVER_FRAME as u16,
             ))
             .search("x");
         assert!(!p_gated_filters_authorized(&[f], &agent));

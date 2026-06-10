@@ -53,7 +53,7 @@ pub fn verify_nip42_event(
         return Err(AuthError::InvalidSignature);
     }
 
-    sprout_core::verify_event(event).map_err(|_| AuthError::InvalidSignature)?;
+    buzz_core::verify_event(event).map_err(|_| AuthError::InvalidSignature)?;
 
     let challenge = event
         .tags

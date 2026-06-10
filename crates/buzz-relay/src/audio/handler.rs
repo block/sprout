@@ -29,10 +29,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use sprout_auth::generate_challenge;
-use sprout_db::channel::MemberRole;
+use buzz_auth::generate_challenge;
+use buzz_db::channel::MemberRole;
 
-use sprout_core::StoredEvent;
+use buzz_core::StoredEvent;
 
 use crate::audio::room::PeerCtrl;
 use crate::state::AppState;

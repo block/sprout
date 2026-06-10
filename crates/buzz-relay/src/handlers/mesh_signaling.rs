@@ -23,8 +23,8 @@
 use std::sync::Arc;
 
 use nostr::{EventBuilder, Kind, Tag};
-use sprout_core::event::StoredEvent;
-use sprout_core::kind::{
+use buzz_core::event::StoredEvent;
+use buzz_core::kind::{
     event_kind_u32, KIND_MESH_CALL_ME_NOW, KIND_MESH_CONNECT_REQUEST, KIND_MESH_STATUS_REPORT,
 };
 
@@ -76,7 +76,7 @@ pub async fn handle_mesh_event_http(
     event: &nostr::Event,
 ) -> Result<(), String> {
     let event_clone = event.clone();
-    tokio::task::spawn_blocking(move || sprout_core::verification::verify_event(&event_clone))
+    tokio::task::spawn_blocking(move || buzz_core::verification::verify_event(&event_clone))
         .await
         .map_err(|_| "error: internal verification error".to_string())?
         .map_err(|e| format!("invalid: {e}"))?;
@@ -226,7 +226,7 @@ pub async fn handle_connect_request(
     // Membership gate, applied SYMMETRICALLY to both ends — direct relay members
     // only, gated purely by relay access. The requester reached this handler via
     // a NIP-42-authed WS, but that auth can be ViaOwner (NIP-OA delegated) when
-    // SPROUT_ALLOW_NIP_OA_AUTH is on; v1 mesh excludes delegated identities, so we
+    // BUZZ_ALLOW_NIP_OA_AUTH is on; v1 mesh excludes delegated identities, so we
     // re-check the requester here with no auth tag (which makes ViaOwner
     // unreachable — only Member/OpenRelay/Denied) to match the target check.
     require_mesh_member(state, requester_pubkey_hex)
@@ -498,27 +498,27 @@ mod tests {
     async fn test_state() -> std::sync::Arc<AppState> {
         let config = test_config();
         let pool = sqlx::PgPool::connect_lazy(&config.database_url).expect("lazy pg pool");
-        let db = sprout_db::Db::from_pool(pool.clone());
+        let db = buzz_db::Db::from_pool(pool.clone());
         let redis_pool = deadpool_redis::Config::from_url(&config.redis_url)
             .create_pool(Some(deadpool_redis::Runtime::Tokio1))
             .expect("redis pool");
         let pubsub = std::sync::Arc::new(
-            sprout_pubsub::PubSubManager::new(&config.redis_url, redis_pool.clone())
+            buzz_pubsub::PubSubManager::new(&config.redis_url, redis_pool.clone())
                 .await
                 .expect("pubsub manager"),
         );
-        let audit = sprout_audit::AuditService::new(pool);
-        let auth = sprout_auth::AuthService::new(config.auth.clone());
-        let search = sprout_search::SearchService::new(sprout_search::SearchConfig {
+        let audit = buzz_audit::AuditService::new(pool);
+        let auth = buzz_auth::AuthService::new(config.auth.clone());
+        let search = buzz_search::SearchService::new(buzz_search::SearchConfig {
             url: config.typesense_url.clone(),
             api_key: config.typesense_key.clone(),
             collection: "events".to_string(),
         });
-        let workflow_engine = std::sync::Arc::new(sprout_workflow::WorkflowEngine::new(
+        let workflow_engine = std::sync::Arc::new(buzz_workflow::WorkflowEngine::new(
             db.clone(),
-            sprout_workflow::WorkflowConfig::default(),
+            buzz_workflow::WorkflowConfig::default(),
         ));
-        let media_storage = sprout_media::MediaStorage::new(&config.media).expect("media storage");
+        let media_storage = buzz_media::MediaStorage::new(&config.media).expect("media storage");
         let (state, _audit_shutdown) = crate::state::AppState::new(
             config,
             db,

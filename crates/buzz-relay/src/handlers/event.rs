@@ -5,16 +5,16 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 use nostr::{Event, PublicKey};
-use sprout_core::event::StoredEvent;
-use sprout_core::kind::{
+use buzz_core::event::StoredEvent;
+use buzz_core::kind::{
     event_kind_u32, is_ephemeral, KIND_AGENT_OBSERVER_FRAME, KIND_GIFT_WRAP,
     KIND_MESH_CONNECT_REQUEST, KIND_MESH_STATUS_REPORT, KIND_PRESENCE_UPDATE,
 };
-use sprout_core::observer::{
+use buzz_core::observer::{
     content_looks_like_nip44, OBSERVER_AGENT_TAG, OBSERVER_FRAME_CONTROL, OBSERVER_FRAME_TAG,
     OBSERVER_FRAME_TELEMETRY,
 };
-use sprout_core::verification::verify_event;
+use buzz_core::verification::verify_event;
 
 use crate::connection::{AuthState, ConnectionState};
 use crate::protocol::RelayMessage;
@@ -128,7 +128,7 @@ pub(crate) async fn dispatch_persistent_event(
     // For viewer-private snapshots (kind:30622), live fan-out must reach only the
     // owner — a kindless `ids:[…]` subscription can otherwise match it. Pull paths
     // (HTTP /query, WS historical) are gated separately by reader_authorized_for_event.
-    let dm_visibility_owner: Option<String> = (kind_u32 == sprout_core::kind::KIND_DM_VISIBILITY)
+    let dm_visibility_owner: Option<String> = (kind_u32 == buzz_core::kind::KIND_DM_VISIBILITY)
         .then(|| {
             let p = nostr::SingleLetterTag::lowercase(nostr::Alphabet::P);
             stored_event
@@ -165,7 +165,7 @@ pub(crate) async fn dispatch_persistent_event(
     // Skip search indexing for NIP-17 gift wraps (ciphertext) and NIP-DV
     // visibility snapshots (per-viewer private hide state, owner-gated reads).
     if kind_u32 != KIND_GIFT_WRAP
-        && kind_u32 != sprout_core::kind::KIND_DM_VISIBILITY
+        && kind_u32 != buzz_core::kind::KIND_DM_VISIBILITY
         && state
             .search_index_tx
             .try_send(stored_event.clone())
@@ -182,11 +182,11 @@ pub(crate) async fn dispatch_persistent_event(
     // DB is genuinely overloaded and the relay should slow down rather than
     // accumulate unbounded in-memory state. DB write failures in the worker are
     // logged but not retried (same as the previous per-event tokio::spawn).
-    let audit_entry = sprout_audit::NewAuditEntry {
+    let audit_entry = buzz_audit::NewAuditEntry {
         event_id: event_id_hex.clone(),
         event_kind: kind_u32,
         actor_pubkey: actor_pubkey_hex.to_string(),
-        action: sprout_audit::AuditAction::EventCreated,
+        action: buzz_audit::AuditAction::EventCreated,
         channel_id: stored_event.channel_id,
         metadata: serde_json::Value::Null,
     };
@@ -203,8 +203,8 @@ pub(crate) async fn dispatch_persistent_event(
             .iter()
             .any(|t| t.as_slice().first().map(|s| s.as_str()) == Some("sprout:workflow"));
 
-    if !sprout_core::kind::is_workflow_execution_kind(kind_u32)
-        && !sprout_core::kind::is_command_kind(kind_u32)
+    if !buzz_core::kind::is_workflow_execution_kind(kind_u32)
+        && !buzz_core::kind::is_command_kind(kind_u32)
         && !is_relay_workflow_msg
         && kind_u32 != KIND_GIFT_WRAP
     {
@@ -263,7 +263,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     // Must run before both ephemeral and persistent branches. Persistent
     // events get a second check inside ingest_event() (step 3), but
     // ephemeral events bypass the pipeline entirely.
-    let has_proxy_scope = scopes.contains(&sprout_auth::Scope::ProxySubmit);
+    let has_proxy_scope = scopes.contains(&buzz_auth::Scope::ProxySubmit);
     let is_gift_wrap = kind_u32 == KIND_GIFT_WRAP;
     if event.pubkey != auth_pubkey && !has_proxy_scope && !is_gift_wrap {
         reject("invalid");
@@ -276,7 +276,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     }
 
     // ── Blocked kinds (both ephemeral and persistent) ─────────────────
-    if kind_u32 == sprout_core::kind::KIND_AUTH {
+    if kind_u32 == buzz_core::kind::KIND_AUTH {
         reject("invalid");
         conn.send(RelayMessage::ok(
             &event_id_hex,
@@ -289,7 +289,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     // ── Agent observer frames are owner-scoped, encrypted, and never stored ──
     if kind_u32 == KIND_AGENT_OBSERVER_FRAME {
         if !scopes.is_empty()
-            && !scopes.contains(&sprout_auth::Scope::MessagesWrite)
+            && !scopes.contains(&buzz_auth::Scope::MessagesWrite)
             && !has_proxy_scope
         {
             reject("scope");
@@ -311,7 +311,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     // only ChannelsWrite can still submit kind:9002 via WS.
     if is_ephemeral(kind_u32) {
         if !scopes.is_empty()
-            && !scopes.contains(&sprout_auth::Scope::MessagesWrite)
+            && !scopes.contains(&buzz_auth::Scope::MessagesWrite)
             && !has_proxy_scope
         {
             reject("scope");
@@ -864,11 +864,11 @@ fn single_tag_content<'a>(event: &'a Event, tag_name: &str) -> Result<&'a str, S
 #[cfg(test)]
 mod tests {
     use nostr::{EventBuilder, Keys, Kind, Tag};
-    use sprout_core::kind::{
+    use buzz_core::kind::{
         KIND_AGENT_OBSERVER_FRAME, KIND_CANVAS, KIND_FORUM_COMMENT, KIND_FORUM_POST,
         KIND_FORUM_VOTE, KIND_PRESENCE_UPDATE, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_DIFF,
     };
-    use sprout_core::observer::{
+    use buzz_core::observer::{
         encrypt_observer_payload, OBSERVER_AGENT_TAG, OBSERVER_FRAME_CONTROL, OBSERVER_FRAME_TAG,
         OBSERVER_FRAME_TELEMETRY,
     };
@@ -982,7 +982,7 @@ mod tests {
         use std::sync::Arc;
 
         use nostr::{EventBuilder, Keys, Kind};
-        use sprout_core::StoredEvent;
+        use buzz_core::StoredEvent;
         use tokio::sync::{mpsc, Mutex};
         use tokio_util::sync::CancellationToken;
         use uuid::Uuid;
@@ -1000,28 +1000,28 @@ mod tests {
         async fn test_state() -> Arc<AppState> {
             let config = test_config();
             let pool = sqlx::PgPool::connect_lazy(&config.database_url).expect("lazy pg pool");
-            let db = sprout_db::Db::from_pool(pool.clone());
+            let db = buzz_db::Db::from_pool(pool.clone());
             let redis_pool = deadpool_redis::Config::from_url(&config.redis_url)
                 .create_pool(Some(deadpool_redis::Runtime::Tokio1))
                 .expect("redis pool");
             let pubsub = Arc::new(
-                sprout_pubsub::PubSubManager::new(&config.redis_url, redis_pool.clone())
+                buzz_pubsub::PubSubManager::new(&config.redis_url, redis_pool.clone())
                     .await
                     .expect("pubsub manager"),
             );
-            let audit = sprout_audit::AuditService::new(pool);
-            let auth = sprout_auth::AuthService::new(config.auth.clone());
-            let search = sprout_search::SearchService::new(sprout_search::SearchConfig {
+            let audit = buzz_audit::AuditService::new(pool);
+            let auth = buzz_auth::AuthService::new(config.auth.clone());
+            let search = buzz_search::SearchService::new(buzz_search::SearchConfig {
                 url: config.typesense_url.clone(),
                 api_key: config.typesense_key.clone(),
                 collection: "events".to_string(),
             });
-            let workflow_engine = Arc::new(sprout_workflow::WorkflowEngine::new(
+            let workflow_engine = Arc::new(buzz_workflow::WorkflowEngine::new(
                 db.clone(),
-                sprout_workflow::WorkflowConfig::default(),
+                buzz_workflow::WorkflowConfig::default(),
             ));
             let media_storage =
-                sprout_media::MediaStorage::new(&config.media).expect("media storage");
+                buzz_media::MediaStorage::new(&config.media).expect("media storage");
             let (state, _audit_shutdown) = AppState::new(
                 config,
                 db,

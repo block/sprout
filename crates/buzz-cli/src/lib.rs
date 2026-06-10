@@ -4,7 +4,7 @@ mod error;
 mod validate;
 
 use clap::{Parser, Subcommand};
-use client::SproutClient;
+use client::BuzzClient;
 use error::CliError;
 use nostr::Keys;
 
@@ -15,7 +15,7 @@ use nostr::Keys;
 /// # Example
 ///
 /// ```ignore
-/// let code = sprout_cli::run_from_args(std::env::args()).await;
+/// let code = buzz_cli::run_from_args(std::env::args()).await;
 /// std::process::exit(code);
 /// ```
 pub async fn run_from_args<I, S>(args: I) -> i32
@@ -52,14 +52,14 @@ where
 #[derive(Parser)]
 #[command(
     name = "sprout",
-    about = "Sprout CLI — interact with a Sprout relay",
+    about = "Buzz CLI — interact with a Sprout relay",
     long_about = "\
-Sprout CLI — interact with a Sprout relay
+Buzz CLI — interact with a Buzz relay
 
 Configuration (flags override env vars):
-  SPROUT_RELAY_URL     Relay base URL        [default: http://localhost:3000]
-  SPROUT_PRIVATE_KEY   Nostr private key (hex or nsec)  [required]
-  SPROUT_AUTH_TAG      NIP-OA auth tag JSON  [optional]
+  BUZZ_RELAY_URL     Relay base URL        [default: http://localhost:3000]
+  BUZZ_PRIVATE_KEY   Nostr private key (hex or nsec)  [required]
+  BUZZ_AUTH_TAG      NIP-OA auth tag JSON  [optional]
 
 The 'pack' subcommand runs locally and does not require a relay connection.
 
@@ -67,20 +67,20 @@ Exit codes: 0=ok  1=bad input  2=relay/network error  3=auth error  4=other  5=w
 Errors are JSON on stderr: {\"error\": \"<category>\", \"message\": \"<detail>\"}"
 )]
 struct Cli {
-    /// Relay URL (http:// or https://). Overrides SPROUT_RELAY_URL env var.
+    /// Relay URL (http:// or https://). Overrides BUZZ_RELAY_URL env var.
     #[arg(
         long,
-        env = "SPROUT_RELAY_URL",
+        env = "BUZZ_RELAY_URL",
         default_value = "http://localhost:3000"
     )]
     relay: String,
 
     /// Nostr private key (hex or nsec). This is the CLI's identity.
-    #[arg(long, env = "SPROUT_PRIVATE_KEY")]
+    #[arg(long, env = "BUZZ_PRIVATE_KEY")]
     private_key: Option<String>,
 
     /// NIP-OA auth tag JSON (owner attestation). Injected into every signed event.
-    #[arg(long, env = "SPROUT_AUTH_TAG")]
+    #[arg(long, env = "BUZZ_AUTH_TAG")]
     auth_tag: Option<String>,
 
     /// Output format: 'json' (default, full fields) or 'compact' (reduced fields).
@@ -1040,12 +1040,12 @@ pub enum UploadCmd {
 // Mem subcommands (NIP-AE)
 // ---------------------------------------------------------------------------
 
-/// Subcommands for `sprout mem`.
+/// Subcommands for `buzz mem`.
 #[derive(Subcommand)]
 pub enum MemCmd {
     /// List non-tombstoned memory entries
     Ls {
-        /// Owner pubkey (hex). Overrides SPROUT_AUTH_TAG.
+        /// Owner pubkey (hex). Overrides BUZZ_AUTH_TAG.
         #[arg(long)]
         owner: Option<String>,
         /// Agent pubkey (hex) to read as this key's owner.
@@ -1096,8 +1096,8 @@ pub enum MemCmd {
         #[arg(long)]
         patch_file: Option<String>,
         /// sha256 hex digest (lowercase) of the value the patch was generated
-        /// against. Hashes the exact UTF-8 bytes returned by `sprout mem get`,
-        /// not normalized lines. Run `sprout mem hash <slug>` to capture this
+        /// against. Hashes the exact UTF-8 bytes returned by `buzz mem get`,
+        /// not normalized lines. Run `buzz mem hash <slug>` to capture this
         /// before editing.
         #[arg(long)]
         base_hash: Option<String>,
@@ -1127,7 +1127,7 @@ pub enum MemCmd {
 // Pack subcommands (local, no relay connection needed)
 // ---------------------------------------------------------------------------
 
-/// Subcommands for `sprout pack`.
+/// Subcommands for `buzz pack`.
 #[derive(Subcommand)]
 pub enum PackCmd {
     /// Validate a persona pack directory
@@ -1160,19 +1160,19 @@ async fn run(cli: Cli) -> Result<(), CliError> {
     // Auth: private key is required for all relay operations.
     // The keypair IS the identity — no tokens, no other auth.
     let private_key_str = cli.private_key.ok_or_else(|| {
-        CliError::Auth("SPROUT_PRIVATE_KEY is required (use --private-key or set env var)".into())
+        CliError::Auth("BUZZ_PRIVATE_KEY is required (use --private-key or set env var)".into())
     })?;
     let keys = Keys::parse(&private_key_str)
-        .map_err(|e| CliError::Key(format!("invalid SPROUT_PRIVATE_KEY: {e}")))?;
+        .map_err(|e| CliError::Key(format!("invalid BUZZ_PRIVATE_KEY: {e}")))?;
 
     // NIP-OA: parse and verify the auth tag if provided.
     let (auth_tag, auth_tag_json) = match cli.auth_tag {
         Some(ref json) if !json.is_empty() => {
-            let tag = sprout_sdk::nip_oa::parse_auth_tag(json)
-                .map_err(|e| CliError::Auth(format!("SPROUT_AUTH_TAG is malformed: {e}")))?;
-            sprout_sdk::nip_oa::verify_auth_tag(json, &keys.public_key()).map_err(|e| {
+            let tag = buzz_sdk::nip_oa::parse_auth_tag(json)
+                .map_err(|e| CliError::Auth(format!("BUZZ_AUTH_TAG is malformed: {e}")))?;
+            buzz_sdk::nip_oa::verify_auth_tag(json, &keys.public_key()).map_err(|e| {
                 CliError::Auth(format!(
-                    "SPROUT_AUTH_TAG verification failed for pubkey {}: {e}",
+                    "BUZZ_AUTH_TAG verification failed for pubkey {}: {e}",
                     keys.public_key().to_hex()
                 ))
             })?;
@@ -1181,7 +1181,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         _ => (None, None),
     };
 
-    let client = SproutClient::new(relay_url, keys, auth_tag, auth_tag_json)?;
+    let client = BuzzClient::new(relay_url, keys, auth_tag, auth_tag_json)?;
 
     match cli.command {
         Cmd::Messages(sub) => commands::messages::dispatch(sub, &client, &cli.format).await,

@@ -14,7 +14,7 @@
 //!
 //! 1. Parse JSON into a `nostr::Event`
 //! 2. Verify `kind == 27235` (`Kind::HttpAuth`)
-//! 3. Verify Schnorr signature via `sprout_core::verify_event`
+//! 3. Verify Schnorr signature via `buzz_core::verify_event`
 //! 4. Verify `created_at` within ±60 seconds of server time
 //! 5. Verify `["u", <url>]` tag matches `expected_url` (normalised: case-insensitive
 //!    scheme/host, trailing slash stripped)
@@ -71,7 +71,7 @@ pub fn verify_nip98_event(
     }
 
     // 3. Verify Schnorr signature (also verifies event ID hash).
-    sprout_core::verify_event(&event)
+    buzz_core::verify_event(&event)
         .map_err(|_| AuthError::Nip98Invalid("invalid Schnorr signature".to_string()))?;
 
     // 4. Verify created_at within ±60 seconds of now.

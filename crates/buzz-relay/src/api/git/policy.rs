@@ -7,7 +7,7 @@
 //! 2. Resolves kind:30617 → protection rules
 //! 3. Resolves pusher's channel role via sprout-channel binding
 //! 4. Promotes Bot → Member (bots in a channel push as members)
-//! 5. Calls `sprout_core::git_perms::evaluate_push()`
+//! 5. Calls `buzz_core::git_perms::evaluate_push()`
 //! 6. Returns 200 (allow) or 403 (deny with reasons)
 //!
 //! # Bot Role Model
@@ -40,9 +40,9 @@ use tracing::{error, warn};
 
 use uuid::Uuid;
 
-use sprout_core::channel::MemberRole;
-use sprout_core::git_perms::{evaluate_push, parse_protection_tags, Denial, RefUpdate, UpdateKind};
-use sprout_db::EventQuery;
+use buzz_core::channel::MemberRole;
+use buzz_core::git_perms::{evaluate_push, parse_protection_tags, Denial, RefUpdate, UpdateKind};
+use buzz_db::EventQuery;
 
 use crate::state::AppState;
 
@@ -595,10 +595,10 @@ mod tests {
         let bash_script = format!(
             r#"
 export LC_ALL=C
-SPROUT_REPO_ID="{repo_id}"
-SPROUT_REPO_OWNER="{repo_owner}"
-SPROUT_PUSHER_PUBKEY="{pusher}"
-SPROUT_HOOK_SECRET="{secret}"
+BUZZ_REPO_ID="{repo_id}"
+BUZZ_REPO_OWNER="{repo_owner}"
+BUZZ_PUSHER_PUBKEY="{pusher}"
+BUZZ_HOOK_SECRET="{secret}"
 TIMESTAMP="{timestamp}"
 
 # Simulate the HMAC_FILE with two refs (unsorted, like the hook writes them)
@@ -611,8 +611,8 @@ echo "refs/heads/main {old1} {new1} 1" >> "$HMAC_FILE"
 echo "refs/heads/feature {old2} {new2} 0" >> "$HMAC_FILE"
 
 # Build HMAC input — exact logic from hook script
-REPO_ID_LEN=${{#SPROUT_REPO_ID}}
-HMAC_INPUT="${{REPO_ID_LEN}}:${{SPROUT_REPO_ID}}|${{SPROUT_REPO_OWNER}}|${{SPROUT_PUSHER_PUBKEY}}|"
+REPO_ID_LEN=${{#BUZZ_REPO_ID}}
+HMAC_INPUT="${{REPO_ID_LEN}}:${{BUZZ_REPO_ID}}|${{BUZZ_REPO_OWNER}}|${{BUZZ_PUSHER_PUBKEY}}|"
 sort "$HMAC_FILE" | while IFS=' ' read -r ref_name old_oid new_oid is_anc; do
     REF_LEN=${{#ref_name}}
     printf '%s%s%s:%s%s' "$old_oid" "$new_oid" "$REF_LEN" "$ref_name" "$is_anc"
@@ -620,7 +620,7 @@ done > "$HMAC_FILE.concat"
 HMAC_INPUT="${{HMAC_INPUT}}$(cat "$HMAC_FILE.concat")|${{TIMESTAMP}}"
 
 # Compute HMAC-SHA256
-printf '%s' "$HMAC_INPUT" | openssl dgst -sha256 -hmac "$SPROUT_HOOK_SECRET" -hex 2>/dev/null | sed 's/.*= //'
+printf '%s' "$HMAC_INPUT" | openssl dgst -sha256 -hmac "$BUZZ_HOOK_SECRET" -hex 2>/dev/null | sed 's/.*= //'
 "#,
             repo_id = repo_id,
             repo_owner = repo_owner,
@@ -686,9 +686,9 @@ WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
 HMAC_FILE="$WORK_DIR/hmac"
 echo "refs/heads/main {old} {new} 1" >> "$HMAC_FILE"
-SPROUT_REPO_ID="{repo_id}"
-REPO_ID_LEN=${{#SPROUT_REPO_ID}}
-HMAC_INPUT="${{REPO_ID_LEN}}:${{SPROUT_REPO_ID}}|{owner}|{pusher}|"
+BUZZ_REPO_ID="{repo_id}"
+REPO_ID_LEN=${{#BUZZ_REPO_ID}}
+HMAC_INPUT="${{REPO_ID_LEN}}:${{BUZZ_REPO_ID}}|{owner}|{pusher}|"
 sort "$HMAC_FILE" | while IFS=' ' read -r ref_name old_oid new_oid is_anc; do
     REF_LEN=${{#ref_name}}
     printf '%s%s%s:%s%s' "$old_oid" "$new_oid" "$REF_LEN" "$ref_name" "$is_anc"

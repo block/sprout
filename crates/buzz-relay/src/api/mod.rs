@@ -76,7 +76,7 @@ pub mod relay_members {
                 let agent_pubkey = nostr::PublicKey::from_slice(pubkey_bytes)
                     .map_err(|e| format!("invalid agent pubkey for NIP-OA check: {e}"))?;
 
-                match sprout_sdk::nip_oa::verify_auth_tag(tag_json, &agent_pubkey) {
+                match buzz_sdk::nip_oa::verify_auth_tag(tag_json, &agent_pubkey) {
                     Ok(owner_pubkey) => {
                         let owner_hex = owner_pubkey.to_hex();
                         let owner_is_member =
@@ -148,7 +148,7 @@ pub mod relay_members {
     ) -> Option<nostr::PublicKey> {
         let tag_json = auth_tag_header?;
         let agent_pubkey = nostr::PublicKey::from_slice(pubkey_bytes).ok()?;
-        match sprout_sdk::nip_oa::verify_auth_tag(tag_json, &agent_pubkey) {
+        match buzz_sdk::nip_oa::verify_auth_tag(tag_json, &agent_pubkey) {
             Ok(owner) => Some(owner),
             Err(e) => {
                 info!("extract_nip_oa_owner: invalid auth tag: {e}");
@@ -161,7 +161,7 @@ pub mod relay_members {
     mod tests {
         use super::*;
         use nostr::Keys;
-        use sprout_sdk::nip_oa::compute_auth_tag;
+        use buzz_sdk::nip_oa::compute_auth_tag;
 
         /// Valid NIP-OA auth tag → returns Some(owner_pubkey).
         #[test]

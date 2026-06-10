@@ -1,5 +1,5 @@
 [package]
-name = "sprout-auth"
+name = "buzz-auth"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,7 +12,7 @@ test-utils = []
 dev = []
 
 [dependencies]
-sprout-core = { workspace = true }
+buzz-core = { workspace = true }
 nostr        = { workspace = true }
 serde        = { workspace = true }
 serde_json   = { workspace = true }

@@ -202,7 +202,7 @@ impl AcpClient {
             // Callers MUST still call shutdown().await for guaranteed cleanup.
             .kill_on_drop(true);
 
-        // Per-persona env vars (e.g., GOOSE_PROVIDER, SPROUT_AGENT_PROVIDER).
+        // Per-persona env vars (e.g., GOOSE_PROVIDER, BUZZ_AGENT_PROVIDER).
         // Only injected if not already set in parent env (operator precedence).
         for (key, value) in extra_env {
             if std::env::var(key).is_err() {
@@ -274,7 +274,7 @@ impl AcpClient {
             "protocolVersion": 1,
             "clientCapabilities": {},
             "clientInfo": {
-                "name": "sprout-acp",
+                "name": "buzz-acp",
                 "version": env!("CARGO_PKG_VERSION")
             }
         });
@@ -1394,7 +1394,7 @@ mod tests {
                 "protocolVersion": 1,
                 "clientCapabilities": {},
                 "clientInfo": {
-                    "name": "sprout-acp",
+                    "name": "buzz-acp",
                     "version": "0.1.0"
                 }
             }
@@ -1402,7 +1402,7 @@ mod tests {
         assert_eq!(msg["params"]["protocolVersion"].as_u64(), Some(1));
         assert_eq!(
             msg["params"]["clientInfo"]["name"].as_str(),
-            Some("sprout-acp")
+            Some("buzz-acp")
         );
         assert!(msg["params"]["clientCapabilities"].is_object());
     }
@@ -1416,11 +1416,11 @@ mod tests {
             args: vec![],
             env: vec![
                 EnvVar {
-                    name: "SPROUT_RELAY_URL".into(),
+                    name: "BUZZ_RELAY_URL".into(),
                     value: "ws://localhost:3000".into(),
                 },
                 EnvVar {
-                    name: "SPROUT_PRIVATE_KEY".into(),
+                    name: "BUZZ_PRIVATE_KEY".into(),
                     value: "nsec1abc".into(),
                 },
             ],
@@ -1437,13 +1437,13 @@ mod tests {
         assert_eq!(serialized["env"].as_array().unwrap().len(), 2);
         assert_eq!(
             serialized["env"][0]["name"].as_str(),
-            Some("SPROUT_RELAY_URL")
+            Some("BUZZ_RELAY_URL")
         );
     }
 
     #[test]
     fn session_prompt_request_format() {
-        let prompt_text = "[Sprout @mention]\nChannel: test\nFrom: npub1...\nMessage: hello";
+        let prompt_text = "[Buzz @mention]\nChannel: test\nFrom: npub1...\nMessage: hello";
         let msg = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 2u64,
@@ -1469,7 +1469,7 @@ mod tests {
             "sess_abc123",
             &[
                 "/goal ship it",
-                "[Sprout event: @mention]\nContent: @Eva /goal ship it",
+                "[Buzz event: @mention]\nContent: @Eva /goal ship it",
             ],
         );
         let prompt = params["prompt"].as_array().unwrap();

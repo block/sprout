@@ -9,8 +9,8 @@ use std::sync::Arc;
 use nostr::{Event, PublicKey};
 use tracing::{info, warn};
 
-use sprout_core::kind::{KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST, KIND_PROFILE};
-use sprout_db::EventQuery;
+use buzz_core::kind::{KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST, KIND_PROFILE};
+use buzz_db::EventQuery;
 
 use crate::handlers::side_effects::{
     publish_nipia_archival_list, publish_nipia_archived, publish_nipia_unarchived,
@@ -311,7 +311,7 @@ fn extract_single_auth_tag_json(event: &Event) -> Result<String, String> {
 fn verify_auth_tag_owner(auth_tag_json: &str, target_hex: &str) -> Result<String, String> {
     let target_pubkey =
         PublicKey::from_hex(target_hex).map_err(|e| format!("invalid target pubkey: {e}"))?;
-    sprout_sdk::nip_oa::verify_auth_tag(auth_tag_json, &target_pubkey)
+    buzz_sdk::nip_oa::verify_auth_tag(auth_tag_json, &target_pubkey)
         .map(|owner| owner.to_hex())
         .map_err(|e| e.to_string())
 }
@@ -433,28 +433,28 @@ mod tests {
     }
 
     async fn test_state(pool: sqlx::PgPool) -> Option<Arc<AppState>> {
-        let db = sprout_db::Db::from_pool(pool.clone());
+        let db = buzz_db::Db::from_pool(pool.clone());
         let config = crate::config::Config::from_env().ok()?;
         let redis_pool = deadpool_redis::Config::from_url(&config.redis_url)
             .create_pool(Some(deadpool_redis::Runtime::Tokio1))
             .ok()?;
         let pubsub = Arc::new(
-            sprout_pubsub::PubSubManager::new(&config.redis_url, redis_pool.clone())
+            buzz_pubsub::PubSubManager::new(&config.redis_url, redis_pool.clone())
                 .await
                 .ok()?,
         );
-        let audit = sprout_audit::AuditService::new(pool);
-        let auth = sprout_auth::AuthService::new(config.auth.clone());
-        let search = sprout_search::SearchService::new(sprout_search::SearchConfig {
+        let audit = buzz_audit::AuditService::new(pool);
+        let auth = buzz_auth::AuthService::new(config.auth.clone());
+        let search = buzz_search::SearchService::new(buzz_search::SearchConfig {
             url: config.typesense_url.clone(),
             api_key: config.typesense_key.clone(),
             collection: "events".to_string(),
         });
-        let workflow_engine = Arc::new(sprout_workflow::WorkflowEngine::new(
+        let workflow_engine = Arc::new(buzz_workflow::WorkflowEngine::new(
             db.clone(),
-            sprout_workflow::WorkflowConfig::default(),
+            buzz_workflow::WorkflowConfig::default(),
         ));
-        let media_storage = sprout_media::MediaStorage::new(&config.media).ok()?;
+        let media_storage = buzz_media::MediaStorage::new(&config.media).ok()?;
         let (state, _audit_shutdown) = crate::state::AppState::new(
             config,
             db,
@@ -471,9 +471,9 @@ mod tests {
     }
 
     fn auth_tag(owner_keys: &Keys, target_pubkey: &nostr::PublicKey) -> Tag {
-        let tag_json = sprout_sdk::nip_oa::compute_auth_tag(owner_keys, target_pubkey, "")
+        let tag_json = buzz_sdk::nip_oa::compute_auth_tag(owner_keys, target_pubkey, "")
             .expect("compute auth tag");
-        sprout_sdk::nip_oa::parse_auth_tag(&tag_json).expect("parse auth tag")
+        buzz_sdk::nip_oa::parse_auth_tag(&tag_json).expect("parse auth tag")
     }
 
     fn profile_event(target_keys: &Keys, auth_tag: Tag, created_at: u64) -> Event {

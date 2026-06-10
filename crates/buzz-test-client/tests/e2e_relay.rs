@@ -21,7 +21,7 @@
 use std::time::Duration;
 
 use nostr::{Alphabet, EventBuilder, Filter, Keys, Kind, SingleLetterTag, Tag};
-use sprout_test_client::{RelayMessage, SproutTestClient, TestClientError};
+use buzz_test_client::{RelayMessage, BuzzTestClient, TestClientError};
 
 fn relay_url() -> String {
     std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string())
@@ -85,7 +85,7 @@ async fn test_connect_and_authenticate() {
     let url = relay_url();
     let keys = Keys::generate();
 
-    let client = SproutTestClient::connect(&url, &keys)
+    let client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("should connect and authenticate");
 
@@ -102,7 +102,7 @@ async fn test_send_event_and_receive_via_subscription() {
     let keys_b = Keys::generate();
     let channel = create_test_channel(&keys_a).await;
 
-    let mut client_a = SproutTestClient::connect(&url, &keys_a)
+    let mut client_a = BuzzTestClient::connect(&url, &keys_a)
         .await
         .expect("client A connect");
 
@@ -122,7 +122,7 @@ async fn test_send_event_and_receive_via_subscription() {
         .await
         .expect("client A EOSE");
 
-    let mut client_b = SproutTestClient::connect(&url, &keys_b)
+    let mut client_b = BuzzTestClient::connect(&url, &keys_b)
         .await
         .expect("client B connect");
 
@@ -161,7 +161,7 @@ async fn test_subscription_filters_by_kind() {
     let keys = Keys::generate();
     let channel = create_test_channel(&keys).await;
 
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -231,7 +231,7 @@ async fn test_close_subscription_stops_delivery() {
 
     let keys = Keys::generate();
     let channel = create_test_channel(&keys).await;
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -284,7 +284,7 @@ async fn test_unauthenticated_rejected() {
     let url = relay_url();
     let keys = Keys::generate();
 
-    let mut client = SproutTestClient::connect_unauthenticated(&url)
+    let mut client = BuzzTestClient::connect_unauthenticated(&url)
         .await
         .expect("connect unauthenticated");
 
@@ -324,8 +324,8 @@ async fn test_multiple_concurrent_clients() {
     let keys: Vec<Keys> = (0..3).map(|_| Keys::generate()).collect();
     let channel = create_test_channel(&keys[0]).await;
 
-    let mut clients: Vec<SproutTestClient> =
-        futures_util::future::try_join_all(keys.iter().map(|k| SproutTestClient::connect(&url, k)))
+    let mut clients: Vec<BuzzTestClient> =
+        futures_util::future::try_join_all(keys.iter().map(|k| BuzzTestClient::connect(&url, k)))
             .await
             .expect("all clients connect");
 
@@ -380,7 +380,7 @@ async fn test_stored_events_returned_before_eose() {
 
     let keys = Keys::generate();
     let channel = create_test_channel(&keys).await;
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -424,7 +424,7 @@ async fn test_ephemeral_event_not_stored() {
 
     let keys = Keys::generate();
     let channel = create_test_channel(&keys).await;
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -467,7 +467,7 @@ async fn test_ephemeral_event_not_stored() {
 async fn test_auth_event_kind_rejected() {
     let url = relay_url();
     let keys = Keys::generate();
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -503,7 +503,7 @@ async fn test_auth_event_kind_rejected() {
 async fn test_subscription_limit_enforced() {
     let url = relay_url();
     let keys = Keys::generate();
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -621,7 +621,7 @@ async fn test_pubkey_mismatch_rejected() {
     let keys_b = Keys::generate();
     let channel = create_test_channel(&keys_a).await;
 
-    let mut client = SproutTestClient::connect(&url, &keys_a)
+    let mut client = BuzzTestClient::connect(&url, &keys_a)
         .await
         .expect("connect as keys_a");
 
@@ -646,7 +646,7 @@ async fn test_eose_sent_for_empty_subscription() {
 
     let keys = Keys::generate();
     let channel = create_test_channel(&keys).await;
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -705,7 +705,7 @@ async fn test_kind0_nip05_sync() {
     let valid_handle = format!("{}@{}", unique_name, relay_domain);
 
     // Step 1: Connect and publish kind:0 with a valid nip05 handle.
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -839,7 +839,7 @@ async fn test_nip29_put_user_default_policy_allows() {
     let channel_id = create_test_channel(&channel_owner_keys).await;
 
     // Connect as channel_owner.
-    let mut ws = SproutTestClient::connect(&url, &channel_owner_keys)
+    let mut ws = BuzzTestClient::connect(&url, &channel_owner_keys)
         .await
         .expect("connect as channel_owner");
 
@@ -890,7 +890,7 @@ async fn test_nip29_put_user_nobody_blocks() {
     let channel_id = create_test_channel(&channel_owner_keys).await;
 
     // Connect as channel_owner.
-    let mut ws = SproutTestClient::connect(&url, &channel_owner_keys)
+    let mut ws = BuzzTestClient::connect(&url, &channel_owner_keys)
         .await
         .expect("connect as channel_owner");
 
@@ -944,7 +944,7 @@ async fn test_nip29_put_user_self_add_bypasses_policy() {
     let channel_id = create_test_channel(&agent_keys).await;
 
     // Connect as agent.
-    let mut ws = SproutTestClient::connect(&url, &agent_keys)
+    let mut ws = BuzzTestClient::connect(&url, &agent_keys)
         .await
         .expect("connect as agent");
 
@@ -995,7 +995,7 @@ async fn test_nip29_put_user_owner_only_blocks() {
     let channel_id = create_test_channel(&channel_owner_keys).await;
 
     // Connect as channel_owner.
-    let mut ws = SproutTestClient::connect(&url, &channel_owner_keys)
+    let mut ws = BuzzTestClient::connect(&url, &channel_owner_keys)
         .await
         .expect("connect as channel_owner");
 
@@ -1032,7 +1032,7 @@ async fn test_nip29_standard_client_flow() {
     let keys = Keys::generate();
     let channel_id = create_test_channel(&keys).await;
 
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect and authenticate via NIP-42");
 
@@ -1213,7 +1213,7 @@ async fn test_membership_notification_kind_rejected() {
     let keys = Keys::generate();
     let channel_id = create_test_channel(&keys).await;
 
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -1254,7 +1254,7 @@ async fn test_membership_notification_emitted_on_add() {
     let agent_pubkey_hex = agent_keys.public_key().to_hex();
 
     // Connect as agent — NIP-42 auth establishes the authenticated pubkey.
-    let mut agent_client = SproutTestClient::connect(&url, &agent_keys)
+    let mut agent_client = BuzzTestClient::connect(&url, &agent_keys)
         .await
         .expect("connect as agent");
 
@@ -1355,7 +1355,7 @@ async fn test_membership_notification_requires_p_filter() {
     let url = relay_url();
     let keys = Keys::generate();
 
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -1408,7 +1408,7 @@ async fn test_membership_notification_wildcard_filter_rejected() {
     let url = relay_url();
     let keys = Keys::generate();
 
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -1465,7 +1465,7 @@ async fn test_membership_notification_requires_own_p_filter() {
     let keys_b_pubkey_hex = keys_b.public_key().to_hex();
 
     // Connect as keys_a.
-    let mut client = SproutTestClient::connect(&url, &keys_a)
+    let mut client = BuzzTestClient::connect(&url, &keys_a)
         .await
         .expect("connect as keys_a");
 
@@ -1528,7 +1528,7 @@ async fn test_membership_notification_emitted_on_remove() {
     let agent_pubkey_hex = agent_keys.public_key().to_hex();
 
     // Connect as agent — NIP-42 auth establishes the authenticated pubkey.
-    let mut agent_client = SproutTestClient::connect(&url, &agent_keys)
+    let mut agent_client = BuzzTestClient::connect(&url, &agent_keys)
         .await
         .expect("connect as agent");
 
@@ -1677,7 +1677,7 @@ async fn test_membership_notification_multi_p_rejected() {
     let keys_b_pubkey_hex = keys_b.public_key().to_hex();
 
     // Connect as keys_a.
-    let mut client = SproutTestClient::connect(&url, &keys_a)
+    let mut client = BuzzTestClient::connect(&url, &keys_a)
         .await
         .expect("connect as keys_a");
 
@@ -1739,7 +1739,7 @@ async fn test_membership_notification_mixed_filter_rejected() {
     let keys = Keys::generate();
     let channel_id = create_test_channel(&keys).await;
 
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -1793,7 +1793,7 @@ async fn test_membership_notification_mixed_filter_rejected() {
 // ─── Private channel membership permission tests ───────────────────────────────
 
 /// Create a private channel over WebSocket and return the channel UUID.
-async fn create_private_channel_ws(client: &mut SproutTestClient, keys: &Keys) -> String {
+async fn create_private_channel_ws(client: &mut BuzzTestClient, keys: &Keys) -> String {
     let channel_uuid = uuid::Uuid::new_v4().to_string();
     let channel_name = format!("relay-e2e-private-{}", channel_uuid);
 
@@ -1821,7 +1821,7 @@ async fn create_private_channel_ws(client: &mut SproutTestClient, keys: &Keys) -
 
 /// Submit a kind:9000 PUT_USER event over WebSocket.
 async fn add_member_ws(
-    client: &mut SproutTestClient,
+    client: &mut BuzzTestClient,
     channel_id: &str,
     target_pubkey_hex: &str,
     signer: &Keys,
@@ -1839,7 +1839,7 @@ async fn add_member_ws(
 
 /// Submit a kind:9000 PUT_USER event with a role tag over WebSocket.
 async fn add_member_with_role_ws(
-    client: &mut SproutTestClient,
+    client: &mut BuzzTestClient,
     channel_id: &str,
     target_pubkey_hex: &str,
     role: &str,
@@ -1870,7 +1870,7 @@ async fn test_private_channel_any_member_can_invite() {
     let invitee_keys = Keys::generate();
 
     // Connect as owner and create a private channel.
-    let mut owner_client = SproutTestClient::connect(&url, &owner_keys)
+    let mut owner_client = BuzzTestClient::connect(&url, &owner_keys)
         .await
         .expect("connect as owner");
     let channel_id = create_private_channel_ws(&mut owner_client, &owner_keys).await;
@@ -1886,7 +1886,7 @@ async fn test_private_channel_any_member_can_invite() {
     assert!(accepted, "owner should add member, got: {msg}");
 
     // Connect as the regular member.
-    let mut member_client = SproutTestClient::connect(&url, &member_keys)
+    let mut member_client = BuzzTestClient::connect(&url, &member_keys)
         .await
         .expect("connect as member");
 
@@ -1917,13 +1917,13 @@ async fn test_private_channel_non_member_cannot_invite() {
     let target_keys = Keys::generate();
 
     // Owner creates a private channel.
-    let mut owner_client = SproutTestClient::connect(&url, &owner_keys)
+    let mut owner_client = BuzzTestClient::connect(&url, &owner_keys)
         .await
         .expect("connect as owner");
     let channel_id = create_private_channel_ws(&mut owner_client, &owner_keys).await;
 
     // Connect as outsider (not a member of the channel).
-    let mut outsider_client = SproutTestClient::connect(&url, &outsider_keys)
+    let mut outsider_client = BuzzTestClient::connect(&url, &outsider_keys)
         .await
         .expect("connect as outsider");
 
@@ -1961,7 +1961,7 @@ async fn test_private_channel_member_cannot_grant_admin() {
     let target_keys = Keys::generate();
 
     // Owner creates a private channel and adds a regular member.
-    let mut owner_client = SproutTestClient::connect(&url, &owner_keys)
+    let mut owner_client = BuzzTestClient::connect(&url, &owner_keys)
         .await
         .expect("connect as owner");
     let channel_id = create_private_channel_ws(&mut owner_client, &owner_keys).await;
@@ -1976,7 +1976,7 @@ async fn test_private_channel_member_cannot_grant_admin() {
     assert!(accepted, "owner should add member, got: {msg}");
 
     // Connect as the regular member.
-    let mut member_client = SproutTestClient::connect(&url, &member_keys)
+    let mut member_client = BuzzTestClient::connect(&url, &member_keys)
         .await
         .expect("connect as member");
 

@@ -96,14 +96,14 @@ impl Harness {
     async fn spawn_with_env(base_url: &str, extra: &[(&str, &str)]) -> Self {
         let bin = env!("CARGO_BIN_EXE_sprout-agent");
         let mut cmd = tokio::process::Command::new(bin);
-        cmd.env("SPROUT_AGENT_PROVIDER", "openai")
+        cmd.env("BUZZ_AGENT_PROVIDER", "openai")
             .env("OPENAI_COMPAT_API_KEY", "test")
             .env("OPENAI_COMPAT_MODEL", "fake-model")
             .env("OPENAI_COMPAT_BASE_URL", base_url)
-            .env("SPROUT_AGENT_LLM_TIMEOUT_SECS", "5")
-            .env("SPROUT_AGENT_TOOL_TIMEOUT_SECS", "5")
-            .env("SPROUT_AGENT_MAX_ROUNDS", "8")
-            .env("SPROUT_AGENT_MCP_INIT_TIMEOUT_SECS", "2");
+            .env("BUZZ_AGENT_LLM_TIMEOUT_SECS", "5")
+            .env("BUZZ_AGENT_TOOL_TIMEOUT_SECS", "5")
+            .env("BUZZ_AGENT_MAX_ROUNDS", "8")
+            .env("BUZZ_AGENT_MCP_INIT_TIMEOUT_SECS", "2");
         for (k, v) in extra {
             cmd.env(k, v);
         }
@@ -199,7 +199,7 @@ async fn init_session(h: &mut Harness, cwd: &str) -> String {
 async fn hints_loaded_from_cwd_agents_md() {
     let tmp = tempfile::TempDir::new().unwrap();
     let cwd = tmp.path();
-    let marker = "SPROUT_HINTS_MARKER_42";
+    let marker = "BUZZ_HINTS_MARKER_42";
     std::fs::write(cwd.join("AGENTS.md"), marker).unwrap();
 
     let llm = spawn_capturing_llm(vec![openai_text("done")]).await;
@@ -224,7 +224,7 @@ async fn hints_loaded_from_cwd_agents_md() {
     h.shutdown().await;
 }
 
-/// SPROUT_AGENT_NO_HINTS=1 suppresses hint loading.
+/// BUZZ_AGENT_NO_HINTS=1 suppresses hint loading.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hints_suppressed_with_env_var() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -233,7 +233,7 @@ async fn hints_suppressed_with_env_var() {
     std::fs::write(cwd.join("AGENTS.md"), marker).unwrap();
 
     let llm = spawn_capturing_llm(vec![openai_text("done")]).await;
-    let mut h = Harness::spawn_with_env(&llm.url, &[("SPROUT_AGENT_NO_HINTS", "1")]).await;
+    let mut h = Harness::spawn_with_env(&llm.url, &[("BUZZ_AGENT_NO_HINTS", "1")]).await;
     let sid = init_session(&mut h, cwd.to_str().unwrap()).await;
 
     let p = h

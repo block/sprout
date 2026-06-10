@@ -161,7 +161,7 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for GitAuth {
         // body=None: can't buffer streaming pack data to verify payload hash.
         // Token is time-bounded (±60s) and URL-locked — acceptable trade-off.
         let pubkey =
-            sprout_auth::nip98::verify_nip98_event(&event_json, &expected_url, &event_method, None)
+            buzz_auth::nip98::verify_nip98_event(&event_json, &expected_url, &event_method, None)
                 .map_err(|e| {
                     warn!(error = %e, "git NIP-98 auth failed");
                     (StatusCode::UNAUTHORIZED, "NIP-98 auth failed").into_response()
@@ -492,14 +492,14 @@ pub async fn receive_pack(
     );
     let hooks_dir = repo.path().join("hooks").display().to_string();
     let hook_env = vec![
-        ("SPROUT_HOOK_URL", hook_url),
+        ("BUZZ_HOOK_URL", hook_url),
         (
-            "SPROUT_HOOK_SECRET",
+            "BUZZ_HOOK_SECRET",
             state.config.git_hook_hmac_secret.clone(),
         ),
-        ("SPROUT_REPO_ID", repo_name.to_string()),
-        ("SPROUT_REPO_OWNER", params.owner.clone()),
-        ("SPROUT_PUSHER_PUBKEY", pusher_hex.clone()),
+        ("BUZZ_REPO_ID", repo_name.to_string()),
+        ("BUZZ_REPO_OWNER", params.owner.clone()),
+        ("BUZZ_PUSHER_PUBKEY", pusher_hex.clone()),
         // Override any repo-local core.hooksPath setting; defense in
         // depth even though the hydrated workspace has no inherited
         // config.

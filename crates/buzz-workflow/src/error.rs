@@ -59,8 +59,8 @@ pub enum WorkflowError {
     NotImplemented(String),
 }
 
-impl From<sprout_db::error::DbError> for WorkflowError {
-    fn from(e: sprout_db::error::DbError) -> Self {
+impl From<buzz_db::error::DbError> for WorkflowError {
+    fn from(e: buzz_db::error::DbError) -> Self {
         WorkflowError::Database(e.to_string())
     }
 }

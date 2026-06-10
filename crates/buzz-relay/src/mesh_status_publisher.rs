@@ -11,7 +11,7 @@ use std::sync::Arc;
 use nostr::{EventBuilder, Kind, Tag};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sprout_core::kind::KIND_MESH_LLM_RELAY_STATUS;
+use buzz_core::kind::KIND_MESH_LLM_RELAY_STATUS;
 use tracing::info;
 
 use crate::handlers::event::dispatch_persistent_event;
@@ -41,7 +41,7 @@ pub const MESH_STATUS_TYPE: &str = "sprout-mesh-status";
 /// serving node that has not admitted the caller's pubkey.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SproutMeshStatus {
+pub struct BuzzMeshStatus {
     /// Schema version.
     pub v: u32,
     /// Constant discriminator: `sprout-mesh-status`.
@@ -103,7 +103,7 @@ pub struct MeshTargetCapacity {
 }
 
 /// Build the relay-owned status projection from mesh's `/api/status` JSON.
-pub fn sanitize_mesh_status(payload: &Value, now_unix: u64) -> SproutMeshStatus {
+pub fn sanitize_mesh_status(payload: &Value, now_unix: u64) -> BuzzMeshStatus {
     let endpoint_addr = string_field(payload, "token").unwrap_or_default();
     let node_id = string_field(payload, "node_id");
     let mesh_id = string_field(payload, "mesh_id");
@@ -176,7 +176,7 @@ pub fn sanitize_mesh_status(payload: &Value, now_unix: u64) -> SproutMeshStatus 
             .then_with(|| a.endpoint_addr.cmp(&b.endpoint_addr))
     });
 
-    SproutMeshStatus {
+    BuzzMeshStatus {
         v: 1,
         status_type: MESH_STATUS_TYPE.to_string(),
         updated_at: now_unix,
@@ -204,7 +204,7 @@ pub async fn publish_mesh_status_from_payload(
 pub async fn publish_mesh_status(
     state: &Arc<AppState>,
     reporter_pubkey_hex: &str,
-    status: &SproutMeshStatus,
+    status: &BuzzMeshStatus,
 ) -> anyhow::Result<()> {
     let content = serde_json::to_string(status)?;
     let d_tag = mesh_status_d_tag(reporter_pubkey_hex);

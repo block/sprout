@@ -43,11 +43,11 @@ const PASSTHROUGH_ENV: &[&str] = &[
     "GIT_SSH_COMMAND",
     "GIT_CONFIG_GLOBAL",
     // Sprout identity — dev-mcp writes NOSTR_PRIVATE_KEY to a keyfile then
-    // removes it from its own env (children never see it). SPROUT_PRIVATE_KEY
-    // and SPROUT_RELAY_URL are kept for the sprout CLI.
+    // removes it from its own env (children never see it). BUZZ_PRIVATE_KEY
+    // and BUZZ_RELAY_URL are kept for the sprout CLI.
     "NOSTR_PRIVATE_KEY",
-    "SPROUT_PRIVATE_KEY",
-    "SPROUT_RELAY_URL",
+    "BUZZ_PRIVATE_KEY",
+    "BUZZ_RELAY_URL",
 ];
 
 type Client = RunningService<RoleClient, ()>;

@@ -9,7 +9,7 @@
 //!
 //! A background tokio task owns the WebSocket stream. It:
 //! - Responds to Ping frames with Pong (preventing relay disconnect on long turns)
-//! - Forwards `SproutEvent`s through an `mpsc` channel
+//! - Forwards `BuzzEvent`s through an `mpsc` channel
 //! - Handles reconnection with `since` filters to avoid event loss
 //! - Responds to mid-session AUTH challenges
 //! - Publishes ephemeral events (typing indicators) via `PublishEvent` commands
@@ -23,7 +23,7 @@ use std::time::Duration;
 // ─── Named constants ──────────────────────────────────────────────────────────
 
 /// Default capacity of the event channel from background task to harness.
-/// Override with `SPROUT_ACP_EVENT_BUFFER` env var at startup.
+/// Override with `BUZZ_ACP_EVENT_BUFFER` env var at startup.
 const EVENT_CHANNEL_CAPACITY_DEFAULT: usize = 256;
 /// Capacity of the command channel from harness to background task.
 const CMD_CHANNEL_CAPACITY: usize = 64;
@@ -31,7 +31,7 @@ const CMD_CHANNEL_CAPACITY: usize = 64;
 /// Read the event channel capacity from the environment, falling back to the
 /// compiled-in default. Parsed once at call-site (connect time).
 fn event_channel_capacity() -> usize {
-    std::env::var("SPROUT_ACP_EVENT_BUFFER")
+    std::env::var("BUZZ_ACP_EVENT_BUFFER")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .map(|v| v.max(1)) // mpsc::channel panics on capacity 0
@@ -64,7 +64,7 @@ use std::time::Instant;
 use futures_util::{SinkExt, StreamExt};
 use nostr::{Event, EventBuilder, Keys, Kind, RelayUrl, Tag};
 use serde_json::{json, Value};
-use sprout_core::kind::{
+use buzz_core::kind::{
     KIND_AGENT_OBSERVER_FRAME, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
     KIND_TYPING_INDICATOR,
 };
@@ -294,7 +294,7 @@ impl RestClient {
 
 /// Events the harness cares about.
 #[derive(Debug, Clone)]
-pub struct SproutEvent {
+pub struct BuzzEvent {
     /// Which channel this event belongs to.
     pub channel_id: Uuid,
     /// The underlying Nostr event.
@@ -415,7 +415,7 @@ type WsStream = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 /// Ping frames, preventing disconnection during long agent turns.
 pub struct HarnessRelay {
     /// Receiver for events forwarded by the background task.
-    event_rx: mpsc::Receiver<Option<SproutEvent>>,
+    event_rx: mpsc::Receiver<Option<BuzzEvent>>,
     /// Receiver for encrypted observer control events addressed to this agent.
     observer_control_rx: Option<mpsc::Receiver<Event>>,
     /// Sender for commands to the background task.
@@ -470,7 +470,7 @@ impl HarnessRelay {
         // task so buffered messages aren't silently discarded.
         let (ws, handshake_buffer) = do_connect(relay_url, keys, auth_tag.as_ref()).await?;
 
-        let (event_tx, event_rx) = mpsc::channel::<Option<SproutEvent>>(event_channel_capacity());
+        let (event_tx, event_rx) = mpsc::channel::<Option<BuzzEvent>>(event_channel_capacity());
         let (observer_control_tx, observer_control_rx) =
             mpsc::channel::<Event>(event_channel_capacity());
         let (cmd_tx, cmd_rx) = mpsc::channel::<RelayCommand>(CMD_CHANNEL_CAPACITY);
@@ -526,7 +526,7 @@ impl HarnessRelay {
         let p_tag = SingleLetterTag::lowercase(Alphabet::P);
         let member_filter = nostr::Filter::new()
             .kind(Kind::Custom(
-                sprout_core::kind::KIND_NIP29_GROUP_MEMBERS as u16,
+                buzz_core::kind::KIND_NIP29_GROUP_MEMBERS as u16,
             ))
             .custom_tags(p_tag, [pk_hex.as_str()]);
         let member_events = rest.query(&[member_filter]).await?;
@@ -563,7 +563,7 @@ impl HarnessRelay {
         let d_values: Vec<String> = channel_uuids.iter().map(|u| u.to_string()).collect();
         let meta_filter = nostr::Filter::new()
             .kind(Kind::Custom(
-                sprout_core::kind::KIND_NIP29_GROUP_METADATA as u16,
+                buzz_core::kind::KIND_NIP29_GROUP_METADATA as u16,
             ))
             .custom_tags(d_tag, d_values);
         let meta_events = rest.query(&[meta_filter]).await?;
@@ -717,7 +717,7 @@ impl HarnessRelay {
     ///
     /// Reads from the background task's event channel. Returns `None` on
     /// connection loss — the caller should call [`reconnect`](Self::reconnect).
-    pub async fn next_event(&mut self) -> Option<SproutEvent> {
+    pub async fn next_event(&mut self) -> Option<BuzzEvent> {
         // The background task sends `None` to signal connection loss.
         self.event_rx.recv().await.flatten()
     }
@@ -1232,7 +1232,7 @@ async fn execute_connected_command(
 async fn run_background_task(
     mut ws: WsStream,
     initial_handshake_buffer: std::collections::VecDeque<RelayMessage>,
-    event_tx: mpsc::Sender<Option<SproutEvent>>,
+    event_tx: mpsc::Sender<Option<BuzzEvent>>,
     observer_control_tx: mpsc::Sender<Event>,
     mut cmd_rx: mpsc::Receiver<RelayCommand>,
     keys: Keys,
@@ -1632,7 +1632,7 @@ async fn run_background_task(
 async fn handle_ws_message(
     msg: Message,
     ws: &mut WsStream,
-    event_tx: &mpsc::Sender<Option<SproutEvent>>,
+    event_tx: &mpsc::Sender<Option<BuzzEvent>>,
     observer_control_tx: &mpsc::Sender<Event>,
     state: &mut BgState,
     keys: &Keys,
@@ -1688,7 +1688,7 @@ async fn handle_ws_message(
                             return true;
                         }
                         let ts = event.created_at.as_secs();
-                        let sprout_event = SproutEvent {
+                        let sprout_event = BuzzEvent {
                             channel_id: channel_uuid,
                             event: *event,
                         };
@@ -1731,7 +1731,7 @@ async fn handle_ws_message(
                         let ts = event.created_at.as_secs();
                         let event_id_hex = event.id.to_hex();
                         if state.record_event(channel_id, &event) {
-                            let sprout_event = SproutEvent {
+                            let sprout_event = BuzzEvent {
                                 channel_id,
                                 event: *event,
                             };
@@ -1936,7 +1936,7 @@ async fn handle_ws_message(
 async fn process_handshake_buffer(
     ws: &mut WsStream,
     buffer: std::collections::VecDeque<RelayMessage>,
-    event_tx: &mpsc::Sender<Option<SproutEvent>>,
+    event_tx: &mpsc::Sender<Option<BuzzEvent>>,
     observer_control_tx: &mpsc::Sender<Event>,
     state: &mut BgState,
     keys: &Keys,
@@ -2147,7 +2147,7 @@ async fn try_autonomous_reconnect(
     keys: &Keys,
     relay_url: &str,
     agent_pubkey_hex: &str,
-    event_tx: &mpsc::Sender<Option<SproutEvent>>,
+    event_tx: &mpsc::Sender<Option<BuzzEvent>>,
     observer_control_tx: &mpsc::Sender<Event>,
     auth_tag: Option<&nostr::Tag>,
 ) -> ReconnectOutcome {
@@ -2250,7 +2250,7 @@ async fn wait_for_reconnect(
     keys: &Keys,
     relay_url: &str,
     agent_pubkey_hex: &str,
-    event_tx: &mpsc::Sender<Option<SproutEvent>>,
+    event_tx: &mpsc::Sender<Option<BuzzEvent>>,
     observer_control_tx: &mpsc::Sender<Event>,
     skip_drain: bool,
     auth_tag: Option<&nostr::Tag>,

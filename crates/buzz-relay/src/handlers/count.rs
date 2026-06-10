@@ -99,7 +99,7 @@ pub async fn handle_count(
                 match state.db.query_events(&q).await {
                     Ok(stored_events) => {
                         for se in stored_events {
-                            if sprout_core::filter::filters_match(std::slice::from_ref(filter), &se)
+                            if buzz_core::filter::filters_match(std::slice::from_ref(filter), &se)
                             {
                                 total += 1;
                             }
@@ -138,7 +138,7 @@ pub async fn handle_count(
                 match state.db.query_events(&query).await {
                     Ok(stored_events) => {
                         for se in stored_events {
-                            if sprout_core::filter::filters_match(std::slice::from_ref(filter), &se)
+                            if buzz_core::filter::filters_match(std::slice::from_ref(filter), &se)
                             {
                                 total += 1;
                             }

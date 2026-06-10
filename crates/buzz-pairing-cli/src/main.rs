@@ -18,9 +18,9 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use futures_util::{SinkExt, StreamExt};
 use nostr::{Event, EventBuilder, Keys, RelayUrl, SecretKey, ToBech32};
-use sprout_core::kind::KIND_PAIRING;
-use sprout_core::pairing::session::PairingSession;
-use sprout_core::pairing::{
+use buzz_core::kind::KIND_PAIRING;
+use buzz_core::pairing::session::PairingSession;
+use buzz_core::pairing::{
     crypto::{derive_sas, derive_session_id, derive_transcript_hash, format_sas},
     qr::{decode_qr, encode_qr},
     types::PayloadType,
@@ -34,7 +34,7 @@ use zeroize::Zeroizing;
 
 #[derive(Parser)]
 #[command(
-    name = "sprout-pair",
+    name = "buzz-pair",
     about = "NIP-AB device pairing interop testing tool",
     long_about = "Test the NIP-AB device pairing protocol end-to-end.\n\
                   Run 'source' on one terminal and 'target' on another."
@@ -170,7 +170,7 @@ async fn cmd_source(relay_url: String, nsec: Option<String>) -> Result<(), CliEr
     if !confirmed {
         // Send abort and exit.
         if let Some(abort_event) =
-            session.abort(sprout_core::pairing::types::AbortReason::SasMismatch)?
+            session.abort(buzz_core::pairing::types::AbortReason::SasMismatch)?
         {
             publish_event(&mut write, &abort_event).await?;
         }
@@ -282,7 +282,7 @@ async fn cmd_target(relay_override: Option<String>, show_secret: bool) -> Result
                 // NIP-AB §Step 3: target MUST send abort with reason
                 // "sas_mismatch" on transcript hash mismatch.
                 if let Ok(Some(abort_event)) =
-                    session.abort(sprout_core::pairing::types::AbortReason::SasMismatch)
+                    session.abort(buzz_core::pairing::types::AbortReason::SasMismatch)
                 {
                     let _ = publish_event(&mut write, &abort_event).await;
                 }
@@ -301,7 +301,7 @@ async fn cmd_target(relay_override: Option<String>, show_secret: bool) -> Result
     let confirmed = read_yes_no()?;
     if !confirmed {
         if let Some(abort_event) =
-            session.abort(sprout_core::pairing::types::AbortReason::SasMismatch)?
+            session.abort(buzz_core::pairing::types::AbortReason::SasMismatch)?
         {
             publish_event(&mut write, &abort_event).await?;
         }

@@ -9,8 +9,8 @@ use nostr::Event;
 use sqlx::{PgPool, QueryBuilder, Row};
 use uuid::Uuid;
 
-use sprout_core::kind::{event_kind_i32, is_ephemeral, is_parameterized_replaceable, KIND_AUTH};
-use sprout_core::StoredEvent;
+use buzz_core::kind::{event_kind_i32, is_ephemeral, is_parameterized_replaceable, KIND_AUTH};
+use buzz_core::StoredEvent;
 
 use crate::error::{DbError, Result};
 

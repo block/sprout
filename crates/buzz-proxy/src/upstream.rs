@@ -54,7 +54,7 @@ struct Inner {
 /// # Usage
 ///
 /// ```no_run
-/// # use sprout_proxy::upstream::UpstreamClient;
+/// # use buzz_proxy::upstream::UpstreamClient;
 /// # use tokio::sync::mpsc;
 /// # async fn example() {
 /// let (inbound_tx, mut inbound_rx) = mpsc::channel(256);

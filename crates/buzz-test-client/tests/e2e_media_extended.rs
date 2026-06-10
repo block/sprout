@@ -480,7 +480,7 @@ async fn test_concurrent_upload_same_file() {
 #[tokio::test]
 #[ignore]
 async fn test_ws_valid_imeta() {
-    use sprout_test_client::SproutTestClient;
+    use buzz_test_client::BuzzTestClient;
 
     let keys = Keys::generate();
     let pubkey_hex = keys.public_key().to_hex();
@@ -517,7 +517,7 @@ async fn test_ws_valid_imeta() {
     assert_eq!(resp.status(), 200);
 
     // Connect via WebSocket
-    let mut client = SproutTestClient::connect(&relay_ws_url(), &keys)
+    let mut client = BuzzTestClient::connect(&relay_ws_url(), &keys)
         .await
         .unwrap();
 
@@ -551,7 +551,7 @@ async fn test_ws_valid_imeta() {
 #[tokio::test]
 #[ignore]
 async fn test_ws_invalid_imeta_external_url() {
-    use sprout_test_client::SproutTestClient;
+    use buzz_test_client::BuzzTestClient;
 
     let keys = Keys::generate();
     let pubkey_hex = keys.public_key().to_hex();
@@ -580,7 +580,7 @@ async fn test_ws_invalid_imeta_external_url() {
     let channel_id = channel_uuid.to_string();
 
     let sha = "a".repeat(64);
-    let mut client = SproutTestClient::connect(&relay_ws_url(), &keys)
+    let mut client = BuzzTestClient::connect(&relay_ws_url(), &keys)
         .await
         .unwrap();
 
@@ -617,7 +617,7 @@ async fn test_ws_invalid_imeta_external_url() {
 #[tokio::test]
 #[ignore]
 async fn test_ws_invalid_imeta_missing_fields() {
-    use sprout_test_client::SproutTestClient;
+    use buzz_test_client::BuzzTestClient;
 
     let keys = Keys::generate();
     let pubkey_hex = keys.public_key().to_hex();
@@ -646,7 +646,7 @@ async fn test_ws_invalid_imeta_missing_fields() {
     let channel_id = channel_uuid.to_string();
 
     let sha = "b".repeat(64);
-    let mut client = SproutTestClient::connect(&relay_ws_url(), &keys)
+    let mut client = BuzzTestClient::connect(&relay_ws_url(), &keys)
         .await
         .unwrap();
 

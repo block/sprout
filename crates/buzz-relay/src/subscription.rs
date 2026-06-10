@@ -6,7 +6,7 @@ use dashmap::DashMap;
 use nostr::{Alphabet, Filter, Kind, SingleLetterTag};
 use uuid::Uuid;
 
-use sprout_core::{filter::filters_match, StoredEvent};
+use buzz_core::{filter::filters_match, StoredEvent};
 
 /// Connection identifier — a UUID assigned to each WebSocket connection.
 pub type ConnId = Uuid;
@@ -459,7 +459,7 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use nostr::{EventBuilder, Keys, Kind, Tag};
-    use sprout_core::StoredEvent;
+    use buzz_core::StoredEvent;
 
     fn make_stored_event(kind: Kind, channel_id: Option<Uuid>) -> StoredEvent {
         let keys = Keys::generate();
@@ -1028,7 +1028,7 @@ mod tests {
         let registry = SubscriptionRegistry::new();
         let conn_a = Uuid::new_v4();
         let conn_b = Uuid::new_v4();
-        let kind = Kind::Custom(sprout_core::kind::KIND_AGENT_OBSERVER_FRAME as u16);
+        let kind = Kind::Custom(buzz_core::kind::KIND_AGENT_OBSERVER_FRAME as u16);
         let p_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let p_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
@@ -1059,7 +1059,7 @@ mod tests {
     fn test_global_p_kind_index_removal_cleanup() {
         let registry = SubscriptionRegistry::new();
         let conn_id = Uuid::new_v4();
-        let kind = Kind::Custom(sprout_core::kind::KIND_AGENT_OBSERVER_FRAME as u16);
+        let kind = Kind::Custom(buzz_core::kind::KIND_AGENT_OBSERVER_FRAME as u16);
         let p = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let filter = Filter::new().kind(kind).custom_tags(p_tag(), [p]);
         let key = GlobalPKindIndexKey {

@@ -319,7 +319,7 @@ async fn test_trigger_workflow_and_check_run() {
 #[ignore = "requires running relay"]
 async fn test_event_driven_workflow_execution() {
     use nostr::{Kind, Tag};
-    use sprout_test_client::SproutTestClient;
+    use buzz_test_client::BuzzTestClient;
 
     let client = http_client();
     let pubkey_hex: &str = SEEDED_PUBKEY;
@@ -345,7 +345,7 @@ steps:
     // ── Step 2: Connect via WebSocket and send a kind:9 message ───────────
     // Use fresh keys for the sender (channel is open, no auth required to post).
     let sender_keys = Keys::generate();
-    let mut ws_client = SproutTestClient::connect(&relay_ws_url(), &sender_keys)
+    let mut ws_client = BuzzTestClient::connect(&relay_ws_url(), &sender_keys)
         .await
         .expect("ws connect failed");
 
@@ -414,7 +414,7 @@ steps:
 #[ignore = "requires running relay with WF-07 filter evaluation"]
 async fn test_event_driven_workflow_with_filter() {
     use nostr::{Kind, Tag};
-    use sprout_test_client::SproutTestClient;
+    use buzz_test_client::BuzzTestClient;
 
     let client = http_client();
     let pubkey_hex: &str = SEEDED_PUBKEY;
@@ -439,7 +439,7 @@ steps:
         .to_string();
 
     let sender_keys = Keys::generate();
-    let mut ws_client = SproutTestClient::connect(&relay_ws_url(), &sender_keys)
+    let mut ws_client = BuzzTestClient::connect(&relay_ws_url(), &sender_keys)
         .await
         .expect("ws connect failed");
 

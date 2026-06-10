@@ -1,6 +1,6 @@
 use sha2::{Digest, Sha256};
 
-use crate::client::{extract_d_tag, normalize_write_response, print_create_response, SproutClient};
+use crate::client::{extract_d_tag, normalize_write_response, print_create_response, BuzzClient};
 use crate::error::CliError;
 use crate::validate::{parse_uuid, read_or_stdin, sdk_err, validate_uuid};
 
@@ -11,7 +11,7 @@ use crate::validate::{parse_uuid, read_or_stdin, sdk_err, validate_uuid};
 // ---------------------------------------------------------------------------
 
 /// List workflows in a channel — query kind:30620 workflow definition events.
-pub async fn cmd_list_workflows(client: &SproutClient, channel_id: &str) -> Result<(), CliError> {
+pub async fn cmd_list_workflows(client: &BuzzClient, channel_id: &str) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
     let filter = serde_json::json!({
         "kinds": [30620],
@@ -36,7 +36,7 @@ pub async fn cmd_list_workflows(client: &SproutClient, channel_id: &str) -> Resu
 }
 
 /// Get a single workflow definition.
-pub async fn cmd_get_workflow(client: &SproutClient, workflow_id: &str) -> Result<(), CliError> {
+pub async fn cmd_get_workflow(client: &BuzzClient, workflow_id: &str) -> Result<(), CliError> {
     validate_uuid(workflow_id)?;
     let filter = serde_json::json!({
         "kinds": [30620],
@@ -65,7 +65,7 @@ pub async fn cmd_get_workflow(client: &SproutClient, workflow_id: &str) -> Resul
 /// This command will return an empty array until the relay adds event emission
 /// or a dedicated REST endpoint for run history.
 pub async fn cmd_get_workflow_runs(
-    client: &SproutClient,
+    client: &BuzzClient,
     workflow_id: &str,
     limit: Option<u32>,
 ) -> Result<(), CliError> {
@@ -101,7 +101,7 @@ pub async fn cmd_get_workflow_runs(
 
 /// Create a workflow — sign and submit a kind:30620 event.
 pub async fn cmd_create_workflow(
-    client: &SproutClient,
+    client: &BuzzClient,
     channel_id: &str,
     yaml: &str,
 ) -> Result<(), CliError> {
@@ -109,7 +109,7 @@ pub async fn cmd_create_workflow(
     let yaml_definition = read_or_stdin(yaml)?;
 
     let workflow_id = uuid::Uuid::new_v4();
-    let builder = sprout_sdk::build_workflow_def(channel_uuid, workflow_id, &yaml_definition)
+    let builder = buzz_sdk::build_workflow_def(channel_uuid, workflow_id, &yaml_definition)
         .map_err(sdk_err)?;
     let event = client.sign_event(builder)?;
 
@@ -120,7 +120,7 @@ pub async fn cmd_create_workflow(
 
 /// Update a workflow — sign and submit an updated kind:30620 event with same d-tag.
 pub async fn cmd_update_workflow(
-    client: &SproutClient,
+    client: &BuzzClient,
     channel_id: &str,
     workflow_id: &str,
     yaml: &str,
@@ -129,7 +129,7 @@ pub async fn cmd_update_workflow(
     let wf_uuid = parse_uuid(workflow_id)?;
     let yaml_definition = read_or_stdin(yaml)?;
 
-    let builder = sprout_sdk::build_workflow_update(channel_uuid, wf_uuid, &yaml_definition)
+    let builder = buzz_sdk::build_workflow_update(channel_uuid, wf_uuid, &yaml_definition)
         .map_err(sdk_err)?;
     let event = client.sign_event(builder)?;
 
@@ -139,12 +139,12 @@ pub async fn cmd_update_workflow(
 }
 
 /// Delete a workflow — sign and submit a kind:5 deletion event.
-pub async fn cmd_delete_workflow(client: &SproutClient, workflow_id: &str) -> Result<(), CliError> {
+pub async fn cmd_delete_workflow(client: &BuzzClient, workflow_id: &str) -> Result<(), CliError> {
     let wf_uuid = parse_uuid(workflow_id)?;
     let keys = client.keys();
 
     let builder =
-        sprout_sdk::build_workflow_delete(&keys.public_key().to_hex(), wf_uuid).map_err(sdk_err)?;
+        buzz_sdk::build_workflow_delete(&keys.public_key().to_hex(), wf_uuid).map_err(sdk_err)?;
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;
@@ -157,7 +157,7 @@ pub async fn cmd_delete_workflow(client: &SproutClient, workflow_id: &str) -> Re
 /// When `inputs` is provided, it is parsed as a JSON object and used as the
 /// event content (MCP parity). When omitted, the event content is `{}`.
 pub async fn cmd_trigger_workflow(
-    client: &SproutClient,
+    client: &BuzzClient,
     workflow_id: &str,
     inputs: Option<&str>,
 ) -> Result<(), CliError> {
@@ -176,7 +176,7 @@ pub async fn cmd_trigger_workflow(
         let tags = vec![Tag::parse(["d", &wf_uuid.to_string()])
             .map_err(|e| CliError::Other(format!("tag error: {e}")))?];
         let builder = EventBuilder::new(
-            Kind::Custom(sprout_sdk::kind::KIND_WORKFLOW_TRIGGER as u16),
+            Kind::Custom(buzz_sdk::kind::KIND_WORKFLOW_TRIGGER as u16),
             &content,
         )
         .tags(tags);
@@ -184,7 +184,7 @@ pub async fn cmd_trigger_workflow(
         let resp = client.submit_event(event).await?;
         println!("{}", normalize_write_response(&resp));
     } else {
-        let builder = sprout_sdk::build_workflow_trigger(wf_uuid).map_err(sdk_err)?;
+        let builder = buzz_sdk::build_workflow_trigger(wf_uuid).map_err(sdk_err)?;
         let event = client.sign_event(builder)?;
         let resp = client.submit_event(event).await?;
         println!("{}", normalize_write_response(&resp));
@@ -194,7 +194,7 @@ pub async fn cmd_trigger_workflow(
 
 /// Approve or deny a workflow step — sign and submit a kind:46030 (grant) or 46031 (deny) event.
 pub async fn cmd_approve_step(
-    client: &SproutClient,
+    client: &BuzzClient,
     approval_token: &str,
     approved: bool,
     note: Option<&str>,
@@ -206,7 +206,7 @@ pub async fn cmd_approve_step(
     // The relay expects d-tag = hex(SHA256(token)), not the raw token UUID.
     let token_hash = hex::encode(Sha256::digest(approval_token.as_bytes()));
     let builder =
-        sprout_sdk::build_workflow_approval(&token_hash, approved, content).map_err(sdk_err)?;
+        buzz_sdk::build_workflow_approval(&token_hash, approved, content).map_err(sdk_err)?;
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;
@@ -218,7 +218,7 @@ pub async fn cmd_approve_step(
 // Dispatch
 // ---------------------------------------------------------------------------
 
-pub async fn dispatch(cmd: crate::WorkflowsCmd, client: &SproutClient) -> Result<(), CliError> {
+pub async fn dispatch(cmd: crate::WorkflowsCmd, client: &BuzzClient) -> Result<(), CliError> {
     use crate::WorkflowsCmd;
     match cmd {
         WorkflowsCmd::List { channel } => cmd_list_workflows(client, &channel).await,

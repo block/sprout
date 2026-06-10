@@ -129,16 +129,16 @@ async fn openai_auto_upgrades_chat_to_responses_on_databricks_signal() {
 
     let bin = env!("CARGO_BIN_EXE_sprout-agent");
     let mut cmd = Command::new(bin);
-    cmd.env("SPROUT_AGENT_PROVIDER", "openai")
+    cmd.env("BUZZ_AGENT_PROVIDER", "openai")
         .env("OPENAI_COMPAT_API_KEY", "test")
         .env("OPENAI_COMPAT_MODEL", "gpt-5.5")
         .env("OPENAI_COMPAT_BASE_URL", &base_url)
         // No OPENAI_COMPAT_API — must default to "auto" so the upgrade
         // path is enabled.
         .env_remove("OPENAI_COMPAT_API")
-        .env("SPROUT_AGENT_LLM_TIMEOUT_SECS", "5")
-        .env("SPROUT_AGENT_MAX_ROUNDS", "4")
-        .env("SPROUT_AGENT_MCP_INIT_TIMEOUT_SECS", "2")
+        .env("BUZZ_AGENT_LLM_TIMEOUT_SECS", "5")
+        .env("BUZZ_AGENT_MAX_ROUNDS", "4")
+        .env("BUZZ_AGENT_MCP_INIT_TIMEOUT_SECS", "2")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())

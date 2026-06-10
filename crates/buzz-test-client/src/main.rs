@@ -28,7 +28,7 @@
 use std::time::Duration;
 
 use nostr::{Filter, Keys};
-use sprout_test_client::{RelayMessage, SproutTestClient};
+use buzz_test_client::{RelayMessage, BuzzTestClient};
 
 #[tokio::main]
 async fn main() {
@@ -47,8 +47,8 @@ async fn main() {
     let channel = opts.channel.as_deref().unwrap_or("default");
     let kind = opts.kind.unwrap_or(9);
 
-    let keys = match std::env::var("SPROUT_PRIVATE_KEY") {
-        Ok(sk) => Keys::parse(&sk).expect("invalid SPROUT_PRIVATE_KEY"),
+    let keys = match std::env::var("BUZZ_PRIVATE_KEY") {
+        Ok(sk) => Keys::parse(&sk).expect("invalid BUZZ_PRIVATE_KEY"),
         Err(_) => Keys::generate(),
     };
     println!("Using pubkey: {}", keys.public_key());
@@ -66,7 +66,7 @@ async fn main() {
 
 async fn run_send(url: &str, keys: &Keys, channel: &str, message: &str, kind: u16) {
     println!("Connecting to {url}...");
-    let mut client = match SproutTestClient::connect(url, keys).await {
+    let mut client = match BuzzTestClient::connect(url, keys).await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Failed to connect: {e}");
@@ -94,7 +94,7 @@ async fn run_send(url: &str, keys: &Keys, channel: &str, message: &str, kind: u1
 
 async fn run_subscribe(url: &str, keys: &Keys, channel: &str, kind: u16) {
     println!("Connecting to {url}...");
-    let mut client = match SproutTestClient::connect(url, keys).await {
+    let mut client = match BuzzTestClient::connect(url, keys).await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Failed to connect: {e}");
@@ -140,7 +140,7 @@ async fn run_subscribe(url: &str, keys: &Keys, channel: &str, kind: u16) {
                 break;
             }
             Ok(_) => {}
-            Err(sprout_test_client::TestClientError::Timeout) => {
+            Err(buzz_test_client::TestClientError::Timeout) => {
                 // Keep waiting.
             }
             Err(e) => {

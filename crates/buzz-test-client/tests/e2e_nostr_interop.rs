@@ -22,7 +22,7 @@
 use std::time::Duration;
 
 use nostr::{Alphabet, EventBuilder, Filter, Keys, Kind, SingleLetterTag, Tag};
-use sprout_test_client::{RelayMessage, SproutTestClient, TestClientError};
+use buzz_test_client::{RelayMessage, BuzzTestClient, TestClientError};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -192,7 +192,7 @@ async fn test_nip50_search_returns_results_and_eose() {
     let unique_token = format!("searchtoken_{}", uuid::Uuid::new_v4().simple());
     let content = format!("Hello world {unique_token}");
 
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -270,7 +270,7 @@ async fn test_nip50_search_mixed_filters_rejected() {
     let keys = Keys::generate();
     let channel = create_test_channel(&keys).await;
 
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -332,7 +332,7 @@ async fn test_nip50_search_empty_results() {
     let url = relay_url();
     let keys = Keys::generate();
 
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -376,7 +376,7 @@ async fn test_nip10_thread_reply_creates_metadata() {
     // Send root message via REST.
     let root_event_id = send_rest_message(&keys, &channel, "root message for NIP-10 test").await;
 
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -433,7 +433,7 @@ async fn test_nip10_unknown_parent_rejected() {
     let keys = Keys::generate();
     let channel = create_test_channel(&keys).await;
 
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -479,7 +479,7 @@ async fn test_nip10_root_mismatch_rejected() {
     // Use a different random ID as the claimed root.
     let wrong_root_id = hex::encode([0xabu8; 32]);
 
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -522,7 +522,7 @@ async fn test_nip17_gift_wrap_accepted() {
     let auth_keys = Keys::generate();
     let recipient_keys = Keys::generate();
 
-    let mut client = SproutTestClient::connect(&url, &auth_keys)
+    let mut client = BuzzTestClient::connect(&url, &auth_keys)
         .await
         .expect("connect");
 
@@ -554,7 +554,7 @@ async fn test_nip17_gift_wrap_requires_p_filter() {
     let url = relay_url();
     let keys = Keys::generate();
 
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -614,7 +614,7 @@ async fn test_nip17_gift_wrap_recipient_receives() {
     let b_pubkey_hex = keys_b.public_key().to_hex();
 
     // Connect B first and subscribe.
-    let mut client_b = SproutTestClient::connect(&url, &keys_b)
+    let mut client_b = BuzzTestClient::connect(&url, &keys_b)
         .await
         .expect("client B connect");
 
@@ -636,7 +636,7 @@ async fn test_nip17_gift_wrap_recipient_receives() {
         .expect("client B EOSE");
 
     // Connect A and send gift wrap addressed to B.
-    let mut client_a = SproutTestClient::connect(&url, &keys_a)
+    let mut client_a = BuzzTestClient::connect(&url, &keys_a)
         .await
         .expect("client A connect");
 
@@ -700,7 +700,7 @@ async fn test_dm_discovery_events_emitted() {
     let b_pubkey_hex = keys_b.public_key().to_hex();
 
     // Connect A and subscribe to discovery + membership events BEFORE creating the DM.
-    let mut client_a = SproutTestClient::connect(&url, &keys_a)
+    let mut client_a = BuzzTestClient::connect(&url, &keys_a)
         .await
         .expect("client A connect");
 
@@ -834,7 +834,7 @@ async fn test_nip10_thread_reply_not_in_top_level() {
     let root_event_id = send_rest_message(&keys, &channel, &root_content).await;
 
     // Send reply via WS with NIP-10 e-tag.
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -899,7 +899,7 @@ async fn test_nip17_gift_wrap_not_searchable() {
     let keys_b = Keys::generate();
     let channel = create_test_channel(&keys_a).await;
 
-    let mut client = SproutTestClient::connect(&url, &keys_a)
+    let mut client = BuzzTestClient::connect(&url, &keys_a)
         .await
         .expect("connect");
 
@@ -999,7 +999,7 @@ async fn test_nip50_search_relevance_order() {
     // Wait for Typesense indexing.
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -1052,7 +1052,7 @@ async fn test_historical_req_dedup_preserves_or_semantics() {
     let content = format!("dedup-or-{}", uuid::Uuid::new_v4());
     let event_id = send_rest_message(&keys, &channel, &content).await;
 
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -1108,7 +1108,7 @@ async fn test_empty_kinds_returns_zero_events() {
     // Send a message so there IS data in the channel.
     send_rest_message(&keys, &channel, "should not appear").await;
 
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -1143,7 +1143,7 @@ async fn test_empty_kinds_returns_zero_events() {
 /// (kind:30622, queried by `#p` since snapshots are `#p`-gated to their owner).
 /// Returns `None` if no snapshot exists yet.
 async fn read_snapshot_event(
-    client: &mut SproutTestClient,
+    client: &mut BuzzTestClient,
     viewer_hex: &str,
 ) -> Option<nostr::Event> {
     let sid = sub_id("nipdv-snapshot");
@@ -1169,7 +1169,7 @@ async fn read_snapshot_event(
 }
 
 /// Helper: the set of hidden DM channel ids from the viewer's latest snapshot.
-async fn read_hidden_dms(client: &mut SproutTestClient, viewer_hex: &str) -> Vec<String> {
+async fn read_hidden_dms(client: &mut BuzzTestClient, viewer_hex: &str) -> Vec<String> {
     match read_snapshot_event(client, viewer_hex).await {
         None => Vec::new(),
         Some(ev) => ev
@@ -1200,7 +1200,7 @@ async fn test_nipdv_hide_then_reopen_updates_snapshot() {
     // A opens a DM with B.
     let channel_id = create_dm(&keys_a, &b_pubkey_hex).await;
 
-    let mut client_a = SproutTestClient::connect(&url, &keys_a)
+    let mut client_a = BuzzTestClient::connect(&url, &keys_a)
         .await
         .expect("client A connect");
 
@@ -1267,7 +1267,7 @@ async fn test_nipdv_same_second_reopen_supersedes_hide() {
 
     let channel_id = create_dm(&keys_a, &b_pubkey_hex).await;
 
-    let mut client_a = SproutTestClient::connect(&url, &keys_a)
+    let mut client_a = BuzzTestClient::connect(&url, &keys_a)
         .await
         .expect("client A connect");
 
@@ -1381,7 +1381,7 @@ async fn test_nipdv_two_viewers_independent_snapshots() {
     post_signed_event(&keys_b, 41012, vec![Tag::parse(["h", &dm_b]).unwrap()]).await;
 
     // A's snapshot must still list A's hidden DM (B's write must not clobber it).
-    let mut client_a = SproutTestClient::connect(&url, &keys_a)
+    let mut client_a = BuzzTestClient::connect(&url, &keys_a)
         .await
         .expect("client A connect");
     let a_hidden = read_hidden_dms(&mut client_a, &a_pubkey_hex).await;
@@ -1396,7 +1396,7 @@ async fn test_nipdv_two_viewers_independent_snapshots() {
     client_a.disconnect().await.expect("disconnect A");
 
     // B's snapshot lists only B's hidden DM.
-    let mut client_b = SproutTestClient::connect(&url, &keys_b)
+    let mut client_b = BuzzTestClient::connect(&url, &keys_b)
         .await
         .expect("client B connect");
     let b_hidden = read_hidden_dms(&mut client_b, &b_pubkey_hex).await;
@@ -1432,7 +1432,7 @@ async fn test_nipdv_ws_req_rejects_third_party() {
     .await;
 
     // B subscribes for A's snapshot over WS — must be CLOSED, never EVENT.
-    let mut client_b = SproutTestClient::connect(&url, &keys_b)
+    let mut client_b = BuzzTestClient::connect(&url, &keys_b)
         .await
         .expect("client B connect");
     let sid = sub_id("nipdv-cross-ws");
@@ -1494,7 +1494,7 @@ async fn test_nipdv_ids_query_rejects_third_party() {
     .await;
 
     // A reads its own snapshot to learn its event id.
-    let mut client_a = SproutTestClient::connect(&url, &keys_a)
+    let mut client_a = BuzzTestClient::connect(&url, &keys_a)
         .await
         .expect("client A connect");
     let snapshot = read_snapshot_event(&mut client_a, &a_pubkey_hex)
@@ -1550,7 +1550,7 @@ async fn test_nipdv_explicit_kind_query_forbidden_for_third_party() {
     )
     .await;
 
-    let mut client_a = SproutTestClient::connect(&url, &keys_a)
+    let mut client_a = BuzzTestClient::connect(&url, &keys_a)
         .await
         .expect("client A connect");
     let snapshot = read_snapshot_event(&mut client_a, &a_pubkey_hex)
@@ -1600,7 +1600,7 @@ async fn test_nipdv_search_rejects_third_party() {
     )
     .await;
 
-    let mut client_a = SproutTestClient::connect(&url, &keys_a)
+    let mut client_a = BuzzTestClient::connect(&url, &keys_a)
         .await
         .expect("client A connect");
     let snapshot = read_snapshot_event(&mut client_a, &a_pubkey_hex)
@@ -1614,7 +1614,7 @@ async fn test_nipdv_search_rejects_third_party() {
 
     // B issues a kindless search filter carrying A's snapshot id — the bypass
     // shape. Must return zero results, not A's hidden set.
-    let mut client_b = SproutTestClient::connect(&url, &keys_b)
+    let mut client_b = BuzzTestClient::connect(&url, &keys_b)
         .await
         .expect("client B connect");
     let sid = sub_id("nipdv-search-bypass");

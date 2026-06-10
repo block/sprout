@@ -38,9 +38,9 @@ use chrono::{DateTime, Utc};
 use tracing::{info, warn};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-use sprout_db::{Db, DbConfig, EventQuery};
-use sprout_relay::config::Config;
-use sprout_search::{SearchConfig, SearchService};
+use buzz_db::{Db, DbConfig, EventQuery};
+use buzz_relay::config::Config;
+use buzz_search::{SearchConfig, SearchService};
 
 /// Page size for the SQL → Typesense pipeline. Small enough to keep DB and
 /// Typesense memory comfortable, large enough to amortise per-batch overhead.
@@ -53,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
         .with(
             EnvFilter::from_default_env()
                 .add_directive("sprout_reindex_kind0=info".parse()?)
-                .add_directive("sprout_relay=info".parse()?),
+                .add_directive("buzz_relay=info".parse()?),
         )
         .init();
 

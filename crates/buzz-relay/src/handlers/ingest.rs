@@ -10,8 +10,8 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use nostr::Event;
-use sprout_auth::Scope;
-use sprout_core::kind::{
+use buzz_auth::Scope;
+use buzz_core::kind::{
     event_kind_u32, is_identity_archive_request_kind, is_parameterized_replaceable,
     is_relay_admin_kind, KIND_AGENT_ENGRAM, KIND_AGENT_PROFILE, KIND_APPROVAL_DENY,
     KIND_APPROVAL_GRANT, KIND_AUTH, KIND_BOOKMARK_LIST, KIND_BOOKMARK_SET, KIND_CANVAS,
@@ -33,7 +33,7 @@ use sprout_core::kind::{
     KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER, RELAY_ADMIN_ADD_MEMBER,
     RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
 };
-use sprout_core::verification::verify_event;
+use buzz_core::verification::verify_event;
 
 use crate::state::AppState;
 
@@ -270,7 +270,7 @@ pub(crate) enum ReactionChannelResult {
 
 /// Derive channel_id from the target event for NIP-25 reactions.
 pub(crate) async fn derive_reaction_channel(
-    db: &sprout_db::Db,
+    db: &buzz_db::Db,
     event: &Event,
 ) -> ReactionChannelResult {
     let target_hex = match event.tags.iter().rev().find_map(|tag| {
@@ -457,8 +457,8 @@ pub(crate) struct ThreadMetadataOwned {
 }
 
 impl ThreadMetadataOwned {
-    pub fn as_params(&self) -> sprout_db::event::ThreadMetadataParams<'_> {
-        sprout_db::event::ThreadMetadataParams {
+    pub fn as_params(&self) -> buzz_db::event::ThreadMetadataParams<'_> {
+        buzz_db::event::ThreadMetadataParams {
             event_id: &self.event_id,
             event_created_at: self.event_created_at,
             channel_id: self.channel_id,
@@ -990,7 +990,7 @@ pub async fn ingest_event(
     }
 
     // ── 1c. Reject relay-only kinds from external submission ─────────────
-    if sprout_core::kind::is_relay_only_kind(kind_u32) {
+    if buzz_core::kind::is_relay_only_kind(kind_u32) {
         return Err(IngestError::Rejected("restricted: relay-only kind".into()));
     }
 
@@ -1080,7 +1080,7 @@ pub async fn ingest_event(
     // ── 4b. Route command kinds to command executor ──────────────────────
     // Command kinds are routed AFTER signature verification, timestamp check,
     // pubkey/auth match, and scope validation — never before.
-    if sprout_core::kind::is_command_kind(kind_u32) {
+    if buzz_core::kind::is_command_kind(kind_u32) {
         return super::command_executor::handle_command(state, event, auth).await;
     }
 
@@ -1244,18 +1244,18 @@ pub async fn ingest_event(
             .map_err(|e| IngestError::Internal(format!("database error: {e}")))?;
 
         match remove_result {
-            sprout_db::relay_members::RemoveResult::Removed => {}
-            sprout_db::relay_members::RemoveResult::NotFound => {
+            buzz_db::relay_members::RemoveResult::Removed => {}
+            buzz_db::relay_members::RemoveResult::NotFound => {
                 return Err(IngestError::Rejected(
                     "invalid: you are not a relay member".into(),
                 ));
             }
-            sprout_db::relay_members::RemoveResult::IsOwner => {
+            buzz_db::relay_members::RemoveResult::IsOwner => {
                 return Err(IngestError::Rejected(
                     "invalid: relay owner cannot leave".into(),
                 ));
             }
-            sprout_db::relay_members::RemoveResult::RoleMismatch => {
+            buzz_db::relay_members::RemoveResult::RoleMismatch => {
                 // remove_relay_member (no role filter) never returns RoleMismatch —
                 // this arm is unreachable but exhaustiveness requires it.
                 return Err(IngestError::Internal(
@@ -1416,10 +1416,10 @@ pub async fn ingest_event(
             })
             .unwrap_or_else(|| "stream".to_string());
 
-        let visibility: sprout_db::channel::ChannelVisibility = visibility_str
+        let visibility: buzz_db::channel::ChannelVisibility = visibility_str
             .parse()
             .map_err(|_| IngestError::Rejected(format!("invalid visibility: {visibility_str}")))?;
-        let channel_type: sprout_db::channel::ChannelType =
+        let channel_type: buzz_db::channel::ChannelType =
             channel_type_str.parse().map_err(|_| {
                 IngestError::Rejected(format!("invalid channel_type: {channel_type_str}"))
             })?;
@@ -1656,7 +1656,7 @@ pub async fn ingest_event(
         });
     }
 
-    let (stored_event, was_inserted) = if sprout_core::kind::is_replaceable(kind_u32) {
+    let (stored_event, was_inserted) = if buzz_core::kind::is_replaceable(kind_u32) {
         // NIP-16 replaceable event — atomic replace with stale-write protection.
         // channel_id is None for global kinds (0, 1, 3) due to step 5b above.
         state
@@ -1666,12 +1666,12 @@ pub async fn ingest_event(
             .map_err(|e| IngestError::Internal(format!("error: {e}")))?
     } else if is_parameterized_replaceable(kind_u32) {
         // NIP-33 parameterized replaceable — keyed by (kind, pubkey, d_tag).
-        let d_tag = sprout_db::event::extract_d_tag(&event).unwrap_or_default();
-        if d_tag.len() > sprout_db::event::D_TAG_MAX_LEN {
+        let d_tag = buzz_db::event::extract_d_tag(&event).unwrap_or_default();
+        if d_tag.len() > buzz_db::event::D_TAG_MAX_LEN {
             return Err(IngestError::Rejected(format!(
                 "invalid: d tag too long ({} bytes, max {})",
                 d_tag.len(),
-                sprout_db::event::D_TAG_MAX_LEN,
+                buzz_db::event::D_TAG_MAX_LEN,
             )));
         }
         state
@@ -1697,7 +1697,7 @@ pub async fn ingest_event(
                     state.invalidate_channel_deleted();
                 }
                 return Err(match e {
-                    sprout_db::DbError::AuthEventRejected => {
+                    buzz_db::DbError::AuthEventRejected => {
                         IngestError::Rejected("invalid: AUTH events cannot be stored".into())
                     }
                     other => IngestError::Internal(format!("error: database error: {other}")),
@@ -1750,7 +1750,7 @@ pub async fn ingest_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sprout_core::kind::{
+    use buzz_core::kind::{
         KIND_CANVAS, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_LONG_FORM,
         KIND_PRESENCE_UPDATE, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_DIFF, KIND_USER_STATUS,
     };
@@ -1952,7 +1952,7 @@ mod tests {
     #[test]
     fn mesh_llm_relay_status_is_global_only_and_relay_only() {
         assert!(is_global_only_kind(KIND_MESH_LLM_RELAY_STATUS));
-        assert!(sprout_core::kind::is_relay_only_kind(
+        assert!(buzz_core::kind::is_relay_only_kind(
             KIND_MESH_LLM_RELAY_STATUS
         ));
         assert!(!requires_h_channel_scope(KIND_MESH_LLM_RELAY_STATUS));

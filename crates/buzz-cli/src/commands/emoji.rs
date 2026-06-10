@@ -1,12 +1,12 @@
 use std::io::Read;
 
-use crate::client::{normalize_write_response, SproutClient};
+use crate::client::{normalize_write_response, BuzzClient};
 use crate::error::CliError;
-use sprout_sdk::CustomEmoji;
+use buzz_sdk::CustomEmoji;
 
 /// d-tag for a member's own custom emoji set (kind:30030). Mirrors the SDK
 /// constant; the workspace palette is the union of every member's own set.
-const CUSTOM_EMOJI_SET_D_TAG: &str = sprout_sdk::CUSTOM_EMOJI_SET_D_TAG;
+const CUSTOM_EMOJI_SET_D_TAG: &str = buzz_sdk::CUSTOM_EMOJI_SET_D_TAG;
 
 /// Custom emoji entry in CLI output.
 #[derive(Debug, serde::Serialize)]
@@ -60,9 +60,9 @@ fn union_custom_emoji(events: &[serde_json::Value]) -> Vec<EmojiEntry> {
 
 /// List the workspace custom emoji palette: the union of every member's
 /// own kind:30030 set (d=`sprout:custom-emoji`).
-async fn cmd_list(client: &SproutClient) -> Result<(), CliError> {
+async fn cmd_list(client: &BuzzClient) -> Result<(), CliError> {
     let filter = serde_json::json!({
-        "kinds": [sprout_sdk::kind::KIND_EMOJI_SET],
+        "kinds": [buzz_sdk::kind::KIND_EMOJI_SET],
         "#d": [CUSTOM_EMOJI_SET_D_TAG],
     });
     let raw = client.query(&filter).await?;
@@ -76,10 +76,10 @@ async fn cmd_list(client: &SproutClient) -> Result<(), CliError> {
 
 /// Fetch the caller's own current custom emoji set (latest kind:30030 under
 /// the d-tag, authored by the caller). Empty when none published yet.
-async fn fetch_own_emoji(client: &SproutClient) -> Result<Vec<CustomEmoji>, CliError> {
+async fn fetch_own_emoji(client: &BuzzClient) -> Result<Vec<CustomEmoji>, CliError> {
     let me = client.keys().public_key().to_hex();
     let filter = serde_json::json!({
-        "kinds": [sprout_sdk::kind::KIND_EMOJI_SET],
+        "kinds": [buzz_sdk::kind::KIND_EMOJI_SET],
         "#d": [CUSTOM_EMOJI_SET_D_TAG],
         "authors": [me],
         "limit": 1,
@@ -101,8 +101,8 @@ async fn fetch_own_emoji(client: &SproutClient) -> Result<Vec<CustomEmoji>, CliE
 }
 
 /// Publish the caller's own (replaced) kind:30030 set, signed as the caller.
-async fn publish_own_set(client: &SproutClient, emojis: &[CustomEmoji]) -> Result<(), CliError> {
-    let builder = sprout_sdk::build_custom_emoji_set(emojis)
+async fn publish_own_set(client: &BuzzClient, emojis: &[CustomEmoji]) -> Result<(), CliError> {
+    let builder = buzz_sdk::build_custom_emoji_set(emojis)
         .map_err(|e| CliError::Other(format!("build_custom_emoji_set failed: {e}")))?;
     let event = client.sign_event(builder)?;
     let resp = client.submit_event(event).await?;
@@ -111,8 +111,8 @@ async fn publish_own_set(client: &SproutClient, emojis: &[CustomEmoji]) -> Resul
 }
 
 /// Add/update a shortcode in the caller's own set (read-modify-write).
-async fn cmd_set(client: &SproutClient, shortcode: &str, url: &str) -> Result<(), CliError> {
-    let normalized = sprout_sdk::normalize_custom_emoji_shortcode(shortcode)
+async fn cmd_set(client: &BuzzClient, shortcode: &str, url: &str) -> Result<(), CliError> {
+    let normalized = buzz_sdk::normalize_custom_emoji_shortcode(shortcode)
         .map_err(|e| CliError::Other(format!("invalid shortcode: {e}")))?;
     let mut emojis = fetch_own_emoji(client).await?;
     emojis.retain(|e| e.shortcode != normalized);
@@ -124,8 +124,8 @@ async fn cmd_set(client: &SproutClient, shortcode: &str, url: &str) -> Result<()
 }
 
 /// Remove a shortcode from the caller's own set (read-modify-write).
-async fn cmd_rm(client: &SproutClient, shortcode: &str) -> Result<(), CliError> {
-    let normalized = sprout_sdk::normalize_custom_emoji_shortcode(shortcode)
+async fn cmd_rm(client: &BuzzClient, shortcode: &str) -> Result<(), CliError> {
+    let normalized = buzz_sdk::normalize_custom_emoji_shortcode(shortcode)
         .map_err(|e| CliError::Other(format!("invalid shortcode: {e}")))?;
     let mut emojis = fetch_own_emoji(client).await?;
     let before = emojis.len();
@@ -181,7 +181,7 @@ fn write_output(output: &str, file: Option<&str>) -> Result<(), CliError> {
 
 /// Export custom emojis to stdout or a file.
 async fn cmd_export(
-    client: &SproutClient,
+    client: &BuzzClient,
     file: Option<&str>,
     scope: &crate::EmojiScope,
 ) -> Result<(), CliError> {
@@ -202,7 +202,7 @@ async fn cmd_export(
         }
         crate::EmojiScope::Workspace => {
             let filter = serde_json::json!({
-                "kinds": [sprout_sdk::kind::KIND_EMOJI_SET],
+                "kinds": [buzz_sdk::kind::KIND_EMOJI_SET],
                 "#d": [CUSTOM_EMOJI_SET_D_TAG],
             });
             let raw = client.query(&filter).await?;
@@ -218,7 +218,7 @@ async fn cmd_export(
 
 /// Import custom emojis from stdin or a file into the caller's own set.
 async fn cmd_import(
-    client: &SproutClient,
+    client: &BuzzClient,
     file: Option<&str>,
     replace: bool,
     dry_run: bool,
@@ -247,7 +247,7 @@ async fn cmd_import(
             .get("url")
             .and_then(|v| v.as_str())
             .ok_or_else(|| CliError::Usage(format!("emojis[{i}]: missing \"url\" field")))?;
-        let normalized = sprout_sdk::normalize_custom_emoji_shortcode(shortcode)
+        let normalized = buzz_sdk::normalize_custom_emoji_shortcode(shortcode)
             .map_err(|e| CliError::Usage(format!("emojis[{i}]: invalid shortcode: {e}")))?;
         import_entries.push(CustomEmoji {
             shortcode: normalized,
@@ -298,7 +298,7 @@ async fn cmd_import(
 // Dispatch
 // ---------------------------------------------------------------------------
 
-pub async fn dispatch(cmd: crate::EmojiCmd, client: &SproutClient) -> Result<(), CliError> {
+pub async fn dispatch(cmd: crate::EmojiCmd, client: &BuzzClient) -> Result<(), CliError> {
     use crate::EmojiCmd;
     match cmd {
         EmojiCmd::List => cmd_list(client).await,

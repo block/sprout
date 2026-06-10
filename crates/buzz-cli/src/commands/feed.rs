@@ -1,13 +1,13 @@
 use std::cmp::Reverse;
 
-use crate::client::{normalize_events, SproutClient};
+use crate::client::{normalize_events, BuzzClient};
 use crate::error::CliError;
 
 const VALID_FEED_TYPES: &[&str] = &["mentions", "needs_action", "activity", "agent_activity"];
 
 /// Get activity feed — query events mentioning our pubkey (via p-tag).
 pub async fn cmd_get_feed(
-    client: &SproutClient,
+    client: &BuzzClient,
     since: Option<i64>,
     limit: Option<u32>,
     types: Option<&str>,
@@ -70,7 +70,7 @@ pub async fn cmd_get_feed(
 
 pub async fn dispatch(
     cmd: crate::FeedCmd,
-    client: &SproutClient,
+    client: &BuzzClient,
     format: &crate::OutputFormat,
 ) -> Result<(), CliError> {
     use crate::FeedCmd;

@@ -19,12 +19,12 @@ impl Harness {
     async fn spawn(extra: &[(&str, &str)]) -> Self {
         let bin = env!("CARGO_BIN_EXE_sprout-agent");
         let mut cmd = tokio::process::Command::new(bin);
-        cmd.env("SPROUT_AGENT_PROVIDER", "openai")
+        cmd.env("BUZZ_AGENT_PROVIDER", "openai")
             .env("OPENAI_COMPAT_API_KEY", "test")
             .env("OPENAI_COMPAT_MODEL", "fake-model")
-            .env("SPROUT_AGENT_LLM_TIMEOUT_SECS", "5")
-            .env("SPROUT_AGENT_TOOL_TIMEOUT_SECS", "5")
-            .env("SPROUT_AGENT_MAX_ROUNDS", "4")
+            .env("BUZZ_AGENT_LLM_TIMEOUT_SECS", "5")
+            .env("BUZZ_AGENT_TOOL_TIMEOUT_SECS", "5")
+            .env("BUZZ_AGENT_MAX_ROUNDS", "4")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -186,7 +186,7 @@ async fn handshake(h: &mut Harness) -> String {
         .await;
     let init = h.recv_for_id(init_id).await;
     assert_eq!(init["result"]["protocolVersion"], 1);
-    assert_eq!(init["result"]["agentInfo"]["name"], "sprout-agent");
+    assert_eq!(init["result"]["agentInfo"]["name"], "buzz-agent");
     assert_eq!(
         init["result"]["agentCapabilities"]["promptCapabilities"]["image"],
         false
@@ -472,11 +472,11 @@ async fn test_oversized_line_kills_agent() {
     let url = spawn_fake_llm(vec![]).await;
     let bin = env!("CARGO_BIN_EXE_sprout-agent");
     let mut cmd = tokio::process::Command::new(bin);
-    cmd.env("SPROUT_AGENT_PROVIDER", "openai")
+    cmd.env("BUZZ_AGENT_PROVIDER", "openai")
         .env("OPENAI_COMPAT_API_KEY", "test")
         .env("OPENAI_COMPAT_MODEL", "fake-model")
         .env("OPENAI_COMPAT_BASE_URL", &url)
-        .env("SPROUT_AGENT_MAX_LINE_BYTES", "256")
+        .env("BUZZ_AGENT_MAX_LINE_BYTES", "256")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

@@ -3,7 +3,7 @@ use futures_util::FutureExt as _;
 use sqlx::{Acquire, PgPool, Row};
 use tracing::{debug, instrument, warn};
 
-use sprout_core::kind::KIND_AUTH;
+use buzz_core::kind::KIND_AUTH;
 
 use crate::{
     action::AuditAction,

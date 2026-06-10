@@ -3,8 +3,8 @@
 use serde_json::{json, Value};
 use tracing::{debug, warn};
 
-use sprout_core::event::StoredEvent;
-use sprout_core::kind::event_kind_i32;
+use buzz_core::event::StoredEvent;
+use buzz_core::kind::event_kind_i32;
 
 use crate::error::SearchError;
 
@@ -296,7 +296,7 @@ pub async fn delete_event(
 mod tests {
     use super::*;
     use nostr::{EventBuilder, Keys, Kind};
-    use sprout_core::event::StoredEvent;
+    use buzz_core::event::StoredEvent;
     use uuid::Uuid;
 
     fn make_stored_event(content: &str, kind: Kind, channel_id: Option<Uuid>) -> StoredEvent {

@@ -1,5 +1,5 @@
 [package]
-name = "sprout-ws-client"
+name = "buzz-ws-client"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

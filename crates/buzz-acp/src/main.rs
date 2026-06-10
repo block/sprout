@@ -1,3 +1,3 @@
 fn main() -> anyhow::Result<()> {
-    sprout_acp::run()
+    buzz_acp::run()
 }

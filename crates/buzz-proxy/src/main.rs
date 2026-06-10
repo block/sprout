@@ -6,13 +6,13 @@ use nostr::prelude::*;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info};
 
-use sprout_proxy::channel_map::ChannelMap;
-use sprout_proxy::guest_store::GuestStore;
-use sprout_proxy::invite_store::InviteStore;
-use sprout_proxy::server::{self, ProxyState};
-use sprout_proxy::shadow_keys::ShadowKeyManager;
-use sprout_proxy::translate::Translator;
-use sprout_proxy::upstream::{UpstreamClient, UpstreamEvent};
+use buzz_proxy::channel_map::ChannelMap;
+use buzz_proxy::guest_store::GuestStore;
+use buzz_proxy::invite_store::InviteStore;
+use buzz_proxy::server::{self, ProxyState};
+use buzz_proxy::shadow_keys::ShadowKeyManager;
+use buzz_proxy::translate::Translator;
+use buzz_proxy::upstream::{UpstreamClient, UpstreamEvent};
 
 // ── Env helpers ───────────────────────────────────────────────────────────────
 
@@ -41,16 +41,16 @@ async fn main() {
 
     // ── Parse env ─────────────────────────────────────────────────────────────
 
-    let upstream_url = env_required("SPROUT_UPSTREAM_URL");
-    let bind_addr = env_or("SPROUT_PROXY_BIND_ADDR", "0.0.0.0:4869");
-    let server_key_hex = env_required("SPROUT_PROXY_SERVER_KEY");
-    let salt_hex = env_required("SPROUT_PROXY_SALT");
-    let api_token = env_required("SPROUT_PROXY_API_TOKEN");
-    let relay_pubkey = env_required("SPROUT_RELAY_PUBKEY").to_lowercase();
+    let upstream_url = env_required("BUZZ_UPSTREAM_URL");
+    let bind_addr = env_or("BUZZ_PROXY_BIND_ADDR", "0.0.0.0:4869");
+    let server_key_hex = env_required("BUZZ_PROXY_SERVER_KEY");
+    let salt_hex = env_required("BUZZ_PROXY_SALT");
+    let api_token = env_required("BUZZ_PROXY_API_TOKEN");
+    let relay_pubkey = env_required("BUZZ_RELAY_PUBKEY").to_lowercase();
     // Validate relay pubkey is well-formed 64-char hex at startup.
     // Input is lowercased above, so mixed-case is accepted.
     if relay_pubkey.len() != 64 || !relay_pubkey.chars().all(|c| c.is_ascii_hexdigit()) {
-        eprintln!("error: SPROUT_RELAY_PUBKEY must be a 64-character hex string (32 bytes)");
+        eprintln!("error: BUZZ_RELAY_PUBKEY must be a 64-character hex string (32 bytes)");
         std::process::exit(1);
     }
     info!(relay_pubkey = %relay_pubkey, "relay pubkey configured for attribution trust");
@@ -58,7 +58,7 @@ async fn main() {
     // ── Parse server keypair ──────────────────────────────────────────────────
 
     let server_secret = SecretKey::from_hex(&server_key_hex).unwrap_or_else(|e| {
-        eprintln!("error: invalid SPROUT_PROXY_SERVER_KEY: {e}");
+        eprintln!("error: invalid BUZZ_PROXY_SERVER_KEY: {e}");
         std::process::exit(1);
     });
     let server_keys = Keys::new(server_secret);
@@ -67,7 +67,7 @@ async fn main() {
     // ── Parse salt ────────────────────────────────────────────────────────────
 
     let salt = hex::decode(&salt_hex).unwrap_or_else(|e| {
-        eprintln!("error: invalid SPROUT_PROXY_SALT (must be hex): {e}");
+        eprintln!("error: invalid BUZZ_PROXY_SALT (must be hex): {e}");
         std::process::exit(1);
     });
 
@@ -164,11 +164,11 @@ async fn main() {
 
     // ── Read admin secret from env (optional) ─────────────────────────────────
 
-    let admin_secret = std::env::var("SPROUT_PROXY_ADMIN_SECRET").ok();
+    let admin_secret = std::env::var("BUZZ_PROXY_ADMIN_SECRET").ok();
     if admin_secret.is_some() {
-        info!("admin endpoint protected by SPROUT_PROXY_ADMIN_SECRET");
+        info!("admin endpoint protected by BUZZ_PROXY_ADMIN_SECRET");
     } else {
-        info!("admin endpoint running unauthenticated (dev mode) — set SPROUT_PROXY_ADMIN_SECRET to secure it");
+        info!("admin endpoint running unauthenticated (dev mode) — set BUZZ_PROXY_ADMIN_SECRET to secure it");
     }
 
     // ── Build proxy state ─────────────────────────────────────────────────────
@@ -176,7 +176,7 @@ async fn main() {
     // Relay URL for NIP-42 relay tag validation. Prefer explicit env var
     // (e.g. "wss://proxy.example.com") over the derived bind address fallback.
     let relay_url =
-        std::env::var("SPROUT_PROXY_RELAY_URL").unwrap_or_else(|_| format!("ws://{}", bind_addr));
+        std::env::var("BUZZ_PROXY_RELAY_URL").unwrap_or_else(|_| format!("ws://{}", bind_addr));
 
     let state = ProxyState {
         channel_map: channel_map.clone(),

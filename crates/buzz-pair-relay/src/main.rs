@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use sprout_pair_relay::{run_server, Relay};
+use buzz_pair_relay::{run_server, Relay};
 use tokio::net::TcpListener;
 
 #[tokio::main]

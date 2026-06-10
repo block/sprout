@@ -1,5 +1,5 @@
 [package]
-name = "sprout-agent"
+name = "buzz-agent"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,11 +11,11 @@ keywords = ["acp", "agent", "llm", "mcp", "minimal"]
 categories = ["command-line-utilities", "web-programming"]
 
 [lib]
-name = "sprout_agent"
+name = "buzz_agent"
 path = "src/lib.rs"
 
 [[bin]]
-name = "sprout-agent"
+name = "buzz-agent"
 path = "src/main.rs"
 
 # Test-only fake MCP server. Built unconditionally because cargo can't gate

@@ -14,8 +14,8 @@ fn dispatch() -> Result<(), String> {
         .to_ascii_lowercase();
 
     match cmd.as_str() {
-        "sprout-acp" => sprout_acp::run().map_err(|e| e.to_string()),
-        "sprout-agent" => sprout_agent::run().map_err(|e| e.to_string()),
+        "buzz-acp" => buzz_acp::run().map_err(|e| e.to_string()),
+        "buzz-agent" => buzz_agent::run().map_err(|e| e.to_string()),
         "sprig" => match std::env::args().nth(1).as_deref() {
             Some("-V") | Some("--version") => {
                 println!("sprig {}", env!("CARGO_PKG_VERSION"));
@@ -38,7 +38,7 @@ fn dispatch() -> Result<(), String> {
         },
         // sprout-dev-mcp also handles its own multicall names: rg, tree,
         // sprout, git-credential-nostr, and git-sign-nostr.
-        _ => sprout_dev_mcp::run().map_err(|e| e.to_string()),
+        _ => buzz_dev_mcp::run().map_err(|e| e.to_string()),
     }
 }
 

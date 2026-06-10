@@ -2,7 +2,7 @@
 //!
 //! These tests exercise the full pack-resolve pipeline and verify that:
 //! - Goose personas emit GOOSE_PROVIDER, GOOSE_MODEL, GOOSE_TEMPERATURE
-//! - Sprout-agent personas emit SPROUT_AGENT_MODEL, SPROUT_AGENT_PROVIDER
+//! - Sprout-agent personas emit BUZZ_AGENT_MODEL, BUZZ_AGENT_PROVIDER
 //! - The import filter strips derived provider/model keys but preserves knobs
 //! - Multi-runtime packs produce correct per-persona env var prefixes
 //! - Models without a provider prefix emit only the model key (no provider)
@@ -10,15 +10,15 @@
 use std::collections::BTreeMap;
 use std::fs;
 
-use sprout_persona::resolve::resolve_pack;
+use buzz_persona::resolve::resolve_pack;
 
 // ── Import filter (replicates desktop crate logic) ───────────────────────────
 
 const DERIVED_PROVIDER_MODEL_ENV_KEYS: &[&str] = &[
     "GOOSE_MODEL",
     "GOOSE_PROVIDER",
-    "SPROUT_AGENT_MODEL",
-    "SPROUT_AGENT_PROVIDER",
+    "BUZZ_AGENT_MODEL",
+    "BUZZ_AGENT_PROVIDER",
 ];
 
 fn filter_derived(env_vars: Vec<(String, String)>) -> BTreeMap<String, String> {
@@ -94,7 +94,7 @@ You are a test bot.
     );
 }
 
-// ── Test 2: Sprout-agent persona emits SPROUT_AGENT_* vars ───────────────────
+// ── Test 2: Sprout-agent persona emits BUZZ_AGENT_* vars ───────────────────
 
 #[test]
 fn resolve_pack_sprout_agent_persona_emits_sprout_agent_vars() {
@@ -122,7 +122,7 @@ fn resolve_pack_sprout_agent_persona_emits_sprout_agent_vars() {
 name: "bot"
 display_name: "Bot"
 description: "Test bot"
-runtime: "sprout-agent"
+runtime: "buzz-agent"
 model: "openai:gpt-4o"
 ---
 You are a test bot.
@@ -140,14 +140,14 @@ You are a test bot.
         .collect();
 
     assert_eq!(
-        env.get("SPROUT_AGENT_MODEL"),
+        env.get("BUZZ_AGENT_MODEL"),
         Some(&"gpt-4o"),
-        "should emit SPROUT_AGENT_MODEL=gpt-4o"
+        "should emit BUZZ_AGENT_MODEL=gpt-4o"
     );
     assert_eq!(
-        env.get("SPROUT_AGENT_PROVIDER"),
+        env.get("BUZZ_AGENT_PROVIDER"),
         Some(&"openai"),
-        "should emit SPROUT_AGENT_PROVIDER=openai"
+        "should emit BUZZ_AGENT_PROVIDER=openai"
     );
 
     // Must NOT contain GOOSE_* keys
@@ -267,7 +267,7 @@ You are a goose bot.
 name: "sprout-bot"
 display_name: "Sprout Bot"
 description: "A sprout-agent runtime bot"
-runtime: "sprout-agent"
+runtime: "buzz-agent"
 model: "openai:gpt-4o"
 ---
 You are a sprout bot.
@@ -301,22 +301,22 @@ You are a sprout bot.
         Some(&"claude-sonnet-4-20250514")
     );
     assert!(
-        !goose_env.contains_key("SPROUT_AGENT_MODEL"),
-        "goose persona must not emit SPROUT_AGENT_MODEL"
+        !goose_env.contains_key("BUZZ_AGENT_MODEL"),
+        "goose persona must not emit BUZZ_AGENT_MODEL"
     );
     assert!(
-        !goose_env.contains_key("SPROUT_AGENT_PROVIDER"),
-        "goose persona must not emit SPROUT_AGENT_PROVIDER"
+        !goose_env.contains_key("BUZZ_AGENT_PROVIDER"),
+        "goose persona must not emit BUZZ_AGENT_PROVIDER"
     );
 
-    // Sprout-agent persona gets SPROUT_AGENT_* env vars
+    // Sprout-agent persona gets BUZZ_AGENT_* env vars
     let sprout_env: std::collections::HashMap<_, _> = sprout
         .runtime_env_vars
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
-    assert_eq!(sprout_env.get("SPROUT_AGENT_MODEL"), Some(&"gpt-4o"));
-    assert_eq!(sprout_env.get("SPROUT_AGENT_PROVIDER"), Some(&"openai"));
+    assert_eq!(sprout_env.get("BUZZ_AGENT_MODEL"), Some(&"gpt-4o"));
+    assert_eq!(sprout_env.get("BUZZ_AGENT_PROVIDER"), Some(&"openai"));
     assert!(
         !sprout_env.contains_key("GOOSE_MODEL"),
         "sprout-agent persona must not emit GOOSE_MODEL"

@@ -60,10 +60,10 @@ impl SharedState {
 
 fn build_bootstrap(cwd: &Path) -> String {
     let stack = detect_stack(cwd);
-    let sprout_hint = if std::env::var("SPROUT_RELAY_URL").is_ok()
-        && std::env::var("SPROUT_PRIVATE_KEY").is_ok()
+    let sprout_hint = if std::env::var("BUZZ_RELAY_URL").is_ok()
+        && std::env::var("BUZZ_PRIVATE_KEY").is_ok()
     {
-        "\nSprout relay configured. Run `sprout --help` to see available commands.\n"
+        "\nSprout relay configured. Run `buzz --help` to see available commands.\n"
     } else {
         ""
     };
@@ -149,7 +149,7 @@ pub async fn run(
     cmd.current_dir(&workdir);
     cmd.env("PATH", &state.shim.path_env);
     // NOSTR_PRIVATE_KEY is already removed from this process's env (shim.rs).
-    // SPROUT_PRIVATE_KEY is intentionally inherited — the sprout CLI needs it.
+    // BUZZ_PRIVATE_KEY is intentionally inherited — the sprout CLI needs it.
     for (k, v) in &state.shim.git_env {
         cmd.env(k, v);
     }

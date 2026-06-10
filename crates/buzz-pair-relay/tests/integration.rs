@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
-use sprout_pair_relay::{run_server, Relay};
+use buzz_pair_relay::{run_server, Relay};
 
 // ── Crypto imports (for real event signing) ───────────────────────────────────
 

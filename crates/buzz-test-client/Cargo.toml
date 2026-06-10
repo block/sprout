@@ -1,5 +1,5 @@
 [package]
-name = "sprout-test-client"
+name = "buzz-test-client"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,8 +9,8 @@ description = "Integration test client and E2E test suite for Sprout"
 
 [dependencies]
 anyhow = { workspace = true }
-sprout-core = { workspace = true }
-sprout-ws-client = { workspace = true }
+buzz-core = { workspace = true }
+buzz-ws-client = { workspace = true }
 nostr = { workspace = true }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
@@ -37,5 +37,5 @@ chrono = { workspace = true }
 s3 = { version = "0.37", package = "rust-s3", default-features = false, features = ["tokio-rustls-tls", "fail-on-err", "tags"] }
 
 [[bin]]
-name = "sprout-test-cli"
+name = "buzz-test-cli"
 path = "src/main.rs"

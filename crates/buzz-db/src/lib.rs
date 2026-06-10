@@ -45,7 +45,7 @@ use sqlx::{PgPool, QueryBuilder, Row};
 use std::time::Duration;
 use uuid::Uuid;
 
-use sprout_core::StoredEvent;
+use buzz_core::StoredEvent;
 
 /// Extract p-tag mentions from an event and insert into the `event_mentions` table.
 ///
@@ -1495,7 +1495,7 @@ impl Db {
         event: &nostr::Event,
         channel_id: Option<Uuid>,
     ) -> Result<(StoredEvent, bool)> {
-        let kind_i32 = sprout_core::kind::event_kind_i32(event);
+        let kind_i32 = buzz_core::kind::event_kind_i32(event);
         let pubkey_bytes = event.pubkey.to_bytes();
         let created_at_secs = event.created_at.as_secs() as i64;
         let created_at = chrono::DateTime::from_timestamp(created_at_secs, 0)
@@ -1649,7 +1649,7 @@ impl Db {
         d_tag: &str,
         channel_id: Option<Uuid>,
     ) -> Result<(StoredEvent, bool)> {
-        let kind_i32 = sprout_core::kind::event_kind_i32(event);
+        let kind_i32 = buzz_core::kind::event_kind_i32(event);
         let pubkey_bytes = event.pubkey.to_bytes();
         let created_at_secs = event.created_at.as_secs() as i64;
         let created_at = chrono::DateTime::from_timestamp(created_at_secs, 0)

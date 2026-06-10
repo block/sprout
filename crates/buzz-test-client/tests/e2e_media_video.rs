@@ -473,7 +473,7 @@ fn tiny_jpeg() -> Vec<u8> {
 #[tokio::test]
 #[ignore]
 async fn test_video_poster_imeta_accepted_via_ws() {
-    use sprout_test_client::SproutTestClient;
+    use buzz_test_client::BuzzTestClient;
 
     let client = http_client();
     let keys = Keys::generate();
@@ -533,7 +533,7 @@ async fn test_video_poster_imeta_accepted_via_ws() {
     assert_eq!(poster_resp.status(), StatusCode::OK, "poster upload failed");
 
     // 4. Send message with imeta referencing both video and poster
-    let mut ws = SproutTestClient::connect(&relay_ws_url(), &keys)
+    let mut ws = BuzzTestClient::connect(&relay_ws_url(), &keys)
         .await
         .unwrap();
 
@@ -572,7 +572,7 @@ async fn test_video_poster_imeta_accepted_via_ws() {
 #[tokio::test]
 #[ignore]
 async fn test_video_poster_imeta_rejects_video_as_poster() {
-    use sprout_test_client::SproutTestClient;
+    use buzz_test_client::BuzzTestClient;
 
     let client = http_client();
     let keys = Keys::generate();
@@ -618,7 +618,7 @@ async fn test_video_poster_imeta_rejects_video_as_poster() {
     let video_size = video_desc["size"].as_u64().unwrap();
 
     // 3. Send message with imeta `image` pointing to the VIDEO (not an image)
-    let mut ws = SproutTestClient::connect(&relay_ws_url(), &keys)
+    let mut ws = BuzzTestClient::connect(&relay_ws_url(), &keys)
         .await
         .unwrap();
 

@@ -880,13 +880,13 @@ fn format_event_block(
 
 /// Append a reply instruction when the agent is responding to a thread event.
 ///
-/// Tells the agent to pass `--reply-to <event_id>` on every `sprout messages
+/// Tells the agent to pass `--reply-to <event_id>` on every `buzz messages
 /// send` call in this turn, and not to broadcast to the channel so replies
 /// stay inside the thread.
 fn append_reply_instruction(s: &mut String, event_id: &str) {
     s.push_str(&format!(
         "\nIMPORTANT: When responding, use `--reply-to {event_id}` \
-         on EVERY `sprout messages send` call in this turn. \
+         on EVERY `buzz messages send` call in this turn. \
          Do not broadcast to the channel."
     ));
 }
@@ -912,13 +912,13 @@ fn format_context_hints(
         // DM replies use thread command because /messages excludes thread replies.
         // DM non-replies use get for recent conversation.
         let ctx_hint = if has_conversation_context && is_reply {
-            "Thread context included below. Use `sprout messages thread --channel <UUID> --event <ID>` for full history if truncated."
+            "Thread context included below. Use `buzz messages thread --channel <UUID> --event <ID>` for full history if truncated."
         } else if has_conversation_context {
-            "Conversation context included below. Use `sprout messages get --channel <UUID>` for full history if truncated."
+            "Conversation context included below. Use `buzz messages get --channel <UUID>` for full history if truncated."
         } else if is_reply {
-            "Use `sprout messages thread --channel <UUID> --event <ID>` to fetch the reply chain."
+            "Use `buzz messages thread --channel <UUID> --event <ID>` to fetch the reply chain."
         } else {
-            "Use `sprout messages get --channel <UUID>` for conversation context."
+            "Use `buzz messages get --channel <UUID>` for conversation context."
         };
         let mut s = format!(
             "[Context]\n\
@@ -941,9 +941,9 @@ fn format_context_hints(
         s
     } else if let Some(ref root) = thread_tags.root_event_id {
         let ctx_hint = if has_conversation_context {
-            "Thread context included below. Use `sprout messages thread --channel <UUID> --event <ID>` for full history if truncated."
+            "Thread context included below. Use `buzz messages thread --channel <UUID> --event <ID>` for full history if truncated."
         } else {
-            "Use `sprout messages thread --channel <UUID> --event <ID>` to fetch thread context."
+            "Use `buzz messages thread --channel <UUID> --event <ID>` to fetch thread context."
         };
         let mut s = format!(
             "[Context]\n\
@@ -966,7 +966,7 @@ fn format_context_hints(
             "[Context]\n\
              Scope: channel\n\
              Channel: {channel_display}\n\
-             Hint: Use `sprout messages get --channel <UUID>` for recent messages if needed."
+             Hint: Use `buzz messages get --channel <UUID>` for recent messages if needed."
         )
     }
 }
@@ -1033,7 +1033,7 @@ pub fn prepend_base_prompt(base: &str, body: &str) -> String {
 /// 1. `[System]\n{system_prompt}` — if system prompt is set
 /// 2. `[Context]` — scope, channel name, and contextual hints for the agent
 /// 3. `[Thread Context]` or `[Conversation Context]` — if fetched
-/// 4. `[Event]` / `[Sprout events]` — the triggering event(s)
+/// 4. `[Event]` / `[Buzz events]` — the triggering event(s)
 pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> String {
     // Scope is always derived from the LAST event in the batch — that's the
     // one the agent is responding to. Thread/DM context is supplementary info
@@ -1115,7 +1115,7 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> String 
             )
         } else {
             format!(
-                "[Sprout event: {}]\n{}",
+                "[Buzz event: {}]\n{}",
                 be.prompt_tag,
                 format_event_block(batch.channel_id, args.channel_info, be, args.profile_lookup)
             )
@@ -1127,7 +1127,7 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> String 
                 batch.events.len()
             )
         } else {
-            format!("[Sprout events — {} events]", batch.events.len())
+            format!("[Buzz events — {} events]", batch.events.len())
         };
         let mut s = header;
         for (i, be) in batch.events.iter().enumerate() {
@@ -1371,7 +1371,7 @@ mod tests {
         // Should contain [Context] section before the event.
         assert!(prompt.contains("[Context]"));
         assert!(prompt.contains("Scope: channel"));
-        assert!(prompt.contains("[Sprout event: @mention]\n"));
+        assert!(prompt.contains("[Buzz event: @mention]\n"));
         assert!(prompt.contains(&format!("Channel: {}", ch)));
         assert!(prompt.contains(&format!("From: {}", npub)));
         assert!(prompt.contains("Content: Hello @agent"));
@@ -1465,7 +1465,7 @@ mod tests {
         let prompt = format_prompt(&batch, &FormatPromptArgs::default());
 
         assert!(prompt.contains("[Context]"));
-        assert!(prompt.contains("[Sprout events — 3 events]"));
+        assert!(prompt.contains("[Buzz events — 3 events]"));
         assert!(prompt.contains("--- Event 1 (tag-a) ---"));
         assert!(prompt.contains("--- Event 2 (tag-b) ---"));
         assert!(prompt.contains("--- Event 3 (tag-c) ---"));
@@ -2448,7 +2448,7 @@ mod tests {
         // Hint should point to the thread command, not get.
         assert!(
             prompt.contains("sprout messages thread"),
-            "DM reply hint should mention `sprout messages thread`, got:\n{prompt}"
+            "DM reply hint should mention `buzz messages thread`, got:\n{prompt}"
         );
         // Thread structural info should be present.
         assert!(
@@ -2488,11 +2488,11 @@ mod tests {
         assert!(prompt.contains("Scope: dm"));
         assert!(
             prompt.contains("sprout messages get"),
-            "DM non-reply hint should mention `sprout messages get`"
+            "DM non-reply hint should mention `buzz messages get`"
         );
         assert!(
             !prompt.contains("sprout messages thread"),
-            "DM non-reply should NOT mention `sprout messages thread`"
+            "DM non-reply should NOT mention `buzz messages thread`"
         );
     }
 

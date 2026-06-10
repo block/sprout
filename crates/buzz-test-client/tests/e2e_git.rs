@@ -116,17 +116,17 @@ struct PointerSnapshot {
 
 impl GitS3Probe {
     fn from_env() -> Self {
-        let endpoint = std::env::var("SPROUT_GIT_S3_ENDPOINT")
-            .or_else(|_| std::env::var("SPROUT_S3_ENDPOINT"))
+        let endpoint = std::env::var("BUZZ_GIT_S3_ENDPOINT")
+            .or_else(|_| std::env::var("BUZZ_S3_ENDPOINT"))
             .unwrap_or_else(|_| "http://localhost:9000".to_string());
-        let access_key = std::env::var("SPROUT_GIT_S3_ACCESS_KEY")
-            .or_else(|_| std::env::var("SPROUT_S3_ACCESS_KEY"))
+        let access_key = std::env::var("BUZZ_GIT_S3_ACCESS_KEY")
+            .or_else(|_| std::env::var("BUZZ_S3_ACCESS_KEY"))
             .unwrap_or_else(|_| "sprout_dev".to_string());
-        let secret_key = std::env::var("SPROUT_GIT_S3_SECRET_KEY")
-            .or_else(|_| std::env::var("SPROUT_S3_SECRET_KEY"))
+        let secret_key = std::env::var("BUZZ_GIT_S3_SECRET_KEY")
+            .or_else(|_| std::env::var("BUZZ_S3_SECRET_KEY"))
             .unwrap_or_else(|_| "sprout_dev_secret".to_string());
-        let bucket = std::env::var("SPROUT_GIT_S3_BUCKET")
-            .or_else(|_| std::env::var("SPROUT_S3_BUCKET"))
+        let bucket = std::env::var("BUZZ_GIT_S3_BUCKET")
+            .or_else(|_| std::env::var("BUZZ_S3_BUCKET"))
             .unwrap_or_else(|_| "sprout-media".to_string());
 
         let region = Region::Custom {

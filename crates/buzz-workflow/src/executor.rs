@@ -755,7 +755,7 @@ pub(crate) fn parse_duration_secs(duration: &str) -> Result<u64, WorkflowError> 
 }
 
 // ── SSRF protection ───────────────────────────────────────────────────────────
-// is_private_ip is provided by sprout_core::network::is_private_ip
+// is_private_ip is provided by buzz_core::network::is_private_ip
 
 /// Resolve `host` to IP addresses and reject if any are private/reserved.
 ///
@@ -786,7 +786,7 @@ async fn check_ssrf(host: &str, port: u16) -> Result<std::net::IpAddr, WorkflowE
     debug!("Resolved webhook host '{}' → {:?}", host, addrs);
 
     for ip in &addrs {
-        if sprout_core::network::is_private_ip(ip) {
+        if buzz_core::network::is_private_ip(ip) {
             return Err(WorkflowError::WebhookError(format!(
                 "SSRF blocked: '{host}' resolved to private/reserved address {ip}"
             )));
@@ -913,7 +913,7 @@ fn shared_http_client() -> &'static reqwest::Client {
 /// POST `{"emoji": emoji}` to `POST /api/messages/{message_id}/reactions`.
 #[cfg(feature = "reqwest")]
 async fn add_reaction_impl(message_id: &str, emoji: &str) -> Result<JsonValue, WorkflowError> {
-    let base_url = std::env::var("SPROUT_RELAY_BASE_URL")
+    let base_url = std::env::var("BUZZ_RELAY_BASE_URL")
         .unwrap_or_else(|_| "http://localhost:3000".to_owned());
 
     let url = format!("{base_url}/api/messages/{message_id}/reactions");
@@ -925,9 +925,9 @@ async fn add_reaction_impl(message_id: &str, emoji: &str) -> Result<JsonValue, W
         .header("Content-Type", "application/json")
         .json(&serde_json::json!({ "emoji": emoji }));
 
-    if let Ok(token) = std::env::var("SPROUT_API_TOKEN") {
+    if let Ok(token) = std::env::var("BUZZ_API_TOKEN") {
         req = req.header("Authorization", format!("Bearer {token}"));
-    } else if let Ok(pubkey) = std::env::var("SPROUT_RELAY_PUBKEY") {
+    } else if let Ok(pubkey) = std::env::var("BUZZ_RELAY_PUBKEY") {
         req = req.header("X-Pubkey", pubkey);
     }
 
@@ -1015,7 +1015,7 @@ pub async fn execute_run(
         .db
         .update_workflow_run(
             run_id,
-            sprout_db::workflow::RunStatus::Running,
+            buzz_db::workflow::RunStatus::Running,
             0,
             &serde_json::json!([]),
             None,
@@ -1075,7 +1075,7 @@ pub async fn execute_from_step(
         .db
         .update_workflow_run(
             run_id,
-            sprout_db::workflow::RunStatus::Running,
+            buzz_db::workflow::RunStatus::Running,
             start_index as i32,
             &existing_trace,
             None,

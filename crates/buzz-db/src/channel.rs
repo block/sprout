@@ -13,7 +13,7 @@ use crate::error::{DbError, Result};
 // Re-export the canonical enum definitions from sprout-core.
 // These live in core (zero I/O deps) so the SDK can share them
 // without pulling in sqlx/tokio.
-pub use sprout_core::channel::{ChannelType, ChannelVisibility, MemberRole};
+pub use buzz_core::channel::{ChannelType, ChannelVisibility, MemberRole};
 
 /// A channel row as returned from the database.
 #[derive(Debug, Clone)]

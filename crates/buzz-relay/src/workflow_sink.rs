@@ -10,8 +10,8 @@ use std::sync::{Arc, Weak};
 
 use chrono::Utc;
 use nostr::{EventBuilder, Kind, Tag};
-use sprout_core::kind::KIND_STREAM_MESSAGE;
-use sprout_workflow::action_sink::{ActionSink, ActionSinkError};
+use buzz_core::kind::KIND_STREAM_MESSAGE;
+use buzz_workflow::action_sink::{ActionSink, ActionSinkError};
 use tracing::info;
 use uuid::Uuid;
 
@@ -72,7 +72,7 @@ impl ActionSink for RelayActionSink {
                 .get_channel(channel_uuid)
                 .await
                 .map_err(|e| match &e {
-                    sprout_db::DbError::ChannelNotFound(_) | sprout_db::DbError::NotFound(_) => {
+                    buzz_db::DbError::ChannelNotFound(_) | buzz_db::DbError::NotFound(_) => {
                         ActionSinkError::ChannelNotFound(channel_id_canonical.clone())
                     }
                     _ => ActionSinkError::Database(e.to_string()),
@@ -137,7 +137,7 @@ impl ActionSink for RelayActionSink {
 
             // 4. Persist event with thread metadata (matches REST handler path).
             //    Workflow messages are always top-level: depth=0, no parent/root.
-            let thread_meta = Some(sprout_db::event::ThreadMetadataParams {
+            let thread_meta = Some(buzz_db::event::ThreadMetadataParams {
                 event_id: &event_id_bytes,
                 event_created_at,
                 channel_id: channel_uuid,

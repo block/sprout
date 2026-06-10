@@ -12,8 +12,8 @@
 //! - Either way, session creation is never blocked.
 
 use nostr::{Event, Keys, PublicKey};
-use sprout_core::engram::{conversation_key, d_tag, select_head, validate_and_decrypt, Body};
-use sprout_core::kind::KIND_AGENT_ENGRAM;
+use buzz_core::engram::{conversation_key, d_tag, select_head, validate_and_decrypt, Body};
+use buzz_core::kind::KIND_AGENT_ENGRAM;
 
 use crate::relay::RestClient;
 
@@ -22,10 +22,10 @@ const SECTION_LABEL: &str = "Agent Memory — core";
 
 /// Onboarding nudge for new agents with no core yet.
 ///
-/// Wording is from Tyler's brief: "No core memory found. Use `sprout mem`
+/// Wording is from Tyler's brief: "No core memory found. Use `buzz mem`
 /// to create a core memory. Ask your user about yourself."
 pub const ONBOARDING_NUDGE: &str = "No core memory found. \
-Use `sprout mem set core \"…\"` to create one (it will hold your identity, \
+Use `buzz mem set core \"…\"` to create one (it will hold your identity, \
 rules, and goals across sessions). Ask your user about yourself.";
 
 /// Build the rendered prompt section for the agent's core.
@@ -68,7 +68,7 @@ async fn fetch_core_body(
     owner: &PublicKey,
 ) -> Result<Option<String>, String> {
     let k_c = conversation_key(agent_keys.secret_key(), owner);
-    let d = d_tag(&k_c, sprout_core::engram::CORE_SLUG);
+    let d = d_tag(&k_c, buzz_core::engram::CORE_SLUG);
 
     let filter = nostr::Filter::new()
         .kind(nostr::Kind::Custom(KIND_AGENT_ENGRAM as u16))
@@ -167,7 +167,7 @@ fn decode_core_body(
 mod tests {
     use super::*;
     use serde_json::json;
-    use sprout_core::engram::{build_event, Body};
+    use buzz_core::engram::{build_event, Body};
 
     /// Empty array → confirmed absence → Ok(None), so the caller emits the
     /// onboarding nudge. This is the only path that maps to "no core."

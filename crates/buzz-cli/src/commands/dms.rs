@@ -1,11 +1,11 @@
 use uuid::Uuid;
 
-use crate::client::{extract_d_tag, normalize_write_response, SproutClient};
+use crate::client::{extract_d_tag, normalize_write_response, BuzzClient};
 use crate::error::CliError;
 use crate::validate::{parse_uuid, sdk_err, validate_hex64};
 
 /// List DM conversations by querying kind:41001 (relay-confirmed DMs) filtered by our pubkey.
-pub async fn cmd_list_dms(client: &SproutClient, limit: Option<u32>) -> Result<(), CliError> {
+pub async fn cmd_list_dms(client: &BuzzClient, limit: Option<u32>) -> Result<(), CliError> {
     let my_pk = client.keys().public_key().to_hex();
     let limit = limit.unwrap_or(50).min(200);
     let filter = serde_json::json!({
@@ -48,7 +48,7 @@ pub async fn cmd_list_dms(client: &SproutClient, limit: Option<u32>) -> Result<(
 }
 
 /// Open a DM with one or more users — sign and submit a kind:41010 event with a d-tag.
-pub async fn cmd_open_dm(client: &SproutClient, pubkeys: &[String]) -> Result<(), CliError> {
+pub async fn cmd_open_dm(client: &BuzzClient, pubkeys: &[String]) -> Result<(), CliError> {
     if pubkeys.is_empty() || pubkeys.len() > 8 {
         return Err(CliError::Usage("--pubkey: must provide 1-8 pubkeys".into()));
     }
@@ -93,14 +93,14 @@ pub async fn cmd_open_dm(client: &SproutClient, pubkeys: &[String]) -> Result<()
 }
 
 /// Hide a DM channel — sign and submit a kind:41012 event with h-tag.
-pub async fn cmd_hide_dm(client: &SproutClient, channel_id: &str) -> Result<(), CliError> {
+pub async fn cmd_hide_dm(client: &BuzzClient, channel_id: &str) -> Result<(), CliError> {
     let channel_uuid = parse_uuid(channel_id)?;
 
     use nostr::{EventBuilder, Kind, Tag};
     let tags = vec![Tag::parse(["h", &channel_uuid.to_string()])
         .map_err(|e| CliError::Other(format!("tag error: {e}")))?];
     let builder =
-        EventBuilder::new(Kind::Custom(sprout_sdk::kind::KIND_DM_HIDE as u16), "").tags(tags);
+        EventBuilder::new(Kind::Custom(buzz_sdk::kind::KIND_DM_HIDE as u16), "").tags(tags);
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;
@@ -110,14 +110,14 @@ pub async fn cmd_hide_dm(client: &SproutClient, channel_id: &str) -> Result<(), 
 
 /// Add a member to a DM group — sign and submit a kind:41011 event.
 pub async fn cmd_add_dm_member(
-    client: &SproutClient,
+    client: &BuzzClient,
     channel_id: &str,
     pubkey: &str,
 ) -> Result<(), CliError> {
     let channel_uuid = parse_uuid(channel_id)?;
     validate_hex64(pubkey)?;
 
-    let builder = sprout_sdk::build_dm_add_member(channel_uuid, pubkey).map_err(sdk_err)?;
+    let builder = buzz_sdk::build_dm_add_member(channel_uuid, pubkey).map_err(sdk_err)?;
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;
@@ -129,7 +129,7 @@ pub async fn cmd_add_dm_member(
 // Dispatch
 // ---------------------------------------------------------------------------
 
-pub async fn dispatch(cmd: crate::DmsCmd, client: &SproutClient) -> Result<(), CliError> {
+pub async fn dispatch(cmd: crate::DmsCmd, client: &BuzzClient) -> Result<(), CliError> {
     use crate::DmsCmd;
     match cmd {
         DmsCmd::List { limit } => cmd_list_dms(client, limit).await,

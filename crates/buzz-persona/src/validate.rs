@@ -1,4 +1,4 @@
-//! Pack validation (`sprout pack validate`).
+//! Pack validation (`buzz pack validate`).
 //!
 //! Architecture: the validator delegates all structural checks to `load_pack()`.
 //! If loading succeeds, the pack is structurally valid by definition — no

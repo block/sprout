@@ -157,9 +157,9 @@ pub fn infer_language(file_path: &str) -> Option<String> {
 /// Map `SdkError` to the appropriate `CliError` variant.
 ///
 /// `InvalidInput` is a user error (exit 1), everything else is internal (exit 4).
-pub fn sdk_err(e: sprout_sdk::SdkError) -> CliError {
+pub fn sdk_err(e: buzz_sdk::SdkError) -> CliError {
     match e {
-        sprout_sdk::SdkError::InvalidInput(msg) => CliError::Usage(msg),
+        buzz_sdk::SdkError::InvalidInput(msg) => CliError::Usage(msg),
         other => CliError::Other(other.to_string()),
     }
 }
@@ -373,7 +373,7 @@ mod tests {
     }
 
     // Note: `extract_at_names`, `extract_at_mentions_with_known`, `merge_mentions`,
-    // and `normalize_mention_pubkeys` live in `sprout_sdk::mentions` and are tested there.
+    // and `normalize_mention_pubkeys` live in `buzz_sdk::mentions` and are tested there.
 
     // --- parse_event_id ---
 

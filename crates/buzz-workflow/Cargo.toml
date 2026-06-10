@@ -1,5 +1,5 @@
 [package]
-name = "sprout-workflow"
+name = "buzz-workflow"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,8 +8,8 @@ repository.workspace = true
 description = "YAML-as-code workflow engine for Sprout"
 
 [dependencies]
-sprout-core = { workspace = true }
-sprout-db   = { workspace = true }
+buzz-core = { workspace = true }
+buzz-db   = { workspace = true }
 hex         = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }

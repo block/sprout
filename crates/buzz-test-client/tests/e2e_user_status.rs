@@ -21,7 +21,7 @@
 use std::time::Duration;
 
 use nostr::{Alphabet, EventBuilder, Filter, Keys, Kind, SingleLetterTag, Tag, Timestamp};
-use sprout_test_client::SproutTestClient;
+use buzz_test_client::BuzzTestClient;
 
 const KIND_USER_STATUS: u16 = 30315;
 
@@ -56,7 +56,7 @@ fn build_user_status_event(
 async fn test_user_status_accepted() {
     let url = relay_url();
     let keys = Keys::generate();
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -78,7 +78,7 @@ async fn test_user_status_accepted() {
 async fn test_user_status_retrievable() {
     let url = relay_url();
     let keys = Keys::generate();
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -118,7 +118,7 @@ async fn test_user_status_retrievable() {
 async fn test_user_status_nip33_replacement() {
     let url = relay_url();
     let keys = Keys::generate();
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -171,7 +171,7 @@ async fn test_user_status_nip33_replacement() {
 async fn test_user_status_multiple_d_tags_coexist() {
     let url = relay_url();
     let keys = Keys::generate();
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -223,7 +223,7 @@ async fn test_user_status_multiple_d_tags_coexist() {
 async fn test_user_status_stale_write_rejected() {
     let url = relay_url();
     let keys = Keys::generate();
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 

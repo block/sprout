@@ -768,7 +768,7 @@ mod probe {
     //! Empirical probe of rust-s3 + `fail-on-err` + MinIO surfacing of 412.
     //!
     //! Run manually:
-    //!   SPROUT_GIT_S3_PROBE=1 cargo test -p sprout-relay --lib \
+    //!   BUZZ_GIT_S3_PROBE=1 cargo test -p sprout-relay --lib \
     //!     api::git::store::probe -- --nocapture --test-threads=1
     //!
     //! Pre-req: `docker compose up minio` and the `sprout-git` bucket exists.
@@ -776,7 +776,7 @@ mod probe {
     use super::*;
 
     fn probe_enabled() -> bool {
-        std::env::var("SPROUT_GIT_S3_PROBE").as_deref() == Ok("1")
+        std::env::var("BUZZ_GIT_S3_PROBE").as_deref() == Ok("1")
     }
 
     fn store() -> GitStore {
@@ -798,7 +798,7 @@ mod probe {
     #[tokio::test]
     async fn probe_412_surfacing() {
         if !probe_enabled() {
-            eprintln!("skipping: set SPROUT_GIT_S3_PROBE=1 to run against live MinIO");
+            eprintln!("skipping: set BUZZ_GIT_S3_PROBE=1 to run against live MinIO");
             return;
         }
         let st = store();

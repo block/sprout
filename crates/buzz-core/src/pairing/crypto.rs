@@ -113,7 +113,7 @@ pub fn derive_transcript_hash(
 ///
 /// # Examples
 /// ```
-/// use sprout_core::pairing::crypto::format_sas;
+/// use buzz_core::pairing::crypto::format_sas;
 /// assert_eq!(format_sas(291),    "000291");
 /// assert_eq!(format_sas(47291),  "047291");
 /// assert_eq!(format_sas(999999), "999999");

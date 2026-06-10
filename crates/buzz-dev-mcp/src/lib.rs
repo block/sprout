@@ -127,7 +127,7 @@ impl ServerHandler for DevMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(rmcp::model::Implementation::new(
-                "sprout-dev-mcp",
+                "buzz-dev-mcp",
                 env!("CARGO_PKG_VERSION"),
             ))
             .with_instructions(self.state.bootstrap_instructions.clone())
@@ -162,7 +162,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 async fn async_main(cmd: String) -> Result<(), Box<dyn std::error::Error>> {
     // sprout CLI needs tokio (async HTTP client).
     if cmd == "sprout" {
-        std::process::exit(sprout_cli::run_from_args(std::env::args()).await);
+        std::process::exit(buzz_cli::run_from_args(std::env::args()).await);
     }
 
     // MCP server mode — safe to init tracing now.

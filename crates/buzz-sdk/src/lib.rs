@@ -19,7 +19,7 @@ pub mod nip_oa;
 pub use builders::*;
 
 /// Re-export kind constants so consumers don't need sprout-core directly.
-pub use sprout_core::kind;
+pub use buzz_core::kind;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -79,11 +79,11 @@ pub struct CustomEmoji {
 // ── Channel / Member enums (re-exported from sprout-core) ────────────────────
 
 /// Channel type.
-pub use sprout_core::channel::ChannelType as ChannelKind;
+pub use buzz_core::channel::ChannelType as ChannelKind;
 /// Channel visibility.
-pub use sprout_core::channel::ChannelVisibility as Visibility;
+pub use buzz_core::channel::ChannelVisibility as Visibility;
 /// Member role.
-pub use sprout_core::channel::MemberRole;
+pub use buzz_core::channel::MemberRole;
 
 // ── Error ────────────────────────────────────────────────────────────────────
 

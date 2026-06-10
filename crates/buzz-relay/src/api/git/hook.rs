@@ -20,10 +20,10 @@ use tracing::{error, info};
 /// The pre-receive hook script content.
 ///
 /// Environment variables set by the relay before spawning git receive-pack:
-/// - `SPROUT_HOOK_URL` — internal policy endpoint (http://127.0.0.1:{port}/internal/git/policy)
-/// - `SPROUT_HOOK_SECRET` — per-push HMAC secret
-/// - `SPROUT_REPO_ID` — repo identifier (d-tag)
-/// - `SPROUT_PUSHER_PUBKEY` — authenticated pusher's hex pubkey
+/// - `BUZZ_HOOK_URL` — internal policy endpoint (http://127.0.0.1:{port}/internal/git/policy)
+/// - `BUZZ_HOOK_SECRET` — per-push HMAC secret
+/// - `BUZZ_REPO_ID` — repo identifier (d-tag)
+/// - `BUZZ_PUSHER_PUBKEY` — authenticated pusher's hex pubkey
 ///
 /// Git sets automatically (quarantine):
 /// - `GIT_OBJECT_DIRECTORY` — quarantine object store
@@ -40,11 +40,11 @@ export LC_ALL=C
 ZERO="0000000000000000000000000000000000000000"
 
 # Fail-closed: required env vars must be set by the relay.
-: "${SPROUT_REPO_ID:?error: SPROUT_REPO_ID not set}"
-: "${SPROUT_REPO_OWNER:?error: SPROUT_REPO_OWNER not set}"
-: "${SPROUT_PUSHER_PUBKEY:?error: SPROUT_PUSHER_PUBKEY not set}"
-: "${SPROUT_HOOK_URL:?error: SPROUT_HOOK_URL not set}"
-: "${SPROUT_HOOK_SECRET:?error: SPROUT_HOOK_SECRET not set}"
+: "${BUZZ_REPO_ID:?error: BUZZ_REPO_ID not set}"
+: "${BUZZ_REPO_OWNER:?error: BUZZ_REPO_OWNER not set}"
+: "${BUZZ_PUSHER_PUBKEY:?error: BUZZ_PUSHER_PUBKEY not set}"
+: "${BUZZ_HOOK_URL:?error: BUZZ_HOOK_URL not set}"
+: "${BUZZ_HOOK_SECRET:?error: BUZZ_HOOK_SECRET not set}"
 
 WORK_DIR=$(mktemp -d) || { echo "error: cannot create temp dir" >&2; exit 1; }
 REFS_FILE="$WORK_DIR/refs"
@@ -97,8 +97,8 @@ TIMESTAMP=$(date +%s)
 
 # Structurally unambiguous HMAC format (matches Rust's compute_hmac):
 # len(repo_id):repo_id | repo_owner | pusher | (old_oid + new_oid + len(ref):ref + is_anc)* | timestamp
-REPO_ID_LEN=${#SPROUT_REPO_ID}
-HMAC_INPUT="${REPO_ID_LEN}:${SPROUT_REPO_ID}|${SPROUT_REPO_OWNER}|${SPROUT_PUSHER_PUBKEY}|"
+REPO_ID_LEN=${#BUZZ_REPO_ID}
+HMAC_INPUT="${REPO_ID_LEN}:${BUZZ_REPO_ID}|${BUZZ_REPO_OWNER}|${BUZZ_PUSHER_PUBKEY}|"
 # Sort by ref_name (field 1) — matches Rust's sort_by(|a, b| a.ref_name.cmp(&b.ref_name))
 if [ -f "$HMAC_FILE" ]; then
     sort "$HMAC_FILE" | while IFS=' ' read ref_name old_oid new_oid is_anc; do
@@ -110,7 +110,7 @@ if [ -f "$HMAC_FILE" ]; then
 fi
 HMAC_INPUT="${HMAC_INPUT}|${TIMESTAMP}"
 
-SIGNATURE=$(printf '%s' "$HMAC_INPUT" | openssl dgst -sha256 -hmac "$SPROUT_HOOK_SECRET" -hex 2>/dev/null | sed 's/.*= //')
+SIGNATURE=$(printf '%s' "$HMAC_INPUT" | openssl dgst -sha256 -hmac "$BUZZ_HOOK_SECRET" -hex 2>/dev/null | sed 's/.*= //')
 if [ -z "$SIGNATURE" ]; then
     echo "error: failed to compute HMAC signature" >&2
     exit 1
@@ -119,8 +119,8 @@ fi
 # Phase 3: POST to policy endpoint — FAIL-CLOSED.
 # repo_id is free-form (user-chosen d-tag) — must be escaped for JSON safety.
 # repo_owner and pusher_pubkey are validated 64-char lowercase hex — no escaping needed.
-SAFE_REPO_ID=$(printf '%s' "$SPROUT_REPO_ID" | sed 's/\\/\\\\/g; s/"/\\"/g')
-BODY="{\"repo_id\":\"${SAFE_REPO_ID}\",\"repo_owner\":\"${SPROUT_REPO_OWNER}\",\"pusher_pubkey\":\"${SPROUT_PUSHER_PUBKEY}\",\"ref_updates\":[${REFS}],\"timestamp\":${TIMESTAMP},\"signature\":\"${SIGNATURE}\"}"
+SAFE_REPO_ID=$(printf '%s' "$BUZZ_REPO_ID" | sed 's/\\/\\\\/g; s/"/\\"/g')
+BODY="{\"repo_id\":\"${SAFE_REPO_ID}\",\"repo_owner\":\"${BUZZ_REPO_OWNER}\",\"pusher_pubkey\":\"${BUZZ_PUSHER_PUBKEY}\",\"ref_updates\":[${REFS}],\"timestamp\":${TIMESTAMP},\"signature\":\"${SIGNATURE}\"}"
 
 HTTP_CODE=$(curl --silent --max-time 10 \
     -o "$RESP_FILE" \
@@ -128,7 +128,7 @@ HTTP_CODE=$(curl --silent --max-time 10 \
     -X POST \
     -H "Content-Type: application/json" \
     -d "$BODY" \
-    "$SPROUT_HOOK_URL" 2>/dev/null) || {
+    "$BUZZ_HOOK_URL" 2>/dev/null) || {
     echo "error: push authorization failed (network error reaching policy service)" >&2
     exit 1
 }

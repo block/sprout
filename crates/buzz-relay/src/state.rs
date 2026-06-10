@@ -13,14 +13,14 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use deadpool_redis;
-use sprout_audit::AuditService;
-use sprout_auth::AuthService;
-use sprout_core::event::StoredEvent;
-use sprout_db::Db;
-use sprout_media::MediaStorage;
-use sprout_pubsub::PubSubManager;
-use sprout_search::SearchService;
-use sprout_workflow::WorkflowEngine;
+use buzz_audit::AuditService;
+use buzz_auth::AuthService;
+use buzz_core::event::StoredEvent;
+use buzz_db::Db;
+use buzz_media::MediaStorage;
+use buzz_pubsub::PubSubManager;
+use buzz_search::SearchService;
+use buzz_workflow::WorkflowEngine;
 
 use crate::audio::AudioRoomManager;
 use crate::config::Config;
@@ -227,7 +227,7 @@ pub struct AppState {
     pub search_index_tx: mpsc::Sender<StoredEvent>,
     /// Bounded channel for audit logging — backpressure instead of unbounded spawns.
     /// Uses .send().await (blocks caller if full) because audit entries must not be lost.
-    pub audit_tx: mpsc::Sender<sprout_audit::NewAuditEntry>,
+    pub audit_tx: mpsc::Sender<buzz_audit::NewAuditEntry>,
     /// Media storage client (S3/MinIO).
     pub media_storage: Arc<MediaStorage>,
     /// Git object-store backend (content-addressed packs/manifests plus
@@ -308,7 +308,7 @@ impl AppState {
         });
 
         let audit_arc = Arc::new(audit);
-        let (audit_tx, mut audit_rx) = mpsc::channel::<sprout_audit::NewAuditEntry>(1000);
+        let (audit_tx, mut audit_rx) = mpsc::channel::<buzz_audit::NewAuditEntry>(1000);
         let audit_for_worker = Arc::clone(&audit_arc);
         let audit_cancel = CancellationToken::new();
         let audit_cancel_worker = audit_cancel.clone();
@@ -432,7 +432,7 @@ impl AppState {
         &self,
         channel_id: Uuid,
         pubkey: &[u8],
-    ) -> Result<bool, sprout_db::DbError> {
+    ) -> Result<bool, buzz_db::DbError> {
         let key = (channel_id, pubkey.to_vec());
         if let Some(cached) = self.membership_cache.get(&key) {
             metrics::counter!("sprout_membership_cache_hits_total").increment(1);
@@ -477,7 +477,7 @@ impl AppState {
     pub async fn get_accessible_channel_ids_cached(
         &self,
         pubkey: &[u8],
-    ) -> Result<Vec<Uuid>, sprout_db::DbError> {
+    ) -> Result<Vec<Uuid>, buzz_db::DbError> {
         let key = pubkey.to_vec();
         if let Some(cached) = self.accessible_channels_cache.get(&key) {
             metrics::counter!("sprout_accessible_channels_cache_hits_total").increment(1);
@@ -501,7 +501,7 @@ impl AppState {
     pub async fn channel_visibility_cached(
         &self,
         channel_id: Uuid,
-    ) -> Result<String, sprout_db::DbError> {
+    ) -> Result<String, buzz_db::DbError> {
         if let Some(cached) = self.channel_visibility_cache.get(&channel_id) {
             return Ok(cached);
         }
@@ -541,7 +541,7 @@ impl AuditShutdownHandle {
 
 /// Log a single audit entry with metrics. Extracted so the normal loop
 /// and the post-cancel drain share the same logic.
-async fn log_audit_entry(audit: &sprout_audit::AuditService, entry: sprout_audit::NewAuditEntry) {
+async fn log_audit_entry(audit: &buzz_audit::AuditService, entry: buzz_audit::NewAuditEntry) {
     let t = std::time::Instant::now();
     if let Err(e) = audit.log(entry).await {
         metrics::counter!("sprout_audit_log_errors_total").increment(1);

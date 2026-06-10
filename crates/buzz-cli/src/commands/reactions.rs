@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use nostr::EventId;
 
-use crate::client::{normalize_write_response, SproutClient};
+use crate::client::{normalize_write_response, BuzzClient};
 use crate::error::CliError;
 use crate::validate::validate_hex64;
 
 pub async fn cmd_add_reaction(
-    client: &SproutClient,
+    client: &BuzzClient,
     event_id: &str,
     emoji: &str,
     emoji_url: Option<&str>,
@@ -17,10 +17,10 @@ pub async fn cmd_add_reaction(
         EventId::parse(event_id).map_err(|e| CliError::Usage(format!("invalid event ID: {e}")))?;
 
     let builder = if let Some(url) = emoji_url {
-        sprout_sdk::build_custom_emoji_reaction(target_eid, emoji, url)
+        buzz_sdk::build_custom_emoji_reaction(target_eid, emoji, url)
             .map_err(|e| CliError::Other(format!("build_custom_emoji_reaction failed: {e}")))?
     } else {
-        sprout_sdk::build_reaction(target_eid, emoji)
+        buzz_sdk::build_reaction(target_eid, emoji)
             .map_err(|e| CliError::Other(format!("build_reaction failed: {e}")))?
     };
 
@@ -32,7 +32,7 @@ pub async fn cmd_add_reaction(
 }
 
 pub async fn cmd_remove_reaction(
-    client: &SproutClient,
+    client: &BuzzClient,
     event_id: &str,
     emoji: &str,
 ) -> Result<(), CliError> {
@@ -67,7 +67,7 @@ pub async fn cmd_remove_reaction(
     let reaction_eid = EventId::parse(reaction_event_id)
         .map_err(|e| CliError::Other(format!("invalid reaction event ID: {e}")))?;
 
-    let builder = sprout_sdk::build_remove_reaction(reaction_eid)
+    let builder = buzz_sdk::build_remove_reaction(reaction_eid)
         .map_err(|e| CliError::Other(format!("build_remove_reaction failed: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -77,7 +77,7 @@ pub async fn cmd_remove_reaction(
     Ok(())
 }
 
-pub async fn cmd_get_reactions(client: &SproutClient, event_id: &str) -> Result<(), CliError> {
+pub async fn cmd_get_reactions(client: &BuzzClient, event_id: &str) -> Result<(), CliError> {
     validate_hex64(event_id)?;
     let filter = serde_json::json!({
         "kinds": [7],
@@ -128,7 +128,7 @@ pub async fn cmd_get_reactions(client: &SproutClient, event_id: &str) -> Result<
 // Dispatch
 // ---------------------------------------------------------------------------
 
-pub async fn dispatch(cmd: crate::ReactionsCmd, client: &SproutClient) -> Result<(), CliError> {
+pub async fn dispatch(cmd: crate::ReactionsCmd, client: &BuzzClient) -> Result<(), CliError> {
     use crate::ReactionsCmd;
     match cmd {
         ReactionsCmd::Add {

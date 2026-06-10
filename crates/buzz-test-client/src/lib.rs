@@ -10,10 +10,10 @@ use serde_json::{json, Value};
 use thiserror::Error;
 use tracing::debug;
 
-use sprout_ws_client::NostrWsConnection;
-pub use sprout_ws_client::{parse_relay_message, OkResponse, RelayMessage, WsClientError};
+use buzz_ws_client::NostrWsConnection;
+pub use buzz_ws_client::{parse_relay_message, OkResponse, RelayMessage, WsClientError};
 
-/// Errors returned by [`SproutTestClient`] operations.
+/// Errors returned by [`BuzzTestClient`] operations.
 #[derive(Debug, Error)]
 pub enum TestClientError {
     /// A WebSocket transport error occurred.
@@ -81,11 +81,11 @@ impl From<nostr::event::builder::Error> for TestClientError {
 }
 
 /// WebSocket test client for integration testing against a running Sprout relay.
-pub struct SproutTestClient {
+pub struct BuzzTestClient {
     inner: NostrWsConnection,
 }
 
-impl SproutTestClient {
+impl BuzzTestClient {
     /// Connects to the relay at `url` and performs NIP-42 authentication with `keys`.
     pub async fn connect(url: &str, keys: &Keys) -> Result<Self, TestClientError> {
         let mut client = Self::connect_unauthenticated(url).await?;

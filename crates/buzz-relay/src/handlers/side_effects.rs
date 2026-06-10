@@ -6,13 +6,13 @@ use nostr::{Event, EventBuilder, Kind, Tag};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use sprout_core::kind::{
+use buzz_core::kind::{
     event_kind_u32, is_parameterized_replaceable, KIND_AGENT_PROFILE, KIND_DM_VISIBILITY,
     KIND_GIT_REPO_ANNOUNCEMENT, KIND_IA_ARCHIVED, KIND_IA_ARCHIVED_LIST, KIND_IA_UNARCHIVED,
     KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_GROUP_ADMINS,
     KIND_NIP29_GROUP_MEMBERS, KIND_NIP29_GROUP_METADATA, KIND_NIP43_MEMBERSHIP_LIST, KIND_REACTION,
 };
-use sprout_db::channel::MemberRole;
+use buzz_db::channel::MemberRole;
 
 use super::event::dispatch_persistent_event;
 use crate::protocol::RelayMessage;
@@ -214,7 +214,7 @@ pub async fn validate_admin_event(
         9000 => {
             // Validate role tag if present
             let role_str = extract_tag_value(event, "role").unwrap_or_else(|| "member".to_string());
-            if role_str.parse::<sprout_db::channel::MemberRole>().is_err() {
+            if role_str.parse::<buzz_db::channel::MemberRole>().is_err() {
                 return Err(anyhow::anyhow!("invalid role: {role_str}"));
             }
 
@@ -229,13 +229,13 @@ pub async fn validate_admin_event(
                 }
 
                 // Only owners/admins may grant elevated roles.
-                let role: sprout_db::channel::MemberRole = role_str.parse().unwrap();
+                let role: buzz_db::channel::MemberRole = role_str.parse().unwrap();
                 if role.is_elevated() {
-                    let actor_role: sprout_db::channel::MemberRole = actor_member
+                    let actor_role: buzz_db::channel::MemberRole = actor_member
                         .unwrap()
                         .role
                         .parse()
-                        .unwrap_or(sprout_db::channel::MemberRole::Member);
+                        .unwrap_or(buzz_db::channel::MemberRole::Member);
                     if !actor_role.is_elevated() {
                         return Err(anyhow::anyhow!(
                             "only owners/admins may grant elevated roles"
@@ -634,7 +634,7 @@ async fn emit_addressable_discovery_event(
     let min_ts = {
         let existing = state
             .db
-            .query_events(&sprout_db::event::EventQuery {
+            .query_events(&buzz_db::event::EventQuery {
                 kinds: Some(vec![kind as i32]),
                 channel_id: Some(channel_id),
                 limit: Some(1),
@@ -1018,7 +1018,7 @@ async fn handle_edit_metadata(event: &Event, state: &Arc<AppState>) -> anyhow::R
                         .db
                         .update_channel(
                             channel_id,
-                            sprout_db::channel::ChannelUpdate {
+                            buzz_db::channel::ChannelUpdate {
                                 name: Some(val.to_string()),
                                 ..Default::default()
                             },
@@ -1030,7 +1030,7 @@ async fn handle_edit_metadata(event: &Event, state: &Arc<AppState>) -> anyhow::R
                         .db
                         .update_channel(
                             channel_id,
-                            sprout_db::channel::ChannelUpdate {
+                            buzz_db::channel::ChannelUpdate {
                                 description: Some(val.to_string()),
                                 ..Default::default()
                             },
@@ -1070,7 +1070,7 @@ async fn handle_edit_metadata(event: &Event, state: &Arc<AppState>) -> anyhow::R
                         .db
                         .update_channel(
                             channel_id,
-                            sprout_db::channel::ChannelUpdate {
+                            buzz_db::channel::ChannelUpdate {
                                 visibility: Some(val.to_string()),
                                 ..Default::default()
                             },
@@ -1112,7 +1112,7 @@ async fn handle_edit_metadata(event: &Event, state: &Arc<AppState>) -> anyhow::R
                         .db
                         .update_channel(
                             channel_id,
-                            sprout_db::channel::ChannelUpdate {
+                            buzz_db::channel::ChannelUpdate {
                                 ttl_seconds: Some(ttl_change),
                                 ..Default::default()
                             },
@@ -1262,10 +1262,10 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
     let channel_type_str =
         extract_tag_value(event, "channel_type").unwrap_or_else(|| "stream".to_string());
 
-    let visibility: sprout_db::channel::ChannelVisibility = visibility_str
+    let visibility: buzz_db::channel::ChannelVisibility = visibility_str
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid visibility: {visibility_str}"))?;
-    let channel_type: sprout_db::channel::ChannelType = channel_type_str
+    let channel_type: buzz_db::channel::ChannelType = channel_type_str
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid channel_type: {channel_type_str}"))?;
 
@@ -1313,7 +1313,7 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
     state.invalidate_membership(channel.id, &actor_bytes);
     // Open channels appear in everyone's accessible set; private channels only
     // affect the creator (the sole initial member).
-    if visibility == sprout_db::channel::ChannelVisibility::Open {
+    if visibility == buzz_db::channel::ChannelVisibility::Open {
         state.invalidate_all_accessible_channels();
     }
 
@@ -1420,7 +1420,7 @@ async fn handle_join_request(event: &Event, state: &Arc<AppState>) -> anyhow::Re
         .add_member(
             channel_id,
             &actor_bytes,
-            sprout_db::channel::MemberRole::Member,
+            buzz_db::channel::MemberRole::Member,
             None,
         )
         .await?;
@@ -1447,7 +1447,7 @@ async fn handle_join_request(event: &Event, state: &Arc<AppState>) -> anyhow::Re
         channel_id,
         &actor_bytes,
         &actor_bytes,
-        sprout_core::kind::KIND_MEMBER_ADDED_NOTIFICATION,
+        buzz_core::kind::KIND_MEMBER_ADDED_NOTIFICATION,
     )
     .await
     {
@@ -1537,7 +1537,7 @@ async fn handle_a_tag_deletion(event: &Event, state: &Arc<AppState>) -> anyhow::
     let d_tag = parts[2];
 
     match kind_num {
-        sprout_core::kind::KIND_WORKFLOW_DEF => {
+        buzz_core::kind::KIND_WORKFLOW_DEF => {
             // Try UUID first (workflow_id); fall back to name-based lookup.
             if let Ok(wf_id) = uuid::Uuid::parse_str(d_tag) {
                 state
@@ -2239,7 +2239,7 @@ pub async fn publish_nip43_member_removed(
 ///
 /// Idempotent: checks for existing kind:39000 events before emitting.
 pub async fn reconcile_channel_events(state: &Arc<AppState>) -> anyhow::Result<()> {
-    use sprout_db::event::EventQuery;
+    use buzz_db::event::EventQuery;
 
     let channels = state.db.list_channels(None).await?;
     if channels.is_empty() {
@@ -2370,7 +2370,7 @@ pub async fn publish_dm_visibility_snapshot(
     let ts = {
         let existing = state
             .db
-            .query_events(&sprout_db::event::EventQuery {
+            .query_events(&buzz_db::event::EventQuery {
                 kinds: Some(vec![KIND_DM_VISIBILITY as i32]),
                 pubkey: Some(state.relay_keypair.public_key().to_bytes().to_vec()),
                 d_tag: Some(viewer_hex.clone()),

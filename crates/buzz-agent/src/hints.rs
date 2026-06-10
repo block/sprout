@@ -372,7 +372,7 @@ mod tests {
         std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(
             skill_dir.join("SKILL.md"),
-            "---\nname: sprout-cli\ndescription: CLI reference for Sprout managed agents\n---\nUse `sprout` to manage agents.\n",
+            "---\nname: sprout-cli\ndescription: CLI reference for Buzz managed agents\n---\nUse `buzz` to manage agents.\n",
         )
         .unwrap();
 
@@ -392,12 +392,12 @@ mod tests {
             "missing Available Skills"
         );
         assert!(
-            result.contains("sprout-cli: CLI reference for Sprout managed agents"),
+            result.contains("sprout-cli: CLI reference for Buzz managed agents"),
             "missing skill bullet"
         );
         assert!(result.contains("### sprout-cli"), "missing skill header");
         assert!(
-            result.contains("Use `sprout` to manage agents."),
+            result.contains("Use `buzz` to manage agents."),
             "missing skill body"
         );
     }

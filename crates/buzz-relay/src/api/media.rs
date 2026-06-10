@@ -16,9 +16,9 @@ use axum::{
 };
 use base64::Engine;
 use sha2::{Digest, Sha256};
-use sprout_audit::{AuditAction, NewAuditEntry};
-use sprout_auth::Scope;
-use sprout_media::{BlobDescriptor, MediaError};
+use buzz_audit::{AuditAction, NewAuditEntry};
+use buzz_auth::Scope;
+use buzz_media::{BlobDescriptor, MediaError};
 
 use crate::state::AppState;
 
@@ -51,7 +51,7 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
         // content type yet.  The upload functions re-verify with the correct
         // per-type window (600s for images, 3600s for video) after the body
         // has been consumed and the SHA-256 computed.
-        sprout_media::auth::verify_blossom_auth_event(
+        buzz_media::auth::verify_blossom_auth_event(
             &auth_event,
             state.config.media.server_domain.as_deref(),
             3600,
@@ -83,7 +83,7 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
 
         // 4. Resolve scopes (API token or dev mode)
         let scopes = resolve_upload_scopes(headers, state, &auth_event.pubkey).await?;
-        sprout_auth::require_scope(&scopes, Scope::FilesWrite)
+        buzz_auth::require_scope(&scopes, Scope::FilesWrite)
             .map_err(|_| MediaError::InsufficientScope)?;
 
         // 5. Relay membership gate (NIP-43).
@@ -137,7 +137,7 @@ pub async fn upload_blob(
             .get("content-length")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok());
-        sprout_media::process_video_upload(
+        buzz_media::process_video_upload(
             &state.media_storage,
             &state.config.media,
             &auth.auth_event,
@@ -166,7 +166,7 @@ pub async fn upload_blob(
         );
 
         if is_image {
-            sprout_media::process_upload(
+            buzz_media::process_upload(
                 &state.media_storage,
                 &state.config.media,
                 &auth.auth_event,
@@ -174,7 +174,7 @@ pub async fn upload_blob(
             )
             .await?
         } else {
-            sprout_media::process_file_upload(
+            buzz_media::process_file_upload(
                 &state.media_storage,
                 &state.config.media,
                 &auth.auth_event,
@@ -200,7 +200,7 @@ pub async fn upload_blob(
         .audit_tx
         .send(NewAuditEntry {
             event_id: desc.sha256.clone(),
-            event_kind: sprout_core::kind::KIND_MEDIA_UPLOAD,
+            event_kind: buzz_core::kind::KIND_MEDIA_UPLOAD,
             actor_pubkey: uploader,
             action: AuditAction::MediaUploaded,
             channel_id: None,
@@ -342,7 +342,7 @@ pub async fn get_blob(
     // primary defence for non-previewable types — combined with `nosniff` and
     // `CSP: default-src 'none'`, an attachment disposition prevents an uploaded
     // file from ever executing or rendering as active content in the client.
-    let disposition = if sprout_media::serve_inline(&content_type) {
+    let disposition = if buzz_media::serve_inline(&content_type) {
         "inline"
     } else {
         "attachment"
@@ -546,7 +546,7 @@ pub async fn head_blob(
 /// Sidecar-derived extensions are validated as safe tokens to prevent
 /// object-key confusion if sidecar data is ever tampered with.
 async fn resolve_s3_key(
-    storage: &sprout_media::MediaStorage,
+    storage: &buzz_media::MediaStorage,
     sha256_ext: &str,
 ) -> Result<String, MediaError> {
     if sha256_ext.contains('.') {

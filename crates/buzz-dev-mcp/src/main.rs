@@ -1,3 +1,3 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    sprout_dev_mcp::run()
+    buzz_dev_mcp::run()
 }

@@ -1,11 +1,11 @@
 use nostr::{EventBuilder, Kind, Tag};
 use serde::Deserialize;
-use sprout_sdk::kind::{
+use buzz_sdk::kind::{
     KIND_BOOKMARK_LIST, KIND_BOOKMARK_SET, KIND_FOLLOW_SET, KIND_MUTE_LIST,
     KIND_NIP65_RELAY_LIST_METADATA, KIND_PIN_LIST,
 };
 
-use crate::client::{normalize_write_response, SproutClient};
+use crate::client::{normalize_write_response, BuzzClient};
 use crate::error::CliError;
 use crate::validate::{parse_event_id, validate_hex64};
 
@@ -20,7 +20,7 @@ pub struct ContactEntry {
 }
 
 pub async fn cmd_publish_note(
-    client: &SproutClient,
+    client: &BuzzClient,
     content: &str,
     reply_to: Option<&str>,
 ) -> Result<(), CliError> {
@@ -30,7 +30,7 @@ pub async fn cmd_publish_note(
 
     let reply_id = reply_to.map(parse_event_id).transpose()?;
 
-    let builder = sprout_sdk::build_note(content, reply_id)
+    let builder = buzz_sdk::build_note(content, reply_id)
         .map_err(|e| CliError::Other(format!("build error: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -41,7 +41,7 @@ pub async fn cmd_publish_note(
 }
 
 pub async fn cmd_set_contact_list(
-    client: &SproutClient,
+    client: &BuzzClient,
     contacts_json: &str,
 ) -> Result<(), CliError> {
     let entries: Vec<ContactEntry> = serde_json::from_str(contacts_json)
@@ -58,7 +58,7 @@ pub async fn cmd_set_contact_list(
         })
         .collect();
 
-    let builder = sprout_sdk::build_contact_list(&contacts)
+    let builder = buzz_sdk::build_contact_list(&contacts)
         .map_err(|e| CliError::Other(format!("build error: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -69,7 +69,7 @@ pub async fn cmd_set_contact_list(
 }
 
 /// Get a single event by ID via POST /query.
-pub async fn cmd_get_event(client: &SproutClient, event_id: &str) -> Result<(), CliError> {
+pub async fn cmd_get_event(client: &BuzzClient, event_id: &str) -> Result<(), CliError> {
     validate_hex64(event_id)?;
     let filter = serde_json::json!({
         "ids": [event_id]
@@ -81,7 +81,7 @@ pub async fn cmd_get_event(client: &SproutClient, event_id: &str) -> Result<(), 
 
 /// Get user notes (kind:1) by author pubkey.
 pub async fn cmd_get_user_notes(
-    client: &SproutClient,
+    client: &BuzzClient,
     pubkey: &str,
     limit: Option<u32>,
     before: Option<i64>,
@@ -112,7 +112,7 @@ pub async fn cmd_get_user_notes(
 }
 
 /// Get a user's contact list (kind:3) by pubkey.
-pub async fn cmd_get_contact_list(client: &SproutClient, pubkey: &str) -> Result<(), CliError> {
+pub async fn cmd_get_contact_list(client: &BuzzClient, pubkey: &str) -> Result<(), CliError> {
     validate_hex64(pubkey)?;
     let filter = serde_json::json!({
         "kinds": [3],
@@ -160,7 +160,7 @@ fn has_d_tag(tags: &[Tag]) -> bool {
 }
 
 pub async fn cmd_set_list(
-    client: &SproutClient,
+    client: &BuzzClient,
     kind: u16,
     tags_json: &str,
     content: &str,
@@ -182,7 +182,7 @@ pub async fn cmd_set_list(
 }
 
 pub async fn cmd_get_list(
-    client: &SproutClient,
+    client: &BuzzClient,
     pubkey: &str,
     kind: u32,
     d_tag: Option<&str>,
@@ -212,7 +212,7 @@ pub async fn cmd_get_list(
 // Dispatch
 // ---------------------------------------------------------------------------
 
-pub async fn dispatch(cmd: crate::SocialCmd, client: &SproutClient) -> Result<(), CliError> {
+pub async fn dispatch(cmd: crate::SocialCmd, client: &BuzzClient) -> Result<(), CliError> {
     use crate::SocialCmd;
     match cmd {
         SocialCmd::PublishNote { content, reply_to } => {

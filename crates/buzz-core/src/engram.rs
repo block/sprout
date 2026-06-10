@@ -4,7 +4,7 @@
 //! not talk to relays or filesystems. Callers wire it to a transport and a
 //! key source.
 //!
-//! Shared by `sprout-cli` (`sprout mem …`) and `sprout-acp` (core injection
+//! Shared by `sprout-cli` (`buzz mem …`) and `sprout-acp` (core injection
 //! at session creation).
 
 use hmac::digest::KeyInit;
@@ -598,7 +598,7 @@ pub fn monotonic_created_at(now: u64, prior_head: Option<u64>) -> u64 {
     }
 }
 
-/// Wire representation for `sprout mem ls`: one entry per non-tombstone
+/// Wire representation for `buzz mem ls`: one entry per non-tombstone
 /// memory slug (`core` is excluded by the listing procedure).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Listing {

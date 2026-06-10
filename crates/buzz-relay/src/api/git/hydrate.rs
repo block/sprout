@@ -321,11 +321,11 @@ mod tests {
     // -------- Live MinIO + real git roundtrip ----------------------------------
     //
     // Run manually:
-    //   SPROUT_GIT_S3_PROBE=1 cargo test -p sprout-relay --lib \
+    //   BUZZ_GIT_S3_PROBE=1 cargo test -p sprout-relay --lib \
     //     api::git::hydrate::tests::live -- --nocapture --test-threads=1
 
     fn probe_enabled() -> bool {
-        std::env::var("SPROUT_GIT_S3_PROBE").as_deref() == Ok("1")
+        std::env::var("BUZZ_GIT_S3_PROBE").as_deref() == Ok("1")
     }
 
     fn store() -> GitStore {

@@ -1,5 +1,5 @@
 [package]
-name = "sprout-proxy"
+name = "buzz-proxy"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Nostr client compatibility proxy for Sprout"
 
 [dependencies]
-sprout-core = { workspace = true }
+buzz-core = { workspace = true }
 nostr        = { workspace = true }
 serde        = { workspace = true }
 serde_json   = { workspace = true }
@@ -32,5 +32,5 @@ tower-http         = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [[bin]]
-name = "sprout-proxy"
+name = "buzz-proxy"
 path = "src/main.rs"

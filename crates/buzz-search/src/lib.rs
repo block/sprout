@@ -14,7 +14,7 @@ pub mod query;
 pub use error::SearchError;
 pub use query::{SearchHit, SearchQuery, SearchResult};
 
-use sprout_core::event::StoredEvent;
+use buzz_core::event::StoredEvent;
 
 /// Configuration for the Typesense search backend.
 ///

@@ -26,11 +26,11 @@ use pool::{
 };
 use queue::{prepend_base_prompt, EventQueue, QueuedEvent, ThreadTags};
 use relay::{HarnessRelay, RelayEventPublisher};
-use sprout_core::kind::{
+use buzz_core::kind::{
     KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_STREAM_MESSAGE,
     KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
 };
-use sprout_core::observer::{
+use buzz_core::observer::{
     decrypt_observer_payload, encrypt_observer_payload, OBSERVER_FRAME_TELEMETRY,
 };
 use tokio::sync::{mpsc, watch};
@@ -70,7 +70,7 @@ async fn publish_presence(
     status: &str,
 ) -> Result<(), relay::RelayError> {
     use nostr::{EventBuilder, Kind};
-    use sprout_core::kind::KIND_PRESENCE_UPDATE;
+    use buzz_core::kind::KIND_PRESENCE_UPDATE;
 
     let event = EventBuilder::new(Kind::Custom(KIND_PRESENCE_UPDATE as u16), status)
         .tags([])
@@ -85,22 +85,22 @@ async fn publish_presence(
 /// Resolve the agent's owner pubkey at startup.
 ///
 /// Priority:
-/// 1. `SPROUT_AUTH_TAG` env var — NIP-OA attestation signed by the owner.
+/// 1. `BUZZ_AUTH_TAG` env var — NIP-OA attestation signed by the owner.
 ///    Verified against the agent's own pubkey to extract the owner pubkey.
-/// 2. `--agent-owner` CLI flag / `SPROUT_ACP_AGENT_OWNER` env var.
+/// 2. `--agent-owner` CLI flag / `BUZZ_ACP_AGENT_OWNER` env var.
 fn resolve_agent_owner(config: &Config) -> Option<String> {
-    // Try SPROUT_AUTH_TAG first (NIP-OA attestation).
-    if let Ok(auth_tag) = std::env::var("SPROUT_AUTH_TAG") {
+    // Try BUZZ_AUTH_TAG first (NIP-OA attestation).
+    if let Ok(auth_tag) = std::env::var("BUZZ_AUTH_TAG") {
         if !auth_tag.is_empty() {
             let agent_pk = config.keys.public_key();
-            match sprout_sdk::nip_oa::verify_auth_tag(&auth_tag, &agent_pk) {
+            match buzz_sdk::nip_oa::verify_auth_tag(&auth_tag, &agent_pk) {
                 Ok(owner_pk) => {
                     let owner_hex = owner_pk.to_hex().to_ascii_lowercase();
-                    tracing::info!("owner resolved from SPROUT_AUTH_TAG: {owner_hex}");
+                    tracing::info!("owner resolved from BUZZ_AUTH_TAG: {owner_hex}");
                     return Some(owner_hex);
                 }
                 Err(e) => {
-                    tracing::warn!("SPROUT_AUTH_TAG verification failed: {e} — falling back");
+                    tracing::warn!("BUZZ_AUTH_TAG verification failed: {e} — falling back");
                 }
             }
         }
@@ -246,7 +246,7 @@ async fn check_sibling_via_profile(
         }
         // Cryptographically verify the NIP-OA attestation signature.
         let tag_json = serde_json::to_string(tag).unwrap_or_default();
-        match sprout_sdk::nip_oa::verify_auth_tag(&tag_json, &agent_pk) {
+        match buzz_sdk::nip_oa::verify_auth_tag(&tag_json, &agent_pk) {
             Ok(_) => {
                 tracing::debug!(author, expected_owner, "sibling verified via NIP-OA");
                 return true;
@@ -455,7 +455,7 @@ async fn publish_relay_observer_event(
             return;
         }
     };
-    let builder = match sprout_sdk::build_agent_observer_frame(
+    let builder = match buzz_sdk::build_agent_observer_frame(
         owner_pubkey_hex,
         agent_pubkey_hex,
         OBSERVER_FRAME_TELEMETRY,
@@ -490,7 +490,7 @@ fn handle_relay_observer_control_event(
     owner_pubkey_hex: &str,
 ) {
     // Defense-in-depth: verify signature even though the relay already checked.
-    if let Err(e) = sprout_core::verify_event(&event) {
+    if let Err(e) = buzz_core::verify_event(&event) {
         tracing::warn!(error = %e, "observer control frame failed signature verification");
         return;
     }
@@ -789,7 +789,7 @@ async fn tokio_main() -> Result<()> {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("sprout_acp=info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("buzz_acp=info")),
         )
         .compact()
         .init();
@@ -904,11 +904,11 @@ async fn tokio_main() -> Result<()> {
 
     let pubkey_hex = config.keys.public_key().to_hex();
 
-    // Parse SPROUT_AUTH_TAG into a nostr::Tag for NIP-OA relay membership delegation.
-    let relay_auth_tag: Option<nostr::Tag> = std::env::var("SPROUT_AUTH_TAG")
+    // Parse BUZZ_AUTH_TAG into a nostr::Tag for NIP-OA relay membership delegation.
+    let relay_auth_tag: Option<nostr::Tag> = std::env::var("BUZZ_AUTH_TAG")
         .ok()
         .filter(|s| !s.is_empty())
-        .and_then(|s| sprout_sdk::nip_oa::parse_auth_tag(&s).ok());
+        .and_then(|s| buzz_sdk::nip_oa::parse_auth_tag(&s).ok());
 
     let mut relay =
         HarnessRelay::connect(&config.relay_url, &config.keys, &pubkey_hex, relay_auth_tag)
@@ -943,7 +943,7 @@ async fn tokio_main() -> Result<()> {
     }
 
     // ── Step 2d: Resolve agent owner ────────────────────────────────────────
-    // Priority: SPROUT_AUTH_TAG (NIP-OA attestation) → --agent-owner flag.
+    // Priority: BUZZ_AUTH_TAG (NIP-OA attestation) → --agent-owner flag.
     let startup_owner: Option<String> = resolve_agent_owner(&config);
     if let Some(ref owner) = startup_owner {
         tracing::info!("agent owner: {owner}");
@@ -956,7 +956,7 @@ async fn tokio_main() -> Result<()> {
             RespondTo::OwnerOnly => {
                 tracing::warn!(
                     "respond-to=owner-only but no owner is set — all events will be \
-                     dropped. Set SPROUT_AUTH_TAG or --agent-owner, or use --respond-to=anyone."
+                     dropped. Set BUZZ_AUTH_TAG or --agent-owner, or use --respond-to=anyone."
                 );
             }
             RespondTo::Allowlist => {
@@ -1104,7 +1104,7 @@ async fn tokio_main() -> Result<()> {
     if !config.memory_enabled {
         tracing::info!(
             target: "engram::core",
-            "NIP-AE core memory injection disabled (re-enable by removing --no-memory / SPROUT_ACP_NO_MEMORY)"
+            "NIP-AE core memory injection disabled (re-enable by removing --no-memory / BUZZ_ACP_NO_MEMORY)"
         );
     }
 
@@ -2384,14 +2384,14 @@ fn default_heartbeat_prompt() -> String {
          You have been awakened for a routine heartbeat. You have NO incoming messages or\n\
          active channel context for this turn.\n\n\
          Your tasks:\n\
-         1. Run `sprout feed get --types needs_action` to check for pending workflow approvals or\n\
+         1. Run `buzz feed get --types needs_action` to check for pending workflow approvals or\n\
             high-priority requests addressed to you.\n\
-         2. Run `sprout feed get --types mentions` to check for unanswered @mentions.\n\
+         2. Run `buzz feed get --types mentions` to check for unanswered @mentions.\n\
          3. If you find actionable items, address them using the appropriate CLI commands\n\
-            (e.g., `sprout workflows approve --token <UUID>`, `sprout messages send`,\n\
-            `sprout messages send --reply-to <event-id>`).\n\
+            (e.g., `buzz workflows approve --token <UUID>`, `buzz messages send`,\n\
+            `buzz messages send --reply-to <event-id>`).\n\
          4. If there are no pending actions or mentions, end your turn immediately.\n\n\
-         Do not run `sprout channels list` or `sprout messages search` unless you have a specific reason.\n\
+         Do not run `buzz channels list` or `buzz messages search` unless you have a specific reason.\n\
          Do not invent work — only act on items surfaced by the feed commands."
     )
 }
@@ -2653,11 +2653,11 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
         env: {
             let mut env = vec![
                 EnvVar {
-                    name: "SPROUT_RELAY_URL".into(),
+                    name: "BUZZ_RELAY_URL".into(),
                     value: config.relay_url.clone(),
                 },
                 EnvVar {
-                    name: "SPROUT_PRIVATE_KEY".into(),
+                    name: "BUZZ_PRIVATE_KEY".into(),
                     // bech32 encoding of a valid secret key is infallible.
                     // Panic here is correct: injecting a bogus secret would cause
                     // delayed, hard-to-diagnose agent failures downstream.
@@ -2668,12 +2668,12 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
                         .expect("secret key bech32 encoding should never fail"),
                 },
             ];
-            // Forward SPROUT_AUTH_TAG (NIP-OA owner attestation credential)
+            // Forward BUZZ_AUTH_TAG (NIP-OA owner attestation credential)
             // so the MCP server can attach it to every signed event.
-            if let Ok(auth_tag) = std::env::var("SPROUT_AUTH_TAG") {
+            if let Ok(auth_tag) = std::env::var("BUZZ_AUTH_TAG") {
                 if !auth_tag.is_empty() {
                     env.push(EnvVar {
-                        name: "SPROUT_AUTH_TAG".into(),
+                        name: "BUZZ_AUTH_TAG".into(),
                         value: auth_tag,
                     });
                 }
@@ -2861,28 +2861,28 @@ mod build_mcp_servers_tests {
 
         let names: Vec<&str> = server.env.iter().map(|e| e.name.as_str()).collect();
         assert!(
-            names.contains(&"SPROUT_RELAY_URL"),
-            "missing SPROUT_RELAY_URL; got {names:?}"
+            names.contains(&"BUZZ_RELAY_URL"),
+            "missing BUZZ_RELAY_URL; got {names:?}"
         );
         assert!(
-            names.contains(&"SPROUT_PRIVATE_KEY"),
-            "missing SPROUT_PRIVATE_KEY; got {names:?}"
+            names.contains(&"BUZZ_PRIVATE_KEY"),
+            "missing BUZZ_PRIVATE_KEY; got {names:?}"
         );
     }
 
     #[test]
     fn session_new_mcp_server_forwards_sprout_auth_tag() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("SPROUT_AUTH_TAG", "test-attestation-tag");
+        std::env::set_var("BUZZ_AUTH_TAG", "test-attestation-tag");
         let config = test_config();
         let servers = build_mcp_servers(&config);
-        std::env::remove_var("SPROUT_AUTH_TAG");
+        std::env::remove_var("BUZZ_AUTH_TAG");
 
         let server = &servers[0];
-        let auth_tag_env = server.env.iter().find(|e| e.name == "SPROUT_AUTH_TAG");
+        let auth_tag_env = server.env.iter().find(|e| e.name == "BUZZ_AUTH_TAG");
         assert!(
             auth_tag_env.is_some(),
-            "SPROUT_AUTH_TAG should be forwarded when set"
+            "BUZZ_AUTH_TAG should be forwarded when set"
         );
         assert_eq!(auth_tag_env.unwrap().value, "test-attestation-tag");
     }
@@ -2890,16 +2890,16 @@ mod build_mcp_servers_tests {
     #[test]
     fn session_new_mcp_server_skips_empty_sprout_auth_tag() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("SPROUT_AUTH_TAG", "");
+        std::env::set_var("BUZZ_AUTH_TAG", "");
         let config = test_config();
         let servers = build_mcp_servers(&config);
-        std::env::remove_var("SPROUT_AUTH_TAG");
+        std::env::remove_var("BUZZ_AUTH_TAG");
 
         let server = &servers[0];
-        let has_auth_tag = server.env.iter().any(|e| e.name == "SPROUT_AUTH_TAG");
+        let has_auth_tag = server.env.iter().any(|e| e.name == "BUZZ_AUTH_TAG");
         assert!(
             !has_auth_tag,
-            "empty SPROUT_AUTH_TAG should not be forwarded"
+            "empty BUZZ_AUTH_TAG should not be forwarded"
         );
     }
 

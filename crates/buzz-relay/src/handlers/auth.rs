@@ -18,7 +18,7 @@ use crate::protocol::RelayMessage;
 use crate::state::AppState;
 
 /// Extract a NIP-OA `auth` tag from a verified AUTH event and serialize it as
-/// the JSON-array string that [`sprout_sdk::nip_oa::verify_auth_tag`] expects.
+/// the JSON-array string that [`buzz_sdk::nip_oa::verify_auth_tag`] expects.
 ///
 /// Returns `None` if no `auth` tag is present (direct-member auth path) or if
 /// more than one `auth` tag exists (per NIP-OA spec: >1 auth tag ⇒ no valid tag).
@@ -85,7 +85,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
 
             // Pubkey allowlist gate — only for pubkey-only auth.
             if state.config.pubkey_allowlist_enabled
-                && auth_ctx.auth_method == sprout_auth::AuthMethod::Nip42
+                && auth_ctx.auth_method == buzz_auth::AuthMethod::Nip42
             {
                 let allowed = match state.db.is_pubkey_allowed(pubkey.as_bytes()).await {
                     Ok(v) => v,

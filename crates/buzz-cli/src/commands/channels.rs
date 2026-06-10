@@ -2,7 +2,7 @@ use uuid::Uuid;
 
 use crate::client::{
     extract_d_tag, extract_p_tags, extract_tag_value, normalize_write_response,
-    print_create_response, SproutClient,
+    print_create_response, BuzzClient,
 };
 use crate::error::CliError;
 use crate::validate::{parse_uuid, read_or_stdin, validate_hex64, validate_uuid};
@@ -21,7 +21,7 @@ fn extract_channel_metadata(e: &serde_json::Value) -> serde_json::Value {
 }
 
 pub async fn cmd_list_channels(
-    client: &SproutClient,
+    client: &BuzzClient,
     visibility: Option<&str>,
     member: Option<bool>,
     limit: Option<u32>,
@@ -117,7 +117,7 @@ pub async fn cmd_list_channels(
 /// (private channels they're not a member of), so we just post-filter the
 /// returned events by name and project them into a stable JSON shape.
 pub async fn cmd_search_channels(
-    client: &SproutClient,
+    client: &BuzzClient,
     query: &str,
     exact: bool,
     include_archived: bool,
@@ -229,7 +229,7 @@ fn name_matches(name: &str, needle_lower: &str, exact: bool) -> bool {
     }
 }
 
-pub async fn cmd_get_channel(client: &SproutClient, channel_id: &str) -> Result<(), CliError> {
+pub async fn cmd_get_channel(client: &BuzzClient, channel_id: &str) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
     let filter = serde_json::json!({
         "kinds": [39000],
@@ -250,7 +250,7 @@ pub async fn cmd_get_channel(client: &SproutClient, channel_id: &str) -> Result<
 }
 
 pub async fn cmd_list_channel_members(
-    client: &SproutClient,
+    client: &BuzzClient,
     channel_id: &str,
 ) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
@@ -267,7 +267,7 @@ pub async fn cmd_list_channel_members(
     Ok(())
 }
 
-pub async fn cmd_get_canvas(client: &SproutClient, channel_id: &str) -> Result<(), CliError> {
+pub async fn cmd_get_canvas(client: &BuzzClient, channel_id: &str) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
     let filter = serde_json::json!({
         "kinds": [40100],
@@ -292,7 +292,7 @@ pub async fn cmd_get_canvas(client: &SproutClient, channel_id: &str) -> Result<(
 // ---------------------------------------------------------------------------
 
 pub async fn cmd_create_channel(
-    client: &SproutClient,
+    client: &BuzzClient,
     name: &str,
     channel_type: &str,
     visibility: &str,
@@ -318,17 +318,17 @@ pub async fn cmd_create_channel(
     let channel_uuid = Uuid::new_v4();
 
     let vis = match visibility {
-        "open" => sprout_sdk::Visibility::Open,
-        "private" => sprout_sdk::Visibility::Private,
+        "open" => buzz_sdk::Visibility::Open,
+        "private" => buzz_sdk::Visibility::Private,
         _ => unreachable!(),
     };
     let ct = match channel_type {
-        "stream" => sprout_sdk::ChannelKind::Stream,
-        "forum" => sprout_sdk::ChannelKind::Forum,
+        "stream" => buzz_sdk::ChannelKind::Stream,
+        "forum" => buzz_sdk::ChannelKind::Forum,
         _ => unreachable!(),
     };
     let builder =
-        sprout_sdk::build_create_channel(channel_uuid, name, Some(vis), Some(ct), description)
+        buzz_sdk::build_create_channel(channel_uuid, name, Some(vis), Some(ct), description)
             .map_err(|e| CliError::Other(format!("build_create_channel failed: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -338,7 +338,7 @@ pub async fn cmd_create_channel(
 }
 
 pub async fn cmd_update_channel(
-    client: &SproutClient,
+    client: &BuzzClient,
     channel_id: &str,
     name: Option<&str>,
     description: Option<&str>,
@@ -350,7 +350,7 @@ pub async fn cmd_update_channel(
     }
     let channel_uuid = parse_uuid(channel_id)?;
 
-    let builder = sprout_sdk::build_update_channel(channel_uuid, name, description, None, None)
+    let builder = buzz_sdk::build_update_channel(channel_uuid, name, description, None, None)
         .map_err(|e| CliError::Other(format!("build_update_channel failed: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -360,13 +360,13 @@ pub async fn cmd_update_channel(
 }
 
 pub async fn cmd_set_channel_topic(
-    client: &SproutClient,
+    client: &BuzzClient,
     channel_id: &str,
     topic: &str,
 ) -> Result<(), CliError> {
     let channel_uuid = parse_uuid(channel_id)?;
 
-    let builder = sprout_sdk::build_set_topic(channel_uuid, topic)
+    let builder = buzz_sdk::build_set_topic(channel_uuid, topic)
         .map_err(|e| CliError::Other(format!("build_set_topic failed: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -376,13 +376,13 @@ pub async fn cmd_set_channel_topic(
 }
 
 pub async fn cmd_set_channel_purpose(
-    client: &SproutClient,
+    client: &BuzzClient,
     channel_id: &str,
     purpose: &str,
 ) -> Result<(), CliError> {
     let channel_uuid = parse_uuid(channel_id)?;
 
-    let builder = sprout_sdk::build_set_purpose(channel_uuid, purpose)
+    let builder = buzz_sdk::build_set_purpose(channel_uuid, purpose)
         .map_err(|e| CliError::Other(format!("build_set_purpose failed: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -391,10 +391,10 @@ pub async fn cmd_set_channel_purpose(
     Ok(())
 }
 
-pub async fn cmd_join_channel(client: &SproutClient, channel_id: &str) -> Result<(), CliError> {
+pub async fn cmd_join_channel(client: &BuzzClient, channel_id: &str) -> Result<(), CliError> {
     let channel_uuid = parse_uuid(channel_id)?;
 
-    let builder = sprout_sdk::build_join(channel_uuid)
+    let builder = buzz_sdk::build_join(channel_uuid)
         .map_err(|e| CliError::Other(format!("build_join failed: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -403,10 +403,10 @@ pub async fn cmd_join_channel(client: &SproutClient, channel_id: &str) -> Result
     Ok(())
 }
 
-pub async fn cmd_leave_channel(client: &SproutClient, channel_id: &str) -> Result<(), CliError> {
+pub async fn cmd_leave_channel(client: &BuzzClient, channel_id: &str) -> Result<(), CliError> {
     let channel_uuid = parse_uuid(channel_id)?;
 
-    let builder = sprout_sdk::build_leave(channel_uuid)
+    let builder = buzz_sdk::build_leave(channel_uuid)
         .map_err(|e| CliError::Other(format!("build_leave failed: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -415,10 +415,10 @@ pub async fn cmd_leave_channel(client: &SproutClient, channel_id: &str) -> Resul
     Ok(())
 }
 
-pub async fn cmd_archive_channel(client: &SproutClient, channel_id: &str) -> Result<(), CliError> {
+pub async fn cmd_archive_channel(client: &BuzzClient, channel_id: &str) -> Result<(), CliError> {
     let channel_uuid = parse_uuid(channel_id)?;
 
-    let builder = sprout_sdk::build_archive(channel_uuid)
+    let builder = buzz_sdk::build_archive(channel_uuid)
         .map_err(|e| CliError::Other(format!("build_archive failed: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -428,12 +428,12 @@ pub async fn cmd_archive_channel(client: &SproutClient, channel_id: &str) -> Res
 }
 
 pub async fn cmd_unarchive_channel(
-    client: &SproutClient,
+    client: &BuzzClient,
     channel_id: &str,
 ) -> Result<(), CliError> {
     let channel_uuid = parse_uuid(channel_id)?;
 
-    let builder = sprout_sdk::build_unarchive(channel_uuid)
+    let builder = buzz_sdk::build_unarchive(channel_uuid)
         .map_err(|e| CliError::Other(format!("build_unarchive failed: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -442,10 +442,10 @@ pub async fn cmd_unarchive_channel(
     Ok(())
 }
 
-pub async fn cmd_delete_channel(client: &SproutClient, channel_id: &str) -> Result<(), CliError> {
+pub async fn cmd_delete_channel(client: &BuzzClient, channel_id: &str) -> Result<(), CliError> {
     let channel_uuid = parse_uuid(channel_id)?;
 
-    let builder = sprout_sdk::build_delete_channel(channel_uuid)
+    let builder = buzz_sdk::build_delete_channel(channel_uuid)
         .map_err(|e| CliError::Other(format!("build_delete_channel failed: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -455,7 +455,7 @@ pub async fn cmd_delete_channel(client: &SproutClient, channel_id: &str) -> Resu
 }
 
 pub async fn cmd_add_channel_member(
-    client: &SproutClient,
+    client: &BuzzClient,
     channel_id: &str,
     pubkey: &str,
     role: Option<&str>,
@@ -465,18 +465,18 @@ pub async fn cmd_add_channel_member(
 
     let typed_role = match role {
         None => None,
-        Some("owner") => Some(sprout_sdk::MemberRole::Owner),
-        Some("admin") => Some(sprout_sdk::MemberRole::Admin),
-        Some("member") => Some(sprout_sdk::MemberRole::Member),
-        Some("guest") => Some(sprout_sdk::MemberRole::Guest),
-        Some("bot") => Some(sprout_sdk::MemberRole::Bot),
+        Some("owner") => Some(buzz_sdk::MemberRole::Owner),
+        Some("admin") => Some(buzz_sdk::MemberRole::Admin),
+        Some("member") => Some(buzz_sdk::MemberRole::Member),
+        Some("guest") => Some(buzz_sdk::MemberRole::Guest),
+        Some("bot") => Some(buzz_sdk::MemberRole::Bot),
         Some(other) => {
             return Err(CliError::Usage(format!(
                 "--role must be owner/admin/member/guest/bot (got: {other})"
             )))
         }
     };
-    let builder = sprout_sdk::build_add_member(channel_uuid, pubkey, typed_role)
+    let builder = buzz_sdk::build_add_member(channel_uuid, pubkey, typed_role)
         .map_err(|e| CliError::Other(format!("build_add_member failed: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -486,14 +486,14 @@ pub async fn cmd_add_channel_member(
 }
 
 pub async fn cmd_remove_channel_member(
-    client: &SproutClient,
+    client: &BuzzClient,
     channel_id: &str,
     pubkey: &str,
 ) -> Result<(), CliError> {
     validate_hex64(pubkey)?;
     let channel_uuid = parse_uuid(channel_id)?;
 
-    let builder = sprout_sdk::build_remove_member(channel_uuid, pubkey)
+    let builder = buzz_sdk::build_remove_member(channel_uuid, pubkey)
         .map_err(|e| CliError::Other(format!("build_remove_member failed: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -503,7 +503,7 @@ pub async fn cmd_remove_channel_member(
 }
 
 /// Set the channel addition policy — sign and submit a kind:10100 (agent profile) event.
-pub async fn cmd_set_add_policy(client: &SproutClient, policy: &str) -> Result<(), CliError> {
+pub async fn cmd_set_add_policy(client: &BuzzClient, policy: &str) -> Result<(), CliError> {
     match policy {
         "anyone" | "owner_only" | "nobody" => {}
         _ => {
@@ -516,7 +516,7 @@ pub async fn cmd_set_add_policy(client: &SproutClient, policy: &str) -> Result<(
     let content = serde_json::json!({ "channel_add_policy": policy }).to_string();
     use nostr::{EventBuilder, Kind};
     let builder = EventBuilder::new(
-        Kind::Custom(sprout_sdk::kind::KIND_AGENT_PROFILE as u16),
+        Kind::Custom(buzz_sdk::kind::KIND_AGENT_PROFILE as u16),
         &content,
     )
     .tags([]);
@@ -528,14 +528,14 @@ pub async fn cmd_set_add_policy(client: &SproutClient, policy: &str) -> Result<(
 }
 
 pub async fn cmd_set_canvas(
-    client: &SproutClient,
+    client: &BuzzClient,
     channel_id: &str,
     content: &str,
 ) -> Result<(), CliError> {
     let content = read_or_stdin(content)?;
     let channel_uuid = parse_uuid(channel_id)?;
 
-    let builder = sprout_sdk::build_set_canvas(channel_uuid, &content)
+    let builder = buzz_sdk::build_set_canvas(channel_uuid, &content)
         .map_err(|e| CliError::Other(format!("build_set_canvas failed: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -550,7 +550,7 @@ pub async fn cmd_set_canvas(
 
 pub async fn dispatch(
     cmd: crate::ChannelsCmd,
-    client: &SproutClient,
+    client: &BuzzClient,
     format: &crate::OutputFormat,
 ) -> Result<(), CliError> {
     use crate::ChannelsCmd;
@@ -614,7 +614,7 @@ pub async fn dispatch(
     }
 }
 
-pub async fn dispatch_canvas(cmd: crate::CanvasCmd, client: &SproutClient) -> Result<(), CliError> {
+pub async fn dispatch_canvas(cmd: crate::CanvasCmd, client: &BuzzClient) -> Result<(), CliError> {
     use crate::CanvasCmd;
     match cmd {
         CanvasCmd::Get { channel } => cmd_get_canvas(client, &channel).await,

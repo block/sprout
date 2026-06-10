@@ -1,6 +1,6 @@
 //! imeta tag validation helpers — shared between ingest pipeline and bridge.
 
-use sprout_media::validation::mime_to_ext;
+use buzz_media::validation::mime_to_ext;
 
 /// Validate imeta tags for correctness and safety.
 ///
@@ -207,7 +207,7 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
 /// and that the claimed metadata (size, MIME) matches the sidecar.
 pub async fn verify_imeta_blobs(
     tags: &[Vec<String>],
-    storage: &sprout_media::MediaStorage,
+    storage: &buzz_media::MediaStorage,
 ) -> Result<(), String> {
     for tag in tags {
         let mut x_value = String::new();

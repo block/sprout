@@ -7,10 +7,10 @@
 use std::fs;
 use std::path::Path;
 
-use sprout_persona::pack;
-use sprout_persona::persona;
-use sprout_persona::resolve;
-use sprout_persona::validate;
+use buzz_persona::pack;
+use buzz_persona::persona;
+use buzz_persona::resolve;
+use buzz_persona::validate;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

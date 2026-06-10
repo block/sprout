@@ -9,10 +9,10 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use nostr::Keys;
-use sprout_db::{Db, DbConfig};
+use buzz_db::{Db, DbConfig};
 
 #[derive(Parser)]
-#[command(name = "sprout-admin", about = "Sprout instance administration")]
+#[command(name = "buzz-admin", about = "Buzz instance administration")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -41,7 +41,7 @@ enum Command {
     /// clients can see those channels. Idempotent — safe to run multiple times.
     ReconcileChannels {
         /// Relay private key (hex) for signing events. Falls back to
-        /// SPROUT_RELAY_PRIVATE_KEY env var. If neither is set, generates
+        /// BUZZ_RELAY_PRIVATE_KEY env var. If neither is set, generates
         /// an ephemeral key (events will be unverifiable after restart).
         #[arg(long)]
         relay_key: Option<String>,
@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
             let keys = Keys::generate();
             println!("Public key:  {}", keys.public_key().to_hex());
             println!("Secret key:  {}", keys.secret_key().display_secret());
-            println!("\nSet SPROUT_PRIVATE_KEY to the secret key to use this identity.");
+            println!("\nSet BUZZ_PRIVATE_KEY to the secret key to use this identity.");
         }
         Command::AddMember { pubkey, role } => {
             let db = connect_db().await?;
@@ -104,13 +104,13 @@ async fn connect_db() -> Result<Db> {
 
 async fn reconcile_channels(relay_key_arg: Option<String>) -> Result<()> {
     use nostr::{EventBuilder, Kind, Tag};
-    use sprout_core::kind::KIND_NIP29_GROUP_ADMINS;
-    use sprout_db::event::EventQuery;
+    use buzz_core::kind::KIND_NIP29_GROUP_ADMINS;
+    use buzz_db::event::EventQuery;
 
     let db = connect_db().await?;
 
     // Resolve relay signing key: arg > env > ephemeral
-    let relay_keys = match relay_key_arg.or_else(|| std::env::var("SPROUT_RELAY_PRIVATE_KEY").ok())
+    let relay_keys = match relay_key_arg.or_else(|| std::env::var("BUZZ_RELAY_PRIVATE_KEY").ok())
     {
         Some(key_hex) => {
             Keys::parse(&key_hex).map_err(|e| anyhow::anyhow!("invalid relay key: {e}"))?
@@ -122,7 +122,7 @@ async fn reconcile_channels(relay_key_arg: Option<String>) -> Result<()> {
                 k.public_key().to_hex()
             );
             eprintln!("Events signed with this key won't be verifiable after this run.");
-            eprintln!("Pass --relay-key or set SPROUT_RELAY_PRIVATE_KEY for production use.");
+            eprintln!("Pass --relay-key or set BUZZ_RELAY_PRIVATE_KEY for production use.");
             k
         }
     };

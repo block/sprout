@@ -32,12 +32,12 @@ use sqlx::postgres::PgRow;
 use sqlx::{PgPool, QueryBuilder};
 use uuid::Uuid;
 
-use sprout_core::kind::{
+use buzz_core::kind::{
     KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_JOB_PROGRESS, KIND_JOB_REQUEST, KIND_JOB_RESULT,
     KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER,
     KIND_WORKFLOW_APPROVAL_REQUESTED,
 };
-use sprout_core::StoredEvent;
+use buzz_core::StoredEvent;
 
 use crate::error::Result;
 use crate::event::row_to_stored_event;
@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn mentions_query_includes_stream_message_kind() {
-        use sprout_core::kind::{
+        use buzz_core::kind::{
             KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2,
         };
         let mention_kinds: &[u32] = &[
@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn needs_action_query_includes_approval_and_reminder_kinds() {
-        use sprout_core::kind::{KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED};
+        use buzz_core::kind::{KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED};
         let needs_action_kinds: &[u32] = &[KIND_WORKFLOW_APPROVAL_REQUESTED, KIND_STREAM_REMINDER];
 
         assert!(
@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn activity_query_includes_agent_job_kinds() {
-        use sprout_core::kind::{
+        use buzz_core::kind::{
             KIND_FORUM_POST, KIND_JOB_PROGRESS, KIND_JOB_REQUEST, KIND_JOB_RESULT,
             KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2,
         };
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn activity_query_excludes_workflow_execution_kinds() {
-        use sprout_core::kind::{
+        use buzz_core::kind::{
             KIND_FORUM_POST, KIND_JOB_PROGRESS, KIND_JOB_REQUEST, KIND_JOB_RESULT,
             KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2,
         };
@@ -361,7 +361,7 @@ mod tests {
             KIND_JOB_RESULT,
         ];
 
-        use sprout_core::kind::{KIND_WORKFLOW_APPROVAL_DENIED, KIND_WORKFLOW_TRIGGERED};
+        use buzz_core::kind::{KIND_WORKFLOW_APPROVAL_DENIED, KIND_WORKFLOW_TRIGGERED};
         for kind in KIND_WORKFLOW_TRIGGERED..=KIND_WORKFLOW_APPROVAL_DENIED {
             assert!(
                 !activity_kinds.contains(&kind),
@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn needs_action_kinds_do_not_overlap_with_activity_kinds() {
-        use sprout_core::kind::{
+        use buzz_core::kind::{
             KIND_FORUM_POST, KIND_JOB_PROGRESS, KIND_JOB_REQUEST, KIND_JOB_RESULT,
             KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER,
             KIND_WORKFLOW_APPROVAL_REQUESTED,

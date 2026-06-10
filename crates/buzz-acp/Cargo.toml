@@ -1,5 +1,5 @@
 [package]
-name = "sprout-acp"
+name = "buzz-acp"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,18 +8,18 @@ repository.workspace = true
 description = "ACP harness that bridges Sprout events to AI agents"
 
 [lib]
-name = "sprout_acp"
+name = "buzz_acp"
 path = "src/lib.rs"
 
 [[bin]]
-name = "sprout-acp"
+name = "buzz-acp"
 path = "src/main.rs"
 
 [dependencies]
 # Internal
-sprout-core = { workspace = true }
-sprout-sdk = { workspace = true }
-sprout-persona = { path = "../sprout-persona" }
+buzz-core = { workspace = true }
+buzz-sdk = { workspace = true }
+buzz-persona = { path = "../buzz-persona" }
 
 # Nostr
 nostr = { workspace = true }

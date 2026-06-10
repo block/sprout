@@ -1,5 +1,5 @@
 [package]
-name = "sprout-sdk"
+name = "buzz-sdk"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Typed Nostr event builders for Sprout operations"
 
 [dependencies]
-sprout-core = { workspace = true }
+buzz-core = { workspace = true }
 nostr = { workspace = true }
 uuid = { workspace = true }
 serde = { workspace = true }

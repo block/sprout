@@ -4,24 +4,24 @@ use std::sync::Arc;
 use tracing::{error, info};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-use sprout_audit::AuditService;
-use sprout_auth::AuthService;
-use sprout_db::{Db, DbConfig};
-use sprout_pubsub::PubSubManager;
-use sprout_search::{SearchConfig, SearchService};
+use buzz_audit::AuditService;
+use buzz_auth::AuthService;
+use buzz_db::{Db, DbConfig};
+use buzz_pubsub::PubSubManager;
+use buzz_search::{SearchConfig, SearchService};
 
-use sprout_relay::config::Config;
-use sprout_relay::metrics as relay_metrics;
-use sprout_relay::router::{build_health_router, build_router};
-use sprout_relay::state::AppState;
-use sprout_workflow::WorkflowEngine;
+use buzz_relay::config::Config;
+use buzz_relay::metrics as relay_metrics;
+use buzz_relay::router::{build_health_router, build_router};
+use buzz_relay::state::AppState;
+use buzz_workflow::WorkflowEngine;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // JSON-only structured logs — simple, machine-parseable, CAKE-compatible.
     tracing_subscriber::registry()
         .with(fmt::layer().json().flatten_event(true))
-        .with(EnvFilter::from_default_env().add_directive("sprout_relay=info".parse()?))
+        .with(EnvFilter::from_default_env().add_directive("buzz_relay=info".parse()?))
         .init();
 
     info!("Starting sprout-relay");
@@ -65,11 +65,11 @@ async fn main() -> anyhow::Result<()> {
     // that no one can administer.
     if config.require_relay_membership && config.relay_owner_pubkey.is_none() {
         error!(
-            "SPROUT_REQUIRE_RELAY_MEMBERSHIP=true but RELAY_OWNER_PUBKEY is not set or invalid. \
+            "BUZZ_REQUIRE_RELAY_MEMBERSHIP=true but RELAY_OWNER_PUBKEY is not set or invalid. \
              Set RELAY_OWNER_PUBKEY to a valid 64-char hex pubkey."
         );
         return Err(anyhow::anyhow!(
-            "RELAY_OWNER_PUBKEY required when SPROUT_REQUIRE_RELAY_MEMBERSHIP=true"
+            "RELAY_OWNER_PUBKEY required when BUZZ_REQUIRE_RELAY_MEMBERSHIP=true"
         ));
     }
 
@@ -78,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
     // or bootstrapping if we'll reject the config anyway.
     if config.require_relay_membership && config.relay_private_key.is_none() {
         return Err(anyhow::anyhow!(
-            "SPROUT_RELAY_PRIVATE_KEY is required when SPROUT_REQUIRE_RELAY_MEMBERSHIP=true. \
+            "BUZZ_RELAY_PRIVATE_KEY is required when BUZZ_REQUIRE_RELAY_MEMBERSHIP=true. \
              NIP-43 events signed with an ephemeral key become unverifiable after restart."
         ));
     }
@@ -96,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
                     "Fatal: failed to backfill allowlist with membership enforcement enabled: {e}"
                 );
                 return Err(anyhow::anyhow!(
-                    "Failed to backfill pubkey_allowlist (required when SPROUT_REQUIRE_RELAY_MEMBERSHIP=true): {e}"
+                    "Failed to backfill pubkey_allowlist (required when BUZZ_REQUIRE_RELAY_MEMBERSHIP=true): {e}"
                 ));
             } else {
                 error!("Failed to backfill pubkey_allowlist (non-fatal): {e}");
@@ -115,7 +115,7 @@ async fn main() -> anyhow::Result<()> {
                     // in a broken state.
                     error!("Fatal: failed to bootstrap relay owner with membership enforcement enabled: {e}");
                     return Err(anyhow::anyhow!(
-                        "Failed to bootstrap relay owner (required when SPROUT_REQUIRE_RELAY_MEMBERSHIP=true): {e}"
+                        "Failed to bootstrap relay owner (required when BUZZ_REQUIRE_RELAY_MEMBERSHIP=true): {e}"
                     ));
                 } else {
                     error!(
@@ -177,12 +177,12 @@ async fn main() -> anyhow::Result<()> {
         error!("Typesense collection setup failed (non-fatal): {e}");
     }
 
-    let workflow_config = sprout_workflow::WorkflowConfig::default();
+    let workflow_config = buzz_workflow::WorkflowConfig::default();
     let workflow_engine = Arc::new(WorkflowEngine::new(db.clone(), workflow_config));
 
     let relay_keypair = if let Some(hex) = &config.relay_private_key {
         nostr::Keys::parse(hex)
-            .map_err(|e| anyhow::anyhow!("invalid SPROUT_RELAY_PRIVATE_KEY: {e}"))?
+            .map_err(|e| anyhow::anyhow!("invalid BUZZ_RELAY_PRIVATE_KEY: {e}"))?
     } else if !config.require_auth_token {
         // Dev mode: use a deterministic keypair so addressable events (kind:39000/39001/39002)
         // replace correctly across restarts. Without this, each restart generates a new pubkey
@@ -192,13 +192,13 @@ async fn main() -> anyhow::Result<()> {
         let keys = nostr::Keys::parse(DEV_RELAY_PRIVKEY).expect("hardcoded dev key is valid");
         tracing::warn!(
             pubkey = %keys.public_key().to_hex(),
-            "Using hardcoded dev relay keypair (SPROUT_REQUIRE_AUTH_TOKEN=false). \
-             Set SPROUT_RELAY_PRIVATE_KEY for production."
+            "Using hardcoded dev relay keypair (BUZZ_REQUIRE_AUTH_TOKEN=false). \
+             Set BUZZ_RELAY_PRIVATE_KEY for production."
         );
         keys
     } else {
         panic!(
-            "SPROUT_RELAY_PRIVATE_KEY must be set when SPROUT_REQUIRE_AUTH_TOKEN=true. \
+            "BUZZ_RELAY_PRIVATE_KEY must be set when BUZZ_REQUIRE_AUTH_TOKEN=true. \
              A stable relay identity is required for production."
         );
     };
@@ -207,7 +207,7 @@ async fn main() -> anyhow::Result<()> {
         .media
         .validate()
         .map_err(|e| anyhow::anyhow!("invalid media config: {e}"))?;
-    let media_storage = sprout_media::MediaStorage::new(&config.media)
+    let media_storage = buzz_media::MediaStorage::new(&config.media)
         .map_err(|e| anyhow::anyhow!("failed to initialize media storage: {e}"))?;
     info!("Media storage connected");
 
@@ -229,19 +229,19 @@ async fn main() -> anyhow::Result<()> {
     // linearizable conditional-write axiom (A3) before serving git traffic.
     // Failure is fatal: a backend that cannot satisfy pointer CAS invalidates
     // the manifest-pointer protocol. This is a deployment gate, not a proof.
-    if std::env::var("SPROUT_GIT_CONFORMANCE_PROBE")
+    if std::env::var("BUZZ_GIT_CONFORMANCE_PROBE")
         .map(|v| v != "false")
         .unwrap_or(true)
     {
-        let race_width = std::env::var("SPROUT_GIT_PROBE_WRITERS")
+        let race_width = std::env::var("BUZZ_GIT_PROBE_WRITERS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(32);
-        let race_rounds = std::env::var("SPROUT_GIT_PROBE_ROUNDS")
+        let race_rounds = std::env::var("BUZZ_GIT_PROBE_ROUNDS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(3);
-        let cfg = sprout_relay::api::git::store::ProbeConfig {
+        let cfg = buzz_relay::api::git::store::ProbeConfig {
             race_width,
             race_rounds,
         };
@@ -269,7 +269,7 @@ async fn main() -> anyhow::Result<()> {
         let startup_state = Arc::clone(&state);
         tokio::spawn(async move {
             if let Err(e) =
-                sprout_relay::handlers::side_effects::publish_nip43_membership_list(&startup_state)
+                buzz_relay::handlers::side_effects::publish_nip43_membership_list(&startup_state)
                     .await
             {
                 tracing::warn!(error = %e, "failed to publish initial NIP-43 membership list on startup");
@@ -281,9 +281,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Emit kind:39000/39002 discovery events for channels that exist in the DB
     // but don't have corresponding events (e.g. seeded via direct SQL inserts).
-    // Only runs when SPROUT_RECONCILE_CHANNELS=true (dev/CI environments).
+    // Only runs when BUZZ_RECONCILE_CHANNELS=true (dev/CI environments).
     // Production relays create channels through the event pipeline and don't need this.
-    if std::env::var("SPROUT_RECONCILE_CHANNELS").is_ok() {
+    if std::env::var("BUZZ_RECONCILE_CHANNELS").is_ok() {
         let reconcile_state = Arc::clone(&state);
         tokio::spawn(async move {
             // Try immediately, then retry every 5s for up to 2 minutes.
@@ -292,7 +292,7 @@ async fn main() -> anyhow::Result<()> {
                 if attempt > 0 {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
-                match sprout_relay::handlers::side_effects::reconcile_channel_events(
+                match buzz_relay::handlers::side_effects::reconcile_channel_events(
                     &reconcile_state,
                 )
                 .await
@@ -308,7 +308,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Wire the action sink — must happen after AppState (which creates
     // sub_registry, conn_manager) and before the cron loop starts.
-    let action_sink = Arc::new(sprout_relay::workflow_sink::RelayActionSink::new(&state));
+    let action_sink = Arc::new(buzz_relay::workflow_sink::RelayActionSink::new(&state));
     workflow_engine.set_action_sink(action_sink);
 
     // Start the cron loop AFTER the action sink is wired.
@@ -323,7 +323,7 @@ async fn main() -> anyhow::Result<()> {
     // together with the workflow engine in a future multi-pod coordination pass.
     {
         let reaper_state = Arc::clone(&state);
-        let reaper_interval_secs: u64 = std::env::var("SPROUT_REAPER_INTERVAL_SECS")
+        let reaper_interval_secs: u64 = std::env::var("BUZZ_REAPER_INTERVAL_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(60);
@@ -351,7 +351,7 @@ async fn main() -> anyhow::Result<()> {
 
                 for channel_id in &expired {
                     // Emit a system message so members see why the channel was archived.
-                    if let Err(e) = sprout_relay::handlers::side_effects::emit_system_message(
+                    if let Err(e) = buzz_relay::handlers::side_effects::emit_system_message(
                         &reaper_state,
                         *channel_id,
                         serde_json::json!({ "type": "channel_auto_archived" }),
@@ -363,7 +363,7 @@ async fn main() -> anyhow::Result<()> {
 
                     // Update NIP-29 discovery events so clients see the archived state.
                     if let Err(e) =
-                        sprout_relay::handlers::side_effects::emit_group_discovery_events(
+                        buzz_relay::handlers::side_effects::emit_group_discovery_events(
                             &reaper_state,
                             *channel_id,
                         )
@@ -396,7 +396,7 @@ async fn main() -> anyhow::Result<()> {
                         } else {
                             Some(channel_event.channel_id)
                         };
-                        let stored = sprout_core::StoredEvent::new(channel_event.event, channel_id);
+                        let stored = buzz_core::StoredEvent::new(channel_event.event, channel_id);
 
                         // Skip events that were already fanned out in-process (local echo).
                         // The cache has TTL-based eviction (60s) so entries are bounded
@@ -408,7 +408,7 @@ async fn main() -> anyhow::Result<()> {
                         }
 
                         let matches = state_for_sub.sub_registry.fan_out(&stored);
-                        let matches = sprout_relay::handlers::event::filter_fanout_by_access(
+                        let matches = buzz_relay::handlers::event::filter_fanout_by_access(
                             &state_for_sub,
                             &stored,
                             matches,
@@ -476,8 +476,8 @@ async fn main() -> anyhow::Result<()> {
 ///
 /// ```text
 /// ┌─────────────────────────────────────────────────────────┐
-/// │  Listener 1: TCP SPROUT_BIND_ADDR:3000  (app router)   │
-/// │  Listener 2: UDS SPROUT_UDS_PATH        (app, optional)│
+/// │  Listener 1: TCP BUZZ_BIND_ADDR:3000  (app router)   │
+/// │  Listener 2: UDS BUZZ_UDS_PATH        (app, optional)│
 /// │  Listener 3: TCP 0.0.0.0:8080           (health only)  │
 /// │  Listener 4: TCP 0.0.0.0:9102           (metrics, via  │
 /// │              PrometheusBuilder — already bound)         │
@@ -536,7 +536,7 @@ async fn serve(
             }
             Ok(_) => {
                 return Err(anyhow::anyhow!(
-                    "SPROUT_UDS_PATH {uds_path} exists but is not a socket"
+                    "BUZZ_UDS_PATH {uds_path} exists but is not a socket"
                 ));
             }
             Err(_) => {}
@@ -573,7 +573,7 @@ async fn serve(
 
     #[cfg(not(unix))]
     if config.uds_path.is_some() {
-        tracing::warn!("SPROUT_UDS_PATH set but UDS not supported on this platform");
+        tracing::warn!("BUZZ_UDS_PATH set but UDS not supported on this platform");
     }
 
     // TCP-only path.

@@ -4,7 +4,7 @@
 //! The caller signs: `builder.sign_with_keys(&keys)?`.
 
 use nostr::{EventBuilder, Kind, Tag};
-use sprout_core::{
+use buzz_core::{
     kind::{
         KIND_AGENT_OBSERVER_FRAME, KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_DELETION,
         KIND_DM_ADD_MEMBER, KIND_DM_OPEN, KIND_EMOJI_SET, KIND_GIT_REPO_ANNOUNCEMENT,
@@ -1122,7 +1122,7 @@ mod tests {
         let sender = keys();
         let recipient = keys();
         let agent = keys();
-        let encrypted = sprout_core::observer::encrypt_observer_payload(
+        let encrypted = buzz_core::observer::encrypt_observer_payload(
             &sender,
             &recipient.public_key(),
             &serde_json::json!({"type": "acp_read"}),

@@ -1,5 +1,5 @@
 [package]
-name = "sprout-admin"
+name = "buzz-admin"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,13 +8,13 @@ repository.workspace = true
 description = "Operator CLI for Sprout relay administration"
 
 [[bin]]
-name = "sprout-admin"
+name = "buzz-admin"
 path = "src/main.rs"
 
 [dependencies]
-sprout-db = { workspace = true }
-sprout-core = { workspace = true }
-sprout-auth = { workspace = true }
+buzz-db = { workspace = true }
+buzz-core = { workspace = true }
+buzz-auth = { workspace = true }
 nostr = { workspace = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }

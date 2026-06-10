@@ -99,14 +99,14 @@ impl Harness {
     async fn spawn_with_env(base_url: &str, extra: &[(&str, &str)]) -> Self {
         let bin = env!("CARGO_BIN_EXE_sprout-agent");
         let mut cmd = tokio::process::Command::new(bin);
-        cmd.env("SPROUT_AGENT_PROVIDER", "openai")
+        cmd.env("BUZZ_AGENT_PROVIDER", "openai")
             .env("OPENAI_COMPAT_API_KEY", "test")
             .env("OPENAI_COMPAT_MODEL", "fake-model")
             .env("OPENAI_COMPAT_BASE_URL", base_url)
-            .env("SPROUT_AGENT_LLM_TIMEOUT_SECS", "5")
-            .env("SPROUT_AGENT_TOOL_TIMEOUT_SECS", "5")
-            .env("SPROUT_AGENT_MAX_ROUNDS", "8")
-            .env("SPROUT_AGENT_MCP_INIT_TIMEOUT_SECS", "2");
+            .env("BUZZ_AGENT_LLM_TIMEOUT_SECS", "5")
+            .env("BUZZ_AGENT_TOOL_TIMEOUT_SECS", "5")
+            .env("BUZZ_AGENT_MAX_ROUNDS", "8")
+            .env("BUZZ_AGENT_MCP_INIT_TIMEOUT_SECS", "2");
         for (k, v) in extra {
             cmd.env(k, v);
         }
@@ -540,8 +540,8 @@ async fn history_budget_evicts_old_turns() {
     let mut h = Harness::spawn_with_env(
         &llm.url,
         &[
-            ("SPROUT_AGENT_MAX_HISTORY_BYTES", &BUDGET.to_string()),
-            ("SPROUT_AGENT_MAX_HANDOFFS", "0"), // exercise truncation, not handoff
+            ("BUZZ_AGENT_MAX_HISTORY_BYTES", &BUDGET.to_string()),
+            ("BUZZ_AGENT_MAX_HANDOFFS", "0"), // exercise truncation, not handoff
         ],
     )
     .await;
@@ -777,7 +777,7 @@ async fn hook_stop_blocks_premature_end() {
         &llm.url,
         &[
             ("MCP_HOOK_SERVERS", "fake"),
-            ("SPROUT_AGENT_STOP_MAX_REJECTIONS", "10"),
+            ("BUZZ_AGENT_STOP_MAX_REJECTIONS", "10"),
         ],
     )
     .await;
@@ -858,7 +858,7 @@ async fn hook_stop_budget_exhausted() {
         &llm.url,
         &[
             ("MCP_HOOK_SERVERS", "fake"),
-            ("SPROUT_AGENT_STOP_MAX_REJECTIONS", "1"),
+            ("BUZZ_AGENT_STOP_MAX_REJECTIONS", "1"),
         ],
     )
     .await;
@@ -907,7 +907,7 @@ async fn hook_stop_consecutive_end_turn() {
         &[
             ("MCP_HOOK_SERVERS", "fake"),
             // Set high so we don't trip the budget instead.
-            ("SPROUT_AGENT_STOP_MAX_REJECTIONS", "10"),
+            ("BUZZ_AGENT_STOP_MAX_REJECTIONS", "10"),
         ],
     )
     .await;
@@ -1046,9 +1046,9 @@ async fn hook_post_compact_injects_after_handoff() {
         &llm.url,
         &[
             ("MCP_HOOK_SERVERS", "fake"),
-            ("SPROUT_AGENT_MAX_HISTORY_BYTES", &(1024 * 1024).to_string()),
+            ("BUZZ_AGENT_MAX_HISTORY_BYTES", &(1024 * 1024).to_string()),
             // Allow at least one handoff.
-            ("SPROUT_AGENT_MAX_HANDOFFS", "3"),
+            ("BUZZ_AGENT_MAX_HANDOFFS", "3"),
         ],
     )
     .await;
@@ -1157,13 +1157,13 @@ async fn token_usage_over_budget_triggers_handoff() {
     let mut h = Harness::spawn_with_env(
         &llm.url,
         &[
-            ("SPROUT_AGENT_MAX_CONTEXT_TOKENS", "1000"),
-            ("SPROUT_AGENT_MAX_OUTPUT_TOKENS", "100"),
-            ("SPROUT_AGENT_MAX_HANDOFFS", "3"),
+            ("BUZZ_AGENT_MAX_CONTEXT_TOKENS", "1000"),
+            ("BUZZ_AGENT_MAX_OUTPUT_TOKENS", "100"),
+            ("BUZZ_AGENT_MAX_HANDOFFS", "3"),
             // Huge byte budget so the byte path can NOT be what fires — only
             // the token gate can explain a handoff on these tiny prompts.
             (
-                "SPROUT_AGENT_MAX_HISTORY_BYTES",
+                "BUZZ_AGENT_MAX_HISTORY_BYTES",
                 &(16 * 1024 * 1024).to_string(),
             ),
         ],
@@ -1238,13 +1238,13 @@ async fn stale_usage_plus_history_growth_triggers_handoff() {
     let mut h = Harness::spawn_with_env(
         &llm.url,
         &[
-            ("SPROUT_AGENT_MAX_CONTEXT_TOKENS", "10000"),
-            ("SPROUT_AGENT_MAX_OUTPUT_TOKENS", "1000"),
-            ("SPROUT_AGENT_MAX_HANDOFFS", "3"),
+            ("BUZZ_AGENT_MAX_CONTEXT_TOKENS", "10000"),
+            ("BUZZ_AGENT_MAX_OUTPUT_TOKENS", "1000"),
+            ("BUZZ_AGENT_MAX_HANDOFFS", "3"),
             // Huge byte budget so the None-path byte fallback can't be what
             // fires — only the token-mode growth estimate can explain it.
             (
-                "SPROUT_AGENT_MAX_HISTORY_BYTES",
+                "BUZZ_AGENT_MAX_HISTORY_BYTES",
                 &(16 * 1024 * 1024).to_string(),
             ),
         ],
@@ -1277,7 +1277,7 @@ async fn stale_usage_plus_history_growth_triggers_handoff() {
     h.shutdown().await;
 }
 
-/// `_Stop` hook that takes longer than `SPROUT_AGENT_HOOK_TIMEOUT_MS`
+/// `_Stop` hook that takes longer than `BUZZ_AGENT_HOOK_TIMEOUT_MS`
 /// must be treated as no-objection (fail-open). Agent stops normally.
 ///
 /// Note on server-kill-on-timeout: `call_hooks` calls `kill_server` on a
@@ -1298,7 +1298,7 @@ async fn hook_stop_timeout_failopen() {
         &[
             ("MCP_HOOK_SERVERS", "fake"),
             // Hook delay (3s) >> hook timeout (200ms) → fail-open.
-            ("SPROUT_AGENT_HOOK_TIMEOUT_MS", "200"),
+            ("BUZZ_AGENT_HOOK_TIMEOUT_MS", "200"),
         ],
     )
     .await;
@@ -1354,7 +1354,7 @@ async fn cancel_kills_inflight_tool_via_mcp_notification() {
     // sprout-dev-mcp is a separate crate; locate its binary relative to
     // the sprout-agent test binary (they share the same target dir).
     let self_bin = std::path::PathBuf::from(env!("CARGO_BIN_EXE_sprout-agent"));
-    let dev_mcp_bin = self_bin.parent().unwrap().join("sprout-dev-mcp");
+    let dev_mcp_bin = self_bin.parent().unwrap().join("buzz-dev-mcp");
     if !dev_mcp_bin.exists() {
         eprintln!(
             "SKIP: sprout-dev-mcp not built at {}; run `cargo build -p sprout-dev-mcp` first",

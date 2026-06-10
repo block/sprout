@@ -1,6 +1,6 @@
 [package]
-name = "sprout-relay"
-default-run = "sprout-relay"
+name = "buzz-relay"
+default-run = "buzz-relay"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,20 +9,20 @@ repository.workspace = true
 description = "WebSocket relay server for the Sprout communications platform"
 
 [[bin]]
-name = "sprout-relay"
+name = "buzz-relay"
 path = "src/main.rs"
 
 [[bin]]
-name = "sprout-reindex-kind0"
+name = "buzz-reindex-kind0"
 path = "src/bin/reindex_kind0.rs"
 
 [dependencies]
-sprout-core = { workspace = true }
-sprout-db = { workspace = true }
-sprout-auth = { workspace = true }
-sprout-pubsub = { workspace = true }
-sprout-audit = { workspace = true }
-sprout-search = { workspace = true }
+buzz-core = { workspace = true }
+buzz-db = { workspace = true }
+buzz-auth = { workspace = true }
+buzz-pubsub = { workspace = true }
+buzz-audit = { workspace = true }
+buzz-search = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
@@ -43,9 +43,9 @@ deadpool-redis = { workspace = true }
 redis = { workspace = true }
 sqlx = { workspace = true }
 base64 = "0.22"
-sprout-sdk = { workspace = true }
-sprout-workflow = { workspace = true, features = ["reqwest"] }
-sprout-media = { workspace = true }
+buzz-sdk = { workspace = true }
+buzz-workflow = { workspace = true, features = ["reqwest"] }
+buzz-media = { workspace = true }
 s3 = { version = "0.37", package = "rust-s3", default-features = false, features = ["tokio-rustls-tls", "fail-on-err", "tags"] }
 tempfile = "3"
 bytes = "1"
@@ -62,11 +62,11 @@ metrics         = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 
 [features]
-dev = ["sprout-auth/dev"]
+dev = ["buzz-auth/dev"]
 
 [dev-dependencies]
 mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "ebc3ab4c4b5f4a45d5bc942c66c18583800c3f82", package = "mesh-llm-sdk", default-features = false, features = ["client", "serving"] }
 mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "ebc3ab4c4b5f4a45d5bc942c66c18583800c3f82", package = "mesh-llm-host-runtime", default-features = false, features = ["dynamic-native-runtime"] }
-sprout-core = { workspace = true, features = ["test-utils"] }
-sprout-auth = { workspace = true, features = ["dev"] }
+buzz-core = { workspace = true, features = ["test-utils"] }
+buzz-auth = { workspace = true, features = ["dev"] }
 reqwest = { workspace = true }

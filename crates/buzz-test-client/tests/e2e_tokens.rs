@@ -656,25 +656,25 @@ async fn test_bearer_token_scope_escalation_blocked() {
 
 /// Exhaust the per-pubkey rate limit, then verify the next mint returns 429.
 ///
-/// The relay reads `SPROUT_MINT_RATE_LIMIT` (default 50). This test reads the
+/// The relay reads `BUZZ_MINT_RATE_LIMIT` (default 50). This test reads the
 /// same env var so it stays in sync. For fast test runs, start the relay with
-/// `SPROUT_MINT_RATE_LIMIT=5`.
+/// `BUZZ_MINT_RATE_LIMIT=5`.
 ///
-/// **Requires `SPROUT_MINT_RATE_LIMIT ≤ 10`** — the DB enforces a hard 10-token
+/// **Requires `BUZZ_MINT_RATE_LIMIT ≤ 10`** — the DB enforces a hard 10-token
 /// cap that fires before the rate limiter when the limit is higher. The test
 /// skips gracefully if the limit is too high.
 #[tokio::test]
 #[ignore]
 async fn test_rate_limit() {
-    let limit: usize = std::env::var("SPROUT_MINT_RATE_LIMIT")
+    let limit: usize = std::env::var("BUZZ_MINT_RATE_LIMIT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(50);
 
     if limit > 10 {
         eprintln!(
-            "SKIP test_rate_limit: SPROUT_MINT_RATE_LIMIT={limit} exceeds the 10-token DB cap. \
-             Set SPROUT_MINT_RATE_LIMIT=5 (or ≤10) on both relay and test runner to exercise this."
+            "SKIP test_rate_limit: BUZZ_MINT_RATE_LIMIT={limit} exceeds the 10-token DB cap. \
+             Set BUZZ_MINT_RATE_LIMIT=5 (or ≤10) on both relay and test runner to exercise this."
         );
         return;
     }

@@ -1,7 +1,7 @@
 //! End-to-end acceptance tests for the relay-hosted mesh-LLM feature.
 //!
 //! These tests require a running sprout-relay with mesh embedded
-//! (`SPROUT_MESH_ENABLED=true`, `SPROUT_REQUIRE_RELAY_MEMBERSHIP=true`) and,
+//! (`BUZZ_MESH_ENABLED=true`, `BUZZ_REQUIRE_RELAY_MEMBERSHIP=true`) and,
 //! for the live-inference rows, two desktop mesh nodes (serve + client).
 //! All tests are `#[ignore]` by default — they need infra CI does not host
 //! (native llama, multi-node, model download). The deterministic trust
@@ -13,7 +13,7 @@
 //! ```text
 //! # 1. one-time local llama build (see docs/mesh-llm-local-build.md)
 //! # 2. start a mesh-enabled relay
-//! SPROUT_MESH_ENABLED=true SPROUT_REQUIRE_RELAY_MEMBERSHIP=true \
+//! BUZZ_MESH_ENABLED=true BUZZ_REQUIRE_RELAY_MEMBERSHIP=true \
 //!   cargo run -p sprout-relay
 //! # 3. run the trust assertions (no GPU needed):
 //! RELAY_URL=ws://localhost:3000 \
@@ -40,9 +40,9 @@
 use std::time::Duration;
 
 use nostr::{Filter, Keys, Kind};
-use sprout_test_client::SproutTestClient;
+use buzz_test_client::BuzzTestClient;
 
-/// Sprout's relay-owned mesh status kind (must match `sprout_core::kind`).
+/// Sprout's relay-owned mesh status kind (must match `buzz_core::kind`).
 const KIND_MESH_LLM_RELAY_STATUS: u16 = 30621;
 const MESH_STATUS_D_TAG: &str = "sprout-relay-mesh";
 const MESH_STATUS_TYPE: &str = "sprout-mesh-status";
@@ -100,7 +100,7 @@ async fn trust_member_reads_mesh_status() {
     let Some(member) = keys_from_env("MEMBER_NSEC") else {
         return;
     };
-    let mut client = SproutTestClient::connect(&url, &member)
+    let mut client = BuzzTestClient::connect(&url, &member)
         .await
         .expect("member connect+auth");
 
@@ -165,7 +165,7 @@ async fn trust_member_reads_mesh_status() {
 /// Assertion 2: a valid Nostr identity that is NOT a relay member gets nothing
 /// back for a kind:30621 REQ — membership gates the read.
 ///
-/// Requires a relay with `SPROUT_REQUIRE_RELAY_MEMBERSHIP=true` and a published
+/// Requires a relay with `BUZZ_REQUIRE_RELAY_MEMBERSHIP=true` and a published
 /// status event that members can see (paired with assertion 1).
 #[tokio::test]
 #[ignore]
@@ -174,7 +174,7 @@ async fn trust_nonmember_read_denied() {
     let Some(stranger) = keys_from_env("STRANGER_NSEC") else {
         return;
     };
-    let mut client = match SproutTestClient::connect(&url, &stranger).await {
+    let mut client = match BuzzTestClient::connect(&url, &stranger).await {
         Ok(c) => c,
         // A closed relay may refuse NIP-42 auth for a non-member outright —
         // that is also a valid "denied" outcome.

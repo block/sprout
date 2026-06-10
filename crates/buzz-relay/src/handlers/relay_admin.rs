@@ -16,10 +16,10 @@ use std::sync::Arc;
 use nostr::Event;
 use tracing::{info, warn};
 
-use sprout_core::kind::{
+use buzz_core::kind::{
     RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
 };
-use sprout_db::relay_members::RemoveResult;
+use buzz_db::relay_members::RemoveResult;
 
 use crate::handlers::side_effects::{
     publish_nip43_member_added, publish_nip43_member_removed, publish_nip43_membership_list,

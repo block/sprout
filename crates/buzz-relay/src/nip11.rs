@@ -14,7 +14,7 @@ use crate::connection::MAX_FRAME_BYTES;
 pub(crate) const SUPPORTED_NIPS: &[u32] = &[1, 2, 10, 11, 16, 17, 23, 25, 29, 33, 38, 42, 50];
 
 /// NIP-43 (relay membership). Advertised only when the relay actually
-/// enforces membership (`SPROUT_REQUIRE_RELAY_MEMBERSHIP=true`) AND has a
+/// enforces membership (`BUZZ_REQUIRE_RELAY_MEMBERSHIP=true`) AND has a
 /// stable signing key — both are required for kind 13534/8000/8001 events
 /// to be verifiable by clients.
 pub(crate) const NIP_RELAY_MEMBERSHIP: u32 = 43;

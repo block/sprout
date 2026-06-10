@@ -11,7 +11,7 @@ use std::net::IpAddr;
 
 use nostr::PublicKey;
 use redis::Script;
-use sprout_auth::{
+use buzz_auth::{
     error::AuthError,
     rate_limit::{LimitType, RateLimitResult, RateLimiter},
 };
@@ -101,7 +101,7 @@ impl RateLimiter for RedisRateLimiter {
         window_secs: u64,
         limit: u64,
     ) -> Result<RateLimitResult, AuthError> {
-        let key = sprout_auth::rate_limit::rate_limit_key(pubkey, &limit_type);
+        let key = buzz_auth::rate_limit::rate_limit_key(pubkey, &limit_type);
         run_rate_limit(&self.pool, &key, window_secs, limit).await
     }
 
@@ -111,7 +111,7 @@ impl RateLimiter for RedisRateLimiter {
         window_secs: u64,
         limit: u64,
     ) -> Result<RateLimitResult, AuthError> {
-        let key = sprout_auth::rate_limit::ip_rate_limit_key(ip);
+        let key = buzz_auth::rate_limit::ip_rate_limit_key(ip);
         run_rate_limit(&self.pool, &key, window_secs, limit).await
     }
 }

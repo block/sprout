@@ -23,7 +23,7 @@ use crate::filter::SubscriptionRule;
 /// codex/claude doing multi-minute single tool calls). 900s gives 300s of
 /// breathing room above the 600s max shell timeout, so legitimate long-running
 /// tool calls don't race the idle deadline.
-/// Override via `--idle-timeout` / `SPROUT_ACP_IDLE_TIMEOUT`.
+/// Override via `--idle-timeout` / `BUZZ_ACP_IDLE_TIMEOUT`.
 pub(crate) const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 900;
 
 // ── Errors ────────────────────────────────────────────────────────────────────
@@ -165,13 +165,13 @@ impl std::fmt::Display for PermissionMode {
 )]
 pub struct ModelsArgs {
     /// Agent binary to spawn (e.g. "goose", "claude-agent-acp", "codex-acp").
-    #[arg(long, env = "SPROUT_ACP_AGENT_COMMAND", default_value = "goose")]
+    #[arg(long, env = "BUZZ_ACP_AGENT_COMMAND", default_value = "goose")]
     pub agent_command: String,
 
     /// Arguments passed to the agent binary.
     #[arg(
         long,
-        env = "SPROUT_ACP_AGENT_ARGS",
+        env = "BUZZ_ACP_AGENT_ARGS",
         default_value = "acp",
         value_delimiter = ','
     )]
@@ -186,74 +186,74 @@ pub struct ModelsArgs {
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "sprout-acp",
-    about = "ACP harness that bridges Sprout events to AI agents"
+    name = "buzz-acp",
+    about = "ACP harness that bridges Buzz events to AI agents"
 )]
 pub struct CliArgs {
-    #[arg(long, env = "SPROUT_RELAY_URL", default_value = "ws://localhost:3000")]
+    #[arg(long, env = "BUZZ_RELAY_URL", default_value = "ws://localhost:3000")]
     pub relay_url: String,
 
-    #[arg(long, env = "SPROUT_PRIVATE_KEY")]
+    #[arg(long, env = "BUZZ_PRIVATE_KEY")]
     pub private_key: String,
 
     /// Agent owner pubkey (64-char hex). Used for --respond-to=owner-only gate.
-    #[arg(long, env = "SPROUT_ACP_AGENT_OWNER")]
+    #[arg(long, env = "BUZZ_ACP_AGENT_OWNER")]
     pub agent_owner: Option<String>,
 
-    #[arg(long, env = "SPROUT_ACP_AGENT_COMMAND", default_value = "goose")]
+    #[arg(long, env = "BUZZ_ACP_AGENT_COMMAND", default_value = "goose")]
     pub agent_command: String,
 
     #[arg(
         long,
-        env = "SPROUT_ACP_AGENT_ARGS",
+        env = "BUZZ_ACP_AGENT_ARGS",
         default_value = "acp",
         value_delimiter = ','
     )]
     pub agent_args: Vec<String>,
 
-    #[arg(long, env = "SPROUT_ACP_MCP_COMMAND", default_value = "")]
+    #[arg(long, env = "BUZZ_ACP_MCP_COMMAND", default_value = "")]
     pub mcp_command: String,
 
     /// Idle timeout: max seconds of silence before killing a turn.
     /// Resets on any agent stdout activity.
-    #[arg(long, env = "SPROUT_ACP_IDLE_TIMEOUT")]
+    #[arg(long, env = "BUZZ_ACP_IDLE_TIMEOUT")]
     pub idle_timeout: Option<u64>,
 
     /// Absolute wall-clock cap per turn (safety valve).
-    #[arg(long, env = "SPROUT_ACP_MAX_TURN_DURATION", default_value = "3600")]
+    #[arg(long, env = "BUZZ_ACP_MAX_TURN_DURATION", default_value = "3600")]
     pub max_turn_duration: u64,
 
     /// Deprecated: alias for --idle-timeout. If both set, --idle-timeout wins.
-    #[arg(long, env = "SPROUT_ACP_TURN_TIMEOUT", hide = true)]
+    #[arg(long, env = "BUZZ_ACP_TURN_TIMEOUT", hide = true)]
     pub turn_timeout: Option<u64>,
 
     #[arg(
         long,
-        env = "SPROUT_ACP_SYSTEM_PROMPT",
+        env = "BUZZ_ACP_SYSTEM_PROMPT",
         conflicts_with = "system_prompt_file"
     )]
     pub system_prompt: Option<String>,
 
     #[arg(
         long,
-        env = "SPROUT_ACP_SYSTEM_PROMPT_FILE",
+        env = "BUZZ_ACP_SYSTEM_PROMPT_FILE",
         conflicts_with = "system_prompt"
     )]
     pub system_prompt_file: Option<PathBuf>,
 
     /// Number of parallel agent subprocesses.
-    #[arg(long, env = "SPROUT_ACP_AGENTS", default_value_t = 1,
+    #[arg(long, env = "BUZZ_ACP_AGENTS", default_value_t = 1,
           value_parser = clap::value_parser!(u32).range(1..=32))]
     pub agents: u32,
 
     /// Seconds between heartbeat prompts. 0 = disabled.
-    #[arg(long, env = "SPROUT_ACP_HEARTBEAT_INTERVAL", default_value_t = 0)]
+    #[arg(long, env = "BUZZ_ACP_HEARTBEAT_INTERVAL", default_value_t = 0)]
     pub heartbeat_interval: u64,
 
     /// Heartbeat prompt text. Conflicts with --heartbeat-prompt-file.
     #[arg(
         long,
-        env = "SPROUT_ACP_HEARTBEAT_PROMPT",
+        env = "BUZZ_ACP_HEARTBEAT_PROMPT",
         conflicts_with = "heartbeat_prompt_file"
     )]
     pub heartbeat_prompt: Option<String>,
@@ -261,35 +261,35 @@ pub struct CliArgs {
     /// Read heartbeat prompt from file.
     #[arg(
         long,
-        env = "SPROUT_ACP_HEARTBEAT_PROMPT_FILE",
+        env = "BUZZ_ACP_HEARTBEAT_PROMPT_FILE",
         conflicts_with = "heartbeat_prompt"
     )]
     pub heartbeat_prompt_file: Option<PathBuf>,
 
-    #[arg(long, env = "SPROUT_ACP_INITIAL_MESSAGE")]
+    #[arg(long, env = "BUZZ_ACP_INITIAL_MESSAGE")]
     pub initial_message: Option<String>,
 
     #[arg(
         long,
-        env = "SPROUT_ACP_SUBSCRIBE",
+        env = "BUZZ_ACP_SUBSCRIBE",
         default_value = "mentions",
         value_enum
     )]
     pub subscribe: SubscribeMode,
 
-    #[arg(long, env = "SPROUT_ACP_KINDS", value_delimiter = ',')]
+    #[arg(long, env = "BUZZ_ACP_KINDS", value_delimiter = ',')]
     pub kinds: Option<Vec<u32>>,
 
-    #[arg(long, env = "SPROUT_ACP_CHANNELS", value_delimiter = ',')]
+    #[arg(long, env = "BUZZ_ACP_CHANNELS", value_delimiter = ',')]
     pub channels: Option<Vec<String>>,
 
-    #[arg(long, env = "SPROUT_ACP_NO_MENTION_FILTER")]
+    #[arg(long, env = "BUZZ_ACP_NO_MENTION_FILTER")]
     pub no_mention_filter: bool,
 
-    #[arg(long, env = "SPROUT_ACP_CONFIG", default_value = "./sprout-acp.toml")]
+    #[arg(long, env = "BUZZ_ACP_CONFIG", default_value = "./sprout-acp.toml")]
     pub config: PathBuf,
 
-    #[arg(long, env = "SPROUT_ACP_DEDUP", default_value = "queue", value_enum)]
+    #[arg(long, env = "BUZZ_ACP_DEDUP", default_value = "queue", value_enum)]
     pub dedup: DedupMode,
 
     /// How to handle new @mentions while a turn is already in-flight.
@@ -297,33 +297,33 @@ pub struct CliArgs {
     /// owner-interrupt: cancel only for agent owner's mentions.
     #[arg(
         long,
-        env = "SPROUT_ACP_MULTIPLE_EVENT_HANDLING",
+        env = "BUZZ_ACP_MULTIPLE_EVENT_HANDLING",
         default_value = "queue",
         value_enum
     )]
     pub multiple_event_handling: MultipleEventHandling,
 
-    #[arg(long, env = "SPROUT_ACP_NO_IGNORE_SELF")]
+    #[arg(long, env = "BUZZ_ACP_NO_IGNORE_SELF")]
     pub no_ignore_self: bool,
 
     /// Maximum number of context messages to include for thread replies and DMs.
     /// Set to 0 to disable automatic context fetching. Max 100.
-    #[arg(long, env = "SPROUT_ACP_CONTEXT_MESSAGE_LIMIT", default_value_t = 12,
+    #[arg(long, env = "BUZZ_ACP_CONTEXT_MESSAGE_LIMIT", default_value_t = 12,
           value_parser = clap::value_parser!(u32).range(0..=100))]
     pub context_message_limit: u32,
 
     /// Maximum turns per session before proactive rotation. 0 = disabled
     /// (rotate only on MaxTokens / MaxTurnRequests).
-    #[arg(long, env = "SPROUT_ACP_MAX_TURNS_PER_SESSION", default_value_t = 0,
+    #[arg(long, env = "BUZZ_ACP_MAX_TURNS_PER_SESSION", default_value_t = 0,
           value_parser = clap::value_parser!(u32))]
     pub max_turns_per_session: u32,
 
     /// Disable automatic presence (online/offline) status.
-    #[arg(long, env = "SPROUT_ACP_NO_PRESENCE")]
+    #[arg(long, env = "BUZZ_ACP_NO_PRESENCE")]
     pub no_presence: bool,
 
     /// Disable typing indicators while agent is processing.
-    #[arg(long, env = "SPROUT_ACP_NO_TYPING")]
+    #[arg(long, env = "BUZZ_ACP_NO_TYPING")]
     pub no_typing: bool,
 
     /// Enable NIP-AE agent core memory injection.
@@ -331,13 +331,13 @@ pub struct CliArgs {
     /// Memory injection is on by default. When enabled, the harness
     /// fetches the agent's per-session core engram and renders it as an
     /// `[Agent Memory — core]` prompt section (or renders the onboarding nudge
-    /// when the relay confirms no core engram exists). The `sprout mem` CLI
+    /// when the relay confirms no core engram exists). The `buzz mem` CLI
     /// and the relay's acceptance of kind:30174 engrams are unaffected — this
     /// flag controls prompt-time injection in the ACP harness only.
-    /// Pass `--no-memory` / `SPROUT_ACP_NO_MEMORY=true` to disable.
+    /// Pass `--no-memory` / `BUZZ_ACP_NO_MEMORY=true` to disable.
     #[arg(
         long,
-        env = "SPROUT_ACP_MEMORY",
+        env = "BUZZ_ACP_MEMORY",
         conflicts_with = "no_memory",
         default_value_t = true
     )]
@@ -346,26 +346,26 @@ pub struct CliArgs {
     /// Disable NIP-AE agent core memory injection.
     ///
     /// Memory injection is on by default; set this flag/env var to opt out.
-    #[arg(long, env = "SPROUT_ACP_NO_MEMORY", conflicts_with = "memory")]
+    #[arg(long, env = "BUZZ_ACP_NO_MEMORY", conflicts_with = "memory")]
     pub no_memory: bool,
 
     /// Disable the [Base] platform-context section prepended to every prompt.
     /// When set, agents receive only the persona [System] prompt with no Sprout orientation.
-    #[arg(long, env = "SPROUT_ACP_NO_BASE_PROMPT")]
+    #[arg(long, env = "BUZZ_ACP_NO_BASE_PROMPT")]
     pub no_base_prompt: bool,
 
     /// Path to a custom base prompt file. Overrides the compiled-in default.
     /// Mutually exclusive with --no-base-prompt.
     #[arg(
         long,
-        env = "SPROUT_ACP_BASE_PROMPT_FILE",
+        env = "BUZZ_ACP_BASE_PROMPT_FILE",
         conflicts_with = "no_base_prompt"
     )]
     pub base_prompt_file: Option<PathBuf>,
 
     /// Desired LLM model ID. Applied to every new ACP session after creation.
     /// Use `sprout-acp models` to discover available model IDs.
-    #[arg(long, env = "SPROUT_ACP_MODEL")]
+    #[arg(long, env = "BUZZ_ACP_MODEL")]
     pub model: Option<String>,
 
     /// Permission mode for agents that support `session/set_config_option`
@@ -376,7 +376,7 @@ pub struct CliArgs {
     /// behaviour.
     #[arg(
         long,
-        env = "SPROUT_ACP_PERMISSION_MODE",
+        env = "BUZZ_ACP_PERMISSION_MODE",
         default_value = "bypass-permissions",
         value_enum
     )]
@@ -386,7 +386,7 @@ pub struct CliArgs {
     /// Modes: owner-only (default), allowlist, anyone, nobody.
     #[arg(
         long,
-        env = "SPROUT_ACP_RESPOND_TO",
+        env = "BUZZ_ACP_RESPOND_TO",
         default_value = "owner-only",
         value_enum
     )]
@@ -394,20 +394,20 @@ pub struct CliArgs {
 
     /// Comma-separated 64-char hex pubkeys for allowlist mode.
     /// Owner pubkey is always implicitly included.
-    #[arg(long, env = "SPROUT_ACP_RESPOND_TO_ALLOWLIST", value_delimiter = ',')]
+    #[arg(long, env = "BUZZ_ACP_RESPOND_TO_ALLOWLIST", value_delimiter = ',')]
     pub respond_to_allowlist: Option<Vec<String>>,
 
     /// Path to a persona pack directory. Used with --persona-name to configure
     /// the agent from a .persona.md pack instead of CLI flags.
-    #[arg(long, env = "SPROUT_ACP_PERSONA_PACK")]
+    #[arg(long, env = "BUZZ_ACP_PERSONA_PACK")]
     pub persona_pack: Option<PathBuf>,
 
     /// Name of the persona within the pack to use. Required when --persona-pack is set.
-    #[arg(long, env = "SPROUT_ACP_PERSONA_NAME")]
+    #[arg(long, env = "BUZZ_ACP_PERSONA_NAME")]
     pub persona_name: Option<String>,
 
     /// Publish encrypted ACP observer frames over the relay.
-    #[arg(long, env = "SPROUT_ACP_RELAY_OBSERVER", default_value_t = false)]
+    #[arg(long, env = "BUZZ_ACP_RELAY_OBSERVER", default_value_t = false)]
     pub relay_observer: bool,
 }
 
@@ -454,7 +454,7 @@ pub struct Config {
     /// Whether NIP-AE agent core memory injection is enabled. When false,
     /// the harness skips the per-session core engram fetch and renders no
     /// `[Agent Memory — core]` section. On by default; disabled via the
-    /// `--no-memory` / `SPROUT_ACP_NO_MEMORY` opt-out.
+    /// `--no-memory` / `BUZZ_ACP_NO_MEMORY` opt-out.
     pub memory_enabled: bool,
     /// Desired LLM model ID. Applied after every `session_new_full()`.
     pub model: Option<String>,
@@ -464,7 +464,7 @@ pub struct Config {
     pub respond_to: RespondTo,
     /// Validated allowlist of pubkey hex strings (used when respond_to == Allowlist).
     pub respond_to_allowlist: HashSet<String>,
-    /// Per-persona env vars to inject at agent spawn time (e.g., GOOSE_PROVIDER, GOOSE_MODEL, SPROUT_AGENT_MODEL).
+    /// Per-persona env vars to inject at agent spawn time (e.g., GOOSE_PROVIDER, GOOSE_MODEL, BUZZ_AGENT_MODEL).
     /// Populated from persona pack resolution. Empty when no pack is configured.
     pub persona_env_vars: Vec<(String, String)>,
     /// Whether to publish encrypted observer frames through the relay.
@@ -517,7 +517,7 @@ fn default_agent_args(command: &str) -> Option<Vec<String>> {
     match normalize_agent_command_identity(command).as_str() {
         "goose" => Some(vec!["acp".to_string()]),
         "codex" | "codex-acp" | "claude-agent-acp" | "claude-code-acp" | "claude-code"
-        | "claudecode" | "sprout-agent" => Some(Vec::new()),
+        | "claudecode" | "buzz-agent" => Some(Vec::new()),
         _ => None,
     }
 }
@@ -560,8 +560,8 @@ pub fn normalize_agent_args(command: &str, agent_args: Vec<String>) -> Vec<Strin
 /// // Must be called before tokio runtime starts — see Rust 2024 edition safety.
 pub fn propagate_legacy_env_vars() {
     for (legacy, canonical) in [
-        ("SPROUT_ACP_PRIVATE_KEY", "SPROUT_PRIVATE_KEY"),
-        ("SPROUT_ACP_API_TOKEN", "SPROUT_API_TOKEN"),
+        ("BUZZ_ACP_PRIVATE_KEY", "BUZZ_PRIVATE_KEY"),
+        ("BUZZ_ACP_API_TOKEN", "BUZZ_API_TOKEN"),
     ] {
         if std::env::var(canonical).is_err() {
             if let Ok(val) = std::env::var(legacy) {
@@ -675,16 +675,16 @@ impl Config {
             let raw = match (args.idle_timeout, args.turn_timeout) {
                 (Some(idle), Some(_turn)) => {
                     tracing::warn!(
-                        "--turn-timeout / SPROUT_ACP_TURN_TIMEOUT is deprecated and ignored \
-                         when --idle-timeout / SPROUT_ACP_IDLE_TIMEOUT is also set"
+                        "--turn-timeout / BUZZ_ACP_TURN_TIMEOUT is deprecated and ignored \
+                         when --idle-timeout / BUZZ_ACP_IDLE_TIMEOUT is also set"
                     );
                     idle
                 }
                 (Some(idle), None) => idle,
                 (None, Some(turn)) => {
                     tracing::warn!(
-                        "--turn-timeout / SPROUT_ACP_TURN_TIMEOUT is deprecated; \
-                         use --idle-timeout / SPROUT_ACP_IDLE_TIMEOUT instead"
+                        "--turn-timeout / BUZZ_ACP_TURN_TIMEOUT is deprecated; \
+                         use --idle-timeout / BUZZ_ACP_IDLE_TIMEOUT instead"
                     );
                     turn
                 }
@@ -743,7 +743,7 @@ impl Config {
         let (persona_system_prompt, persona_model, persona_env_vars) =
             match (&args.persona_pack, &args.persona_name) {
                 (Some(pack_dir), Some(name)) => {
-                    let pack = sprout_persona::resolve::resolve_pack(pack_dir).map_err(|e| {
+                    let pack = buzz_persona::resolve::resolve_pack(pack_dir).map_err(|e| {
                         ConfigError::ConfigFile(format!(
                             "failed to resolve pack {}: {e}",
                             pack_dir.display()
@@ -966,7 +966,7 @@ pub fn resolve_channel_filters(
     discovered_channels: &[Uuid],
     rules: &[SubscriptionRule],
 ) -> HashMap<Uuid, ChannelFilter> {
-    use sprout_core::kind::{
+    use buzz_core::kind::{
         KIND_STREAM_MESSAGE, KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
     };
 
@@ -1068,7 +1068,7 @@ pub fn resolve_dynamic_channel_filter(
     channel_id: Uuid,
     rules: &[crate::filter::SubscriptionRule],
 ) -> Option<ChannelFilter> {
-    use sprout_core::kind::{
+    use buzz_core::kind::{
         KIND_STREAM_MESSAGE, KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
     };
 
@@ -1234,9 +1234,9 @@ mod tests {
             let f = result.get(ch).expect("channel should be present");
             assert!(f.require_mention, "mentions mode requires mention");
             let kinds = f.kinds.as_ref().expect("should have kinds");
-            assert!(kinds.contains(&sprout_core::kind::KIND_STREAM_MESSAGE));
-            assert!(kinds.contains(&sprout_core::kind::KIND_WORKFLOW_APPROVAL_REQUESTED));
-            assert!(kinds.contains(&sprout_core::kind::KIND_STREAM_REMINDER));
+            assert!(kinds.contains(&buzz_core::kind::KIND_STREAM_MESSAGE));
+            assert!(kinds.contains(&buzz_core::kind::KIND_WORKFLOW_APPROVAL_REQUESTED));
+            assert!(kinds.contains(&buzz_core::kind::KIND_STREAM_REMINDER));
         }
     }
 
@@ -1311,11 +1311,11 @@ mod tests {
     #[test]
     fn normalizes_sprout_agent_args_to_empty() {
         assert_eq!(
-            normalize_agent_args("sprout-agent", Vec::new()),
+            normalize_agent_args("buzz-agent", Vec::new()),
             Vec::<String>::new()
         );
         assert_eq!(
-            normalize_agent_args("sprout-agent", vec!["acp".into()]),
+            normalize_agent_args("buzz-agent", vec!["acp".into()]),
             Vec::<String>::new()
         );
     }
@@ -1890,7 +1890,7 @@ channels = "ALL"
     #[test]
     fn test_permission_mode_value_enum_camel_case_aliases() {
         // Operators may set env vars using the camelCase wire-format strings
-        // (e.g. SPROUT_ACP_PERMISSION_MODE=bypassPermissions). The #[value(alias)]
+        // (e.g. BUZZ_ACP_PERMISSION_MODE=bypassPermissions). The #[value(alias)]
         // attributes ensure these parse correctly.
         use clap::ValueEnum;
         let cases = [

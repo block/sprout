@@ -1,5 +1,5 @@
 [package]
-name = "sprout-persona"
+name = "buzz-persona"
 version = "0.1.0"
 edition = "2021"
 description = "Parser and loader for Sprout persona pack files (.persona.md)"

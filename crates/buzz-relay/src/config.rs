@@ -8,8 +8,8 @@ use tracing::warn;
 /// Errors that can occur while loading relay configuration.
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    /// The `SPROUT_BIND_ADDR` environment variable could not be parsed as a socket address.
-    #[error("invalid SPROUT_BIND_ADDR: {0}")]
+    /// The `BUZZ_BIND_ADDR` environment variable could not be parsed as a socket address.
+    #[error("invalid BUZZ_BIND_ADDR: {0}")]
     InvalidBindAddr(String),
     /// A configuration value failed validation.
     #[error("invalid config: {0}")]
@@ -38,7 +38,7 @@ pub struct Config {
     /// Per-connection outbound message buffer size (number of messages).
     pub send_buffer_size: usize,
     /// Authentication provider configuration.
-    pub auth: sprout_auth::AuthConfig,
+    pub auth: buzz_auth::AuthConfig,
     /// Whether REST API requests must present a valid token. Independent of
     /// WebSocket protocol auth, which is *always* required by REQ/EVENT/COUNT.
     pub require_auth_token: bool,
@@ -86,16 +86,16 @@ pub struct Config {
     /// signature is cryptographically self-proving). This flag only controls
     /// whether NIP-OA can grant membership access on closed relays.
     ///
-    /// Default: `false`. Set via `SPROUT_ALLOW_NIP_OA_AUTH=true`.
+    /// Default: `false`. Set via `BUZZ_ALLOW_NIP_OA_AUTH=true`.
     pub allow_nip_oa_auth: bool,
 
     /// Media storage configuration (S3/MinIO).
-    pub media: sprout_media::MediaConfig,
+    pub media: buzz_media::MediaConfig,
 
     /// Optional override for ephemeral channel TTL (in seconds).
     /// When set, any channel created with a TTL tag will use this value instead
     /// of the client-provided one. Useful for testing ephemeral expiry quickly.
-    /// Example: `SPROUT_EPHEMERAL_TTL_OVERRIDE=60` → all ephemeral channels expire
+    /// Example: `BUZZ_EPHEMERAL_TTL_OVERRIDE=60` → all ephemeral channels expire
     /// 60 seconds after the last message.
     pub ephemeral_ttl_override: Option<i32>,
 
@@ -124,7 +124,7 @@ pub struct Config {
 impl Config {
     /// Loads configuration from environment variables, falling back to development defaults.
     pub fn from_env() -> Result<Self, ConfigError> {
-        let bind_addr = std::env::var("SPROUT_BIND_ADDR")
+        let bind_addr = std::env::var("BUZZ_BIND_ADDR")
             .unwrap_or_else(|_| "0.0.0.0:3000".to_string())
             .parse::<SocketAddr>()
             .map_err(|e| ConfigError::InvalidBindAddr(e.to_string()))?;
@@ -144,38 +144,38 @@ impl Config {
         let relay_url =
             std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string());
 
-        let max_connections = std::env::var("SPROUT_MAX_CONNECTIONS")
+        let max_connections = std::env::var("BUZZ_MAX_CONNECTIONS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(10_000);
 
-        let max_concurrent_handlers = std::env::var("SPROUT_MAX_CONCURRENT_HANDLERS")
+        let max_concurrent_handlers = std::env::var("BUZZ_MAX_CONCURRENT_HANDLERS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(1024);
 
-        let send_buffer_size = std::env::var("SPROUT_SEND_BUFFER")
+        let send_buffer_size = std::env::var("BUZZ_SEND_BUFFER")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(1_000);
 
-        let require_auth_token = std::env::var("SPROUT_REQUIRE_AUTH_TOKEN")
+        let require_auth_token = std::env::var("BUZZ_REQUIRE_AUTH_TOKEN")
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
-        let pubkey_allowlist_enabled = std::env::var("SPROUT_PUBKEY_ALLOWLIST")
+        let pubkey_allowlist_enabled = std::env::var("BUZZ_PUBKEY_ALLOWLIST")
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
-        let require_relay_membership = std::env::var("SPROUT_REQUIRE_RELAY_MEMBERSHIP")
+        let require_relay_membership = std::env::var("BUZZ_REQUIRE_RELAY_MEMBERSHIP")
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
-        let allow_nip_oa_auth = std::env::var("SPROUT_ALLOW_NIP_OA_AUTH")
+        let allow_nip_oa_auth = std::env::var("BUZZ_ALLOW_NIP_OA_AUTH")
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
-        // Note: intentionally not prefixed with SPROUT_ — this is a relay-identity
+        // Note: intentionally not prefixed with BUZZ_ — this is a relay-identity
         // config that may be shared across multiple services (e.g., ACP agent).
         let relay_owner_pubkey = std::env::var("RELAY_OWNER_PUBKEY")
             .ok()
@@ -195,67 +195,67 @@ impl Config {
                 }
             });
 
-        let auth = sprout_auth::AuthConfig::default();
+        let auth = buzz_auth::AuthConfig::default();
 
         if !require_auth_token {
             warn!(
-                "SPROUT_REQUIRE_AUTH_TOKEN is false — REST API requests bypass token auth. \
+                "BUZZ_REQUIRE_AUTH_TOKEN is false — REST API requests bypass token auth. \
                  WebSocket protocol auth is unaffected. Set to true for production."
             );
         }
 
-        let cors_origins = std::env::var("SPROUT_CORS_ORIGINS")
+        let cors_origins = std::env::var("BUZZ_CORS_ORIGINS")
             .unwrap_or_default()
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
 
-        let relay_private_key = std::env::var("SPROUT_RELAY_PRIVATE_KEY").ok();
+        let relay_private_key = std::env::var("BUZZ_RELAY_PRIVATE_KEY").ok();
 
-        let uds_path = std::env::var("SPROUT_UDS_PATH")
+        let uds_path = std::env::var("BUZZ_UDS_PATH")
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
-        let health_port = std::env::var("SPROUT_HEALTH_PORT")
+        let health_port = std::env::var("BUZZ_HEALTH_PORT")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(8080);
 
-        let metrics_port = std::env::var("SPROUT_METRICS_PORT")
+        let metrics_port = std::env::var("BUZZ_METRICS_PORT")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(9102);
 
-        let media = sprout_media::MediaConfig {
-            s3_endpoint: std::env::var("SPROUT_S3_ENDPOINT")
+        let media = buzz_media::MediaConfig {
+            s3_endpoint: std::env::var("BUZZ_S3_ENDPOINT")
                 .unwrap_or_else(|_| "http://localhost:9000".to_string()),
-            s3_access_key: std::env::var("SPROUT_S3_ACCESS_KEY")
+            s3_access_key: std::env::var("BUZZ_S3_ACCESS_KEY")
                 .unwrap_or_else(|_| "sprout_dev".to_string()),
-            s3_secret_key: std::env::var("SPROUT_S3_SECRET_KEY")
+            s3_secret_key: std::env::var("BUZZ_S3_SECRET_KEY")
                 .unwrap_or_else(|_| "sprout_dev_secret".to_string()),
-            s3_bucket: std::env::var("SPROUT_S3_BUCKET")
+            s3_bucket: std::env::var("BUZZ_S3_BUCKET")
                 .unwrap_or_else(|_| "sprout-media".to_string()),
-            max_image_bytes: std::env::var("SPROUT_MAX_IMAGE_BYTES")
+            max_image_bytes: std::env::var("BUZZ_MAX_IMAGE_BYTES")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(50 * 1024 * 1024),
-            max_gif_bytes: std::env::var("SPROUT_MAX_GIF_BYTES")
+            max_gif_bytes: std::env::var("BUZZ_MAX_GIF_BYTES")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(10 * 1024 * 1024),
-            max_video_bytes: std::env::var("SPROUT_MAX_VIDEO_BYTES")
+            max_video_bytes: std::env::var("BUZZ_MAX_VIDEO_BYTES")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(500 * 1024 * 1024),
-            max_file_bytes: std::env::var("SPROUT_MAX_FILE_BYTES")
+            max_file_bytes: std::env::var("BUZZ_MAX_FILE_BYTES")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(100 * 1024 * 1024),
-            public_base_url: std::env::var("SPROUT_MEDIA_BASE_URL")
+            public_base_url: std::env::var("BUZZ_MEDIA_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:3000/media".to_string()),
-            server_domain: std::env::var("SPROUT_MEDIA_SERVER_DOMAIN")
+            server_domain: std::env::var("BUZZ_MEDIA_SERVER_DOMAIN")
                 .ok()
                 .filter(|s| !s.is_empty())
                 .or_else(|| {
@@ -277,20 +277,20 @@ impl Config {
                 }),
         };
 
-        let ephemeral_ttl_override = std::env::var("SPROUT_EPHEMERAL_TTL_OVERRIDE")
+        let ephemeral_ttl_override = std::env::var("BUZZ_EPHEMERAL_TTL_OVERRIDE")
             .ok()
             .and_then(|v| v.parse::<i32>().ok())
             .filter(|&v| v > 0);
 
         if let Some(ttl) = ephemeral_ttl_override {
             warn!(
-                "SPROUT_EPHEMERAL_TTL_OVERRIDE={ttl}s — all ephemeral channels will use \
+                "BUZZ_EPHEMERAL_TTL_OVERRIDE={ttl}s — all ephemeral channels will use \
                  this TTL instead of the client-provided value."
             );
         }
 
         // Git server config
-        let git_repo_path: std::path::PathBuf = std::env::var("SPROUT_GIT_REPO_PATH")
+        let git_repo_path: std::path::PathBuf = std::env::var("BUZZ_GIT_REPO_PATH")
             .unwrap_or_else(|_| "./repos".to_string())
             .into();
         // Ensure the git repo root exists. The smart-HTTP transport and the
@@ -302,30 +302,30 @@ impl Config {
         // ops to mkdir it out of band.
         if let Err(e) = std::fs::create_dir_all(&git_repo_path) {
             return Err(ConfigError::InvalidValue(format!(
-                "SPROUT_GIT_REPO_PATH={} could not be created: {e}",
+                "BUZZ_GIT_REPO_PATH={} could not be created: {e}",
                 git_repo_path.display()
             )));
         }
-        let git_max_pack_bytes: u64 = std::env::var("SPROUT_GIT_MAX_PACK_BYTES")
+        let git_max_pack_bytes: u64 = std::env::var("BUZZ_GIT_MAX_PACK_BYTES")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(500 * 1024 * 1024); // 500 MB
-        let git_max_repos_per_pubkey: u32 = std::env::var("SPROUT_GIT_MAX_REPOS_PER_PUBKEY")
+        let git_max_repos_per_pubkey: u32 = std::env::var("BUZZ_GIT_MAX_REPOS_PER_PUBKEY")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(100);
-        let git_max_concurrent_ops: usize = std::env::var("SPROUT_GIT_MAX_CONCURRENT_OPS")
+        let git_max_concurrent_ops: usize = std::env::var("BUZZ_GIT_MAX_CONCURRENT_OPS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(20);
-        let git_hook_hmac_secret: String = std::env::var("SPROUT_GIT_HOOK_HMAC_SECRET")
+        let git_hook_hmac_secret: String = std::env::var("BUZZ_GIT_HOOK_HMAC_SECRET")
             .unwrap_or_else(|_| {
                 // Generate a random secret if not configured (dev mode).
                 let secret: [u8; 32] = rand::random();
                 hex::encode(secret)
             });
         // Web UI static file serving
-        let web_dir = std::env::var("SPROUT_WEB_DIR")
+        let web_dir = std::env::var("BUZZ_WEB_DIR")
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -334,22 +334,22 @@ impl Config {
         if let Some(ref dir) = web_dir {
             if !dir.join("index.html").is_file() {
                 return Err(ConfigError::InvalidValue(format!(
-                    "SPROUT_WEB_DIR={} does not contain index.html",
+                    "BUZZ_WEB_DIR={} does not contain index.html",
                     dir.display()
                 )));
             }
             tracing::info!(
-                "SPROUT_WEB_DIR={} — serving web UI from relay",
+                "BUZZ_WEB_DIR={} — serving web UI from relay",
                 dir.display()
             );
         }
 
         // Reject explicitly-configured secrets that are too short.
         // The auto-generated fallback is always 64 hex chars (32 bytes), so this
-        // only fires when someone sets SPROUT_GIT_HOOK_HMAC_SECRET to a weak value.
-        if std::env::var("SPROUT_GIT_HOOK_HMAC_SECRET").is_ok() && git_hook_hmac_secret.len() < 32 {
+        // only fires when someone sets BUZZ_GIT_HOOK_HMAC_SECRET to a weak value.
+        if std::env::var("BUZZ_GIT_HOOK_HMAC_SECRET").is_ok() && git_hook_hmac_secret.len() < 32 {
             return Err(ConfigError::InvalidValue(
-                "SPROUT_GIT_HOOK_HMAC_SECRET must be at least 32 characters (16 bytes hex)"
+                "BUZZ_GIT_HOOK_HMAC_SECRET must be at least 32 characters (16 bytes hex)"
                     .to_string(),
             ));
         }
@@ -426,9 +426,9 @@ mod tests {
     #[test]
     fn invalid_bind_addr_returns_error() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        std::env::set_var("SPROUT_BIND_ADDR", "not-an-addr");
+        std::env::set_var("BUZZ_BIND_ADDR", "not-an-addr");
         let result = Config::from_env();
-        std::env::remove_var("SPROUT_BIND_ADDR");
+        std::env::remove_var("BUZZ_BIND_ADDR");
         assert!(matches!(result, Err(ConfigError::InvalidBindAddr(_))));
     }
 
@@ -436,7 +436,7 @@ mod tests {
     fn server_domain_auto_derived_from_relay_url() {
         let _guard = ENV_MUTEX.lock().unwrap();
         // Clear explicit override so auto-derive kicks in
-        std::env::remove_var("SPROUT_MEDIA_SERVER_DOMAIN");
+        std::env::remove_var("BUZZ_MEDIA_SERVER_DOMAIN");
         std::env::set_var("RELAY_URL", "ws://localhost:3000");
         let config = Config::from_env().expect("config");
         std::env::remove_var("RELAY_URL");
@@ -449,7 +449,7 @@ mod tests {
     #[test]
     fn server_domain_auto_derived_default_port() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        std::env::remove_var("SPROUT_MEDIA_SERVER_DOMAIN");
+        std::env::remove_var("BUZZ_MEDIA_SERVER_DOMAIN");
         std::env::set_var("RELAY_URL", "wss://relay.example.com");
         let config = Config::from_env().expect("config");
         std::env::remove_var("RELAY_URL");
@@ -474,9 +474,9 @@ mod tests {
         let nested = base.join("nested").join("repos");
         assert!(!nested.exists(), "test precondition: path must not exist");
 
-        std::env::set_var("SPROUT_GIT_REPO_PATH", &nested);
+        std::env::set_var("BUZZ_GIT_REPO_PATH", &nested);
         let result = Config::from_env();
-        std::env::remove_var("SPROUT_GIT_REPO_PATH");
+        std::env::remove_var("BUZZ_GIT_REPO_PATH");
 
         let config = result.expect("config should self-bootstrap missing git_repo_path");
         assert_eq!(config.git_repo_path, nested);
@@ -496,22 +496,22 @@ mod tests {
         // Try to create a path under a regular file — must fail.
         // Using /dev/null as the parent guarantees create_dir_all fails on unix.
         let bogus = std::path::PathBuf::from("/dev/null/cannot-create-here");
-        std::env::set_var("SPROUT_GIT_REPO_PATH", &bogus);
+        std::env::set_var("BUZZ_GIT_REPO_PATH", &bogus);
         let result = Config::from_env();
-        std::env::remove_var("SPROUT_GIT_REPO_PATH");
+        std::env::remove_var("BUZZ_GIT_REPO_PATH");
         assert!(
-            matches!(result, Err(ConfigError::InvalidValue(ref msg)) if msg.contains("SPROUT_GIT_REPO_PATH")),
-            "expected InvalidValue mentioning SPROUT_GIT_REPO_PATH, got {result:?}"
+            matches!(result, Err(ConfigError::InvalidValue(ref msg)) if msg.contains("BUZZ_GIT_REPO_PATH")),
+            "expected InvalidValue mentioning BUZZ_GIT_REPO_PATH, got {result:?}"
         );
     }
 
     #[test]
     fn server_domain_explicit_override_wins() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        std::env::set_var("SPROUT_MEDIA_SERVER_DOMAIN", "custom.example.com");
+        std::env::set_var("BUZZ_MEDIA_SERVER_DOMAIN", "custom.example.com");
         std::env::set_var("RELAY_URL", "ws://localhost:3000");
         let config = Config::from_env().expect("config");
-        std::env::remove_var("SPROUT_MEDIA_SERVER_DOMAIN");
+        std::env::remove_var("BUZZ_MEDIA_SERVER_DOMAIN");
         std::env::remove_var("RELAY_URL");
         assert_eq!(
             config.media.server_domain.as_deref(),

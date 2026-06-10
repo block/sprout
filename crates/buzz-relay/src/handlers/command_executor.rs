@@ -17,9 +17,9 @@ use sha2::{Digest, Sha256};
 use tracing::warn;
 use uuid::Uuid;
 
-use sprout_core::kind::*;
-use sprout_db::workflow::{ApprovalStatus, RunStatus};
-use sprout_workflow::executor::TriggerContext;
+use buzz_core::kind::*;
+use buzz_db::workflow::{ApprovalStatus, RunStatus};
+use buzz_workflow::executor::TriggerContext;
 
 use crate::state::AppState;
 use crate::webhook_secret;
@@ -586,14 +586,14 @@ async fn handle_workflow_def(
     }
 
     // 3. Parse YAML from event.content
-    let (def, definition_json_str) = sprout_workflow::WorkflowEngine::parse_yaml(&event.content)
+    let (def, definition_json_str) = buzz_workflow::WorkflowEngine::parse_yaml(&event.content)
         .map_err(|e| IngestError::Rejected(format!("invalid: workflow YAML parse error: {e}")))?;
 
     let mut definition_json: serde_json::Value = serde_json::from_str(&definition_json_str)
         .map_err(|e| IngestError::Internal(format!("error: json parse of definition: {e}")))?;
 
     // Generate webhook secret if this workflow uses a Webhook trigger
-    let webhook_secret = if matches!(def.trigger, sprout_workflow::TriggerDef::Webhook) {
+    let webhook_secret = if matches!(def.trigger, buzz_workflow::TriggerDef::Webhook) {
         let secret = webhook_secret::generate_webhook_secret();
         webhook_secret::inject_secret(&mut definition_json, &secret);
         Some(secret)
@@ -747,7 +747,7 @@ async fn handle_workflow_trigger(
     let def_value = workflow.definition.clone();
     let trigger_ctx_clone = trigger_ctx.clone();
     tokio::spawn(async move {
-        let def: sprout_workflow::WorkflowDef = match serde_json::from_value(def_value) {
+        let def: buzz_workflow::WorkflowDef = match serde_json::from_value(def_value) {
             Ok(d) => d,
             Err(e) => {
                 tracing::error!("workflow_trigger: failed to parse definition: {e}");
@@ -767,7 +767,7 @@ async fn handle_workflow_trigger(
             }
         };
 
-        let result = sprout_workflow::executor::execute_from_step(
+        let result = buzz_workflow::executor::execute_from_step(
             &engine,
             run_id,
             &def,
@@ -1071,8 +1071,8 @@ async fn handle_approval_deny(
 
 /// Resume a suspended workflow run after an approval gate has been granted.
 async fn resume_workflow_after_approval(
-    engine: Arc<sprout_workflow::WorkflowEngine>,
-    db: sprout_db::Db,
+    engine: Arc<buzz_workflow::WorkflowEngine>,
+    db: buzz_db::Db,
     run_id: Uuid,
     workflow_id: Uuid,
     resume_index: usize,
@@ -1102,7 +1102,7 @@ async fn resume_workflow_after_approval(
         }
     };
 
-    let def: sprout_workflow::WorkflowDef =
+    let def: buzz_workflow::WorkflowDef =
         match serde_json::from_value(workflow.definition.clone()) {
             Ok(d) => d,
             Err(e) => {
@@ -1146,7 +1146,7 @@ async fn resume_workflow_after_approval(
 
     // Execute remaining steps
     let existing_trace = run.execution_trace.as_array().cloned();
-    let result = sprout_workflow::executor::execute_from_step(
+    let result = buzz_workflow::executor::execute_from_step(
         &engine,
         run_id,
         &def,

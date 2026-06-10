@@ -290,7 +290,7 @@ fn cache_path_for(cfg: &PkceOAuthConfig) -> Result<PathBuf, AgentError> {
                 .map_err(|_| AgentError::Llm("oauth cache: $HOME not set".into()))?;
             PathBuf::from(home)
                 .join(".config")
-                .join("sprout-agent")
+                .join("buzz-agent")
                 .join("oauth")
                 .join(&cfg.cache_namespace)
         }

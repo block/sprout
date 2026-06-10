@@ -19,7 +19,7 @@ use axum::extract::Form;
 use axum::{routing::get, routing::post, Json, Router};
 use serde::Deserialize;
 use serde_json::json;
-use sprout_agent::auth::{PkceOAuthConfig, PkceOAuthTokenSource, TokenSource};
+use buzz_agent::auth::{PkceOAuthConfig, PkceOAuthTokenSource, TokenSource};
 use tempfile::TempDir;
 
 #[derive(Deserialize)]
@@ -334,14 +334,14 @@ impl AgentHarness {
     async fn spawn_databricks(base_url: &str, model: &str) -> Self {
         let bin = env!("CARGO_BIN_EXE_sprout-agent");
         let mut cmd = tokio::process::Command::new(bin);
-        cmd.env("SPROUT_AGENT_PROVIDER", "databricks")
+        cmd.env("BUZZ_AGENT_PROVIDER", "databricks")
             .env("DATABRICKS_HOST", base_url)
             .env("DATABRICKS_MODEL", model)
             .env("DATABRICKS_TOKEN", "test-bearer")
-            .env("SPROUT_AGENT_LLM_TIMEOUT_SECS", "5")
-            .env("SPROUT_AGENT_TOOL_TIMEOUT_SECS", "5")
-            .env("SPROUT_AGENT_MAX_ROUNDS", "2")
-            .env("SPROUT_AGENT_MCP_INIT_TIMEOUT_SECS", "2")
+            .env("BUZZ_AGENT_LLM_TIMEOUT_SECS", "5")
+            .env("BUZZ_AGENT_TOOL_TIMEOUT_SECS", "5")
+            .env("BUZZ_AGENT_MAX_ROUNDS", "2")
+            .env("BUZZ_AGENT_MCP_INIT_TIMEOUT_SECS", "2")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

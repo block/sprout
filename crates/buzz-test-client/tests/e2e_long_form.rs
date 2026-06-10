@@ -21,7 +21,7 @@
 use std::time::Duration;
 
 use nostr::{Alphabet, EventBuilder, Filter, Keys, Kind, SingleLetterTag, Tag, Timestamp};
-use sprout_test_client::SproutTestClient;
+use buzz_test_client::BuzzTestClient;
 
 const KIND_LONG_FORM: u16 = 30023;
 
@@ -60,7 +60,7 @@ fn build_long_form_event(
 async fn test_long_form_accepted() {
     let url = relay_url();
     let keys = Keys::generate();
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -88,7 +88,7 @@ async fn test_long_form_accepted() {
 async fn test_long_form_retrievable() {
     let url = relay_url();
     let keys = Keys::generate();
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -136,7 +136,7 @@ async fn test_long_form_retrievable() {
 async fn test_long_form_stray_h_tag_ignored() {
     let url = relay_url();
     let keys = Keys::generate();
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -192,7 +192,7 @@ async fn test_long_form_stray_h_tag_ignored() {
 async fn test_long_form_nip33_replacement() {
     let url = relay_url();
     let keys = Keys::generate();
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -254,7 +254,7 @@ async fn test_long_form_nip33_replacement() {
 async fn test_long_form_stale_write_rejected() {
     let url = relay_url();
     let keys = Keys::generate();
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -333,7 +333,7 @@ async fn test_long_form_stale_write_rejected() {
 async fn test_long_form_a_tag_deletion() {
     let url = relay_url();
     let keys = Keys::generate();
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -414,7 +414,7 @@ async fn test_long_form_a_tag_deletion() {
 async fn test_long_form_malformed_e_plus_a_does_not_delete() {
     let url = relay_url();
     let keys = Keys::generate();
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 
@@ -477,7 +477,7 @@ async fn test_long_form_malformed_e_plus_a_does_not_delete() {
 async fn test_long_form_set_twice_preserves_published_at() {
     let url = relay_url();
     let keys = Keys::generate();
-    let mut client = SproutTestClient::connect(&url, &keys)
+    let mut client = BuzzTestClient::connect(&url, &keys)
         .await
         .expect("connect");
 

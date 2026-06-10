@@ -220,7 +220,7 @@ pub struct PromptContext {
     /// the per-session core engram fetch is skipped and `core_sections`
     /// remains empty for every channel, so `format_prompt` renders no
     /// `[Agent Memory — core]` section. On by default; disabled via
-    /// `--no-memory` / `SPROUT_ACP_NO_MEMORY`.
+    /// `--no-memory` / `BUZZ_ACP_NO_MEMORY`.
     pub memory_enabled: bool,
 }
 
@@ -760,11 +760,11 @@ pub async fn run_prompt_task(
     // happens when a session is invalidated and recreated (see
     // `SessionState::invalidate_channel`).
     //
-    // Operator opt-out: `--no-memory` / `SPROUT_ACP_NO_MEMORY` disables the
+    // Operator opt-out: `--no-memory` / `BUZZ_ACP_NO_MEMORY` disables the
     // NIP-AE injection path. By default we run the fetch and populate
     // `state.core_sections`, so `format_prompt` renders the core section.
     // When disabled we skip the fetch outright and leave `core_sections`
-    // empty. The `sprout mem` CLI and the relay's acceptance of
+    // empty. The `buzz mem` CLI and the relay's acceptance of
     // kind:30174 engrams are unaffected.
     if is_new_session && ctx.memory_enabled {
         if let (PromptSource::Channel(cid), Some(owner_pk)) =
@@ -1309,7 +1309,7 @@ async fn fetch_channel_info(channel_id: Uuid, rest: &RestClient) -> Option<Promp
     let d_tag = SingleLetterTag::lowercase(Alphabet::D);
     let filter = nostr::Filter::new()
         .kind(nostr::Kind::Custom(
-            sprout_core::kind::KIND_NIP29_GROUP_METADATA as u16,
+            buzz_core::kind::KIND_NIP29_GROUP_METADATA as u16,
         ))
         .custom_tags(d_tag, [channel_id.to_string()]);
 
@@ -1564,8 +1564,8 @@ async fn fetch_thread_context(
     let root_filter = nostr::Filter::new().id(nostr::EventId::from_hex(root_event_id).ok()?);
     let replies_filter = nostr::Filter::new()
         .kinds([
-            nostr::Kind::Custom(sprout_core::kind::KIND_STREAM_MESSAGE as u16),
-            nostr::Kind::Custom(sprout_core::kind::KIND_STREAM_MESSAGE_V2 as u16),
+            nostr::Kind::Custom(buzz_core::kind::KIND_STREAM_MESSAGE as u16),
+            nostr::Kind::Custom(buzz_core::kind::KIND_STREAM_MESSAGE_V2 as u16),
         ])
         .custom_tags(e_tag, [root_event_id])
         .custom_tags(h_tag, [ch_str.as_str()])
@@ -1612,8 +1612,8 @@ async fn fetch_dm_context(
     let ch_str = channel_id.to_string();
     let filter = nostr::Filter::new()
         .kinds([
-            nostr::Kind::Custom(sprout_core::kind::KIND_STREAM_MESSAGE as u16),
-            nostr::Kind::Custom(sprout_core::kind::KIND_STREAM_MESSAGE_V2 as u16),
+            nostr::Kind::Custom(buzz_core::kind::KIND_STREAM_MESSAGE as u16),
+            nostr::Kind::Custom(buzz_core::kind::KIND_STREAM_MESSAGE_V2 as u16),
         ])
         .custom_tags(h_tag, [ch_str.as_str()])
         .limit(limit as usize);
@@ -1955,7 +1955,7 @@ fn pct_encode(s: &str) -> String {
 
 /// Best-effort: add a reaction via a signed Nostr kind-7 event (NIP-25).
 ///
-/// Builds a reaction event with `sprout_sdk::build_reaction`, signs it with
+/// Builds a reaction event with `buzz_sdk::build_reaction`, signs it with
 /// the keys already stored in `RestClient`, and submits via `POST /events`.
 /// Returns immediately on timeout or any error — reactions are cosmetic.
 pub(crate) async fn reaction_add(rest: &crate::relay::RestClient, event_id: &str, emoji: &str) {
@@ -1966,7 +1966,7 @@ pub(crate) async fn reaction_add(rest: &crate::relay::RestClient, event_id: &str
             return;
         }
     };
-    let builder = match sprout_sdk::build_reaction(target_id, emoji) {
+    let builder = match buzz_sdk::build_reaction(target_id, emoji) {
         Ok(b) => b,
         Err(e) => {
             tracing::warn!(event_id, emoji, "reaction add: build failed: {e}");
@@ -2047,7 +2047,7 @@ pub(crate) async fn reaction_remove(rest: &crate::relay::RestClient, event_id: &
             return;
         }
     };
-    let builder = match sprout_sdk::build_remove_reaction(target_id) {
+    let builder = match buzz_sdk::build_remove_reaction(target_id) {
         Ok(b) => b,
         Err(e) => {
             tracing::warn!(event_id, emoji, "reaction remove: build failed: {e}");

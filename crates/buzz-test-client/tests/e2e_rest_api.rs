@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use nostr::{EventBuilder, Keys, Kind, Tag};
 use reqwest::Client;
-use sprout_test_client::SproutTestClient;
+use buzz_test_client::BuzzTestClient;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -393,7 +393,7 @@ async fn test_search_returns_indexed_event() {
     let unique_token = format!("e2e-search-{}", uuid::Uuid::new_v4().simple());
     let content = format!("E2E REST search test marker: {unique_token}");
 
-    let mut ws_client = SproutTestClient::connect(&ws_url, &keys)
+    let mut ws_client = BuzzTestClient::connect(&ws_url, &keys)
         .await
         .expect("WebSocket connect failed");
 
@@ -483,7 +483,7 @@ async fn test_presence_set_and_query() {
     let pubkey_hex = keys.public_key().to_hex();
     let ws_url = relay_ws_url();
 
-    let mut ws_client = SproutTestClient::connect(&ws_url, &keys)
+    let mut ws_client = BuzzTestClient::connect(&ws_url, &keys)
         .await
         .expect("WebSocket connect failed");
 
@@ -889,7 +889,7 @@ async fn test_feed_returns_activity() {
     let unique_token = format!("e2e-feed-{}", uuid::Uuid::new_v4().simple());
     let content = format!("E2E feed test: {unique_token}");
 
-    let mut ws_client = SproutTestClient::connect(&ws_url, &keys)
+    let mut ws_client = BuzzTestClient::connect(&ws_url, &keys)
         .await
         .expect("WebSocket connect failed");
 

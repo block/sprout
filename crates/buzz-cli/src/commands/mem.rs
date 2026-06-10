@@ -1,15 +1,15 @@
-//! `sprout mem` — agent-side engram management (NIP-AE).
+//! `buzz mem` — agent-side engram management (NIP-AE).
 //!
 //! Subcommands:
-//! - `sprout mem ls`                   — list non-tombstoned memories
-//! - `sprout mem get <slug>`            — print the value to stdout
-//! - `sprout mem hash <slug>`           — print sha256(value) hex
-//! - `sprout mem set <slug> <value|-> ` — write a value (use `-` for stdin)
-//! - `sprout mem patch <slug>`          — apply a unified diff to the current value
-//! - `sprout mem rm <slug>`             — publish a tombstone
+//! - `buzz mem ls`                   — list non-tombstoned memories
+//! - `buzz mem get <slug>`            — print the value to stdout
+//! - `buzz mem hash <slug>`           — print sha256(value) hex
+//! - `buzz mem set <slug> <value|-> ` — write a value (use `-` for stdin)
+//! - `buzz mem patch <slug>`          — apply a unified diff to the current value
+//! - `buzz mem rm <slug>`             — publish a tombstone
 //!
-//! By default, the caller's `SPROUT_PRIVATE_KEY` is the agent's nsec. The
-//! agent's owner pubkey is resolved from `SPROUT_AUTH_TAG` (NIP-OA attestation)
+//! By default, the caller's `BUZZ_PRIVATE_KEY` is the agent's nsec. The
+//! agent's owner pubkey is resolved from `BUZZ_AUTH_TAG` (NIP-OA attestation)
 //! or the `--owner` flag. Read commands also support owner-side recovery via
 //! `--agent <pubkey>`: the CLI identity is treated as the owner and decrypts
 //! the agent's engrams through the same agent↔owner NIP-44 conversation key.
@@ -20,24 +20,24 @@ use std::time::SystemTime;
 use sha2::{Digest, Sha256};
 
 use nostr::PublicKey;
-use sprout_core::engram::{
+use buzz_core::engram::{
     self, conversation_key, d_tag, normalize_slug, select_head, validate_and_decrypt, Body, Listing,
 };
-use sprout_core::kind::KIND_AGENT_ENGRAM;
+use buzz_core::kind::KIND_AGENT_ENGRAM;
 
-use crate::client::SproutClient;
+use crate::client::BuzzClient;
 use crate::error::CliError;
 
 /// Resolve the agent's owner pubkey: explicit `--owner` flag wins, otherwise
 /// fall back to the NIP-OA `auth_tag` (which carries owner pubkey in slot 1).
-fn resolve_owner(client: &SproutClient, owner_flag: Option<&str>) -> Result<PublicKey, CliError> {
+fn resolve_owner(client: &BuzzClient, owner_flag: Option<&str>) -> Result<PublicKey, CliError> {
     if let Some(s) = owner_flag {
         return PublicKey::from_hex(s)
             .map_err(|e| CliError::Usage(format!("--owner must be a 64-hex pubkey: {e}")));
     }
     let tag = client.auth_tag_owner_hex().ok_or_else(|| {
         CliError::Usage(
-            "owner pubkey required (set SPROUT_AUTH_TAG with a NIP-OA attestation or pass --owner)"
+            "owner pubkey required (set BUZZ_AUTH_TAG with a NIP-OA attestation or pass --owner)"
                 .into(),
         )
     })?;
@@ -48,11 +48,11 @@ fn resolve_owner(client: &SproutClient, owner_flag: Option<&str>) -> Result<Publ
 /// Resolve the read perspective for `mem ls/get/hash`.
 ///
 /// Normal agent-side reads use the CLI identity as the agent and resolve the
-/// owner from `--owner` / SPROUT_AUTH_TAG. Owner-side recovery passes
+/// owner from `--owner` / BUZZ_AUTH_TAG. Owner-side recovery passes
 /// `--agent <pubkey>`; the CLI identity is then the owner and the supplied
 /// pubkey is the agent author to query/decrypt.
 fn resolve_reader(
-    client: &SproutClient,
+    client: &BuzzClient,
     owner_flag: Option<&str>,
     agent_flag: Option<&str>,
 ) -> Result<(PublicKey, PublicKey, PublicKey), CliError> {
@@ -90,7 +90,7 @@ fn now_secs() -> u64 {
 /// `message` field starts with `"duplicate:"` when the write was rejected
 /// as already-superseded by a later head (NIP-33 LWW). In that case we
 /// surface a `Conflict` so callers don't lie about success.
-async fn submit_engram(client: &SproutClient, event: nostr::Event) -> Result<(), CliError> {
+async fn submit_engram(client: &BuzzClient, event: nostr::Event) -> Result<(), CliError> {
     let raw = client.submit_event(event).await?;
     let parsed: serde_json::Value = serde_json::from_str(&raw)
         .map_err(|e| CliError::Other(format!("relay response is not JSON: {e} ({raw})")))?;
@@ -134,7 +134,7 @@ fn parse_events(json: &str) -> Result<Vec<nostr::Event>, CliError> {
 
 /// Fetch the head event for `slug`, returning `(Option<Event>, Option<Body>)`.
 async fn fetch_head(
-    client: &SproutClient,
+    client: &BuzzClient,
     agent: &PublicKey,
     owner: &PublicKey,
     slug: &str,
@@ -185,9 +185,9 @@ async fn fetch_head(
     Ok((Some(head), body))
 }
 
-/// `sprout mem ls` — list non-tombstoned memory entries.
+/// `buzz mem ls` — list non-tombstoned memory entries.
 pub async fn cmd_ls(
-    client: &SproutClient,
+    client: &BuzzClient,
     owner_flag: Option<&str>,
     agent_flag: Option<&str>,
     json: bool,
@@ -271,11 +271,11 @@ pub async fn cmd_ls(
     Ok(())
 }
 
-/// `sprout mem get <slug>` — print value (memory) or profile (core) to stdout.
+/// `buzz mem get <slug>` — print value (memory) or profile (core) to stdout.
 ///
 /// Exit codes: 0 on found, 1 on absent or tombstoned.
 pub async fn cmd_get(
-    client: &SproutClient,
+    client: &BuzzClient,
     raw_slug: &str,
     owner_flag: Option<&str>,
     agent_flag: Option<&str>,
@@ -291,7 +291,7 @@ pub async fn cmd_get(
             Err(CliError::NotFound(format!("tombstoned: {slug}")))
         }
         Some(Body::Memory { value: Some(v), .. }) => {
-            // Raw stdout, no trailing newline — round-trips with `sprout mem set foo -`.
+            // Raw stdout, no trailing newline — round-trips with `buzz mem set foo -`.
             std::io::stdout()
                 .write_all(v.as_bytes())
                 .map_err(|e| CliError::Other(e.to_string()))
@@ -302,7 +302,7 @@ pub async fn cmd_get(
     }
 }
 
-/// `sprout mem set <slug> <value|->` — write a value or core profile.
+/// `buzz mem set <slug> <value|->` — write a value or core profile.
 ///
 /// Pass `-` to read the value from stdin.
 ///
@@ -312,7 +312,7 @@ pub async fn cmd_get(
 /// otherwise commit an empty value — silently destroying the slug.
 /// A literal `""` positional argument is still accepted (explicit intent).
 pub async fn cmd_set(
-    client: &SproutClient,
+    client: &BuzzClient,
     raw_slug: &str,
     raw_value: &str,
     owner_flag: Option<&str>,
@@ -339,7 +339,7 @@ pub async fn cmd_set(
         if buf.is_empty() && !allow_empty {
             return Err(CliError::Usage(
                 "refusing to write empty value from stdin (an upstream pipeline step likely \
-                 failed). Pass --allow-empty to confirm, or use `sprout mem rm <slug>` to \
+                 failed). Pass --allow-empty to confirm, or use `buzz mem rm <slug>` to \
                  tombstone."
                     .into(),
             ));
@@ -482,7 +482,7 @@ fn verify_hunks_at_declared_position(
 /// Used by `mem hash` and `mem patch` — they both need "the value or fail".
 /// Returns `(head_event, value)` so the caller can preserve monotonic ordering.
 async fn fetch_value(
-    client: &SproutClient,
+    client: &BuzzClient,
     agent: &PublicKey,
     owner: &PublicKey,
     slug: &str,
@@ -499,14 +499,14 @@ async fn fetch_value(
     }
 }
 
-/// `sprout mem hash <slug>` — print sha256(value) in hex to stdout.
+/// `buzz mem hash <slug>` — print sha256(value) in hex to stdout.
 ///
 /// The output is a 64-character hex digest followed by a newline (line-
 /// oriented for shell use). Use this to capture a base-hash before editing,
-/// then pass it to `sprout mem patch --base-hash <hex>` to make the edit
+/// then pass it to `buzz mem patch --base-hash <hex>` to make the edit
 /// safe against concurrent writes.
 pub async fn cmd_hash(
-    client: &SproutClient,
+    client: &BuzzClient,
     raw_slug: &str,
     owner_flag: Option<&str>,
     agent_flag: Option<&str>,
@@ -519,7 +519,7 @@ pub async fn cmd_hash(
     Ok(())
 }
 
-/// `sprout mem patch <slug>` — apply a unified diff to the current value.
+/// `buzz mem patch <slug>` — apply a unified diff to the current value.
 ///
 /// Reads a unified diff from stdin (or `--patch-file <path>`), fetches the
 /// current head, applies the diff with **strict context matching** (no
@@ -536,7 +536,7 @@ pub async fn cmd_hash(
 ///   can chain edits.
 #[allow(clippy::too_many_arguments)]
 pub async fn cmd_patch(
-    client: &SproutClient,
+    client: &BuzzClient,
     raw_slug: &str,
     patch_path: Option<&str>,
     base_hash: Option<&str>,
@@ -558,7 +558,7 @@ pub async fn cmd_patch(
         }
         (None, false) => {
             return Err(CliError::Usage(
-                "missing --base-hash <hex> (run `sprout mem hash <slug>` to get it). \
+                "missing --base-hash <hex> (run `buzz mem hash <slug>` to get it). \
                  Pass --no-base-hash to skip this check at your own risk."
                     .into(),
             ));
@@ -659,7 +659,7 @@ pub async fn cmd_patch(
     if new_value.is_empty() && !allow_empty {
         return Err(CliError::Usage(
             "refusing to write empty value (patch result is empty). \
-             Pass --allow-empty to confirm, or use `sprout mem rm <slug>` to tombstone."
+             Pass --allow-empty to confirm, or use `buzz mem rm <slug>` to tombstone."
                 .into(),
         ));
     }
@@ -697,14 +697,14 @@ pub async fn cmd_patch(
     Ok(())
 }
 
-/// `sprout mem rm <slug>` — publish a tombstone (`value: null`).
+/// `buzz mem rm <slug>` — publish a tombstone (`value: null`).
 ///
 /// `rm core` writes a tombstone-shaped body, but a core tombstone has no
 /// well-defined semantics in NIP-AE (the spec only defines tombstones for
 /// memory entries). We refuse it and tell the operator to overwrite `core`
 /// with an empty profile instead.
 pub async fn cmd_rm(
-    client: &SproutClient,
+    client: &BuzzClient,
     raw_slug: &str,
     owner_flag: Option<&str>,
 ) -> Result<(), CliError> {
@@ -712,7 +712,7 @@ pub async fn cmd_rm(
         normalize_slug(raw_slug).map_err(|e| CliError::Usage(format!("invalid slug: {e}")))?;
     if slug == engram::CORE_SLUG {
         return Err(CliError::Usage(
-            "core cannot be tombstoned; overwrite it with `sprout mem set core ''` instead".into(),
+            "core cannot be tombstoned; overwrite it with `buzz mem set core ''` instead".into(),
         ));
     }
     let owner = resolve_owner(client, owner_flag)?;
@@ -738,7 +738,7 @@ pub async fn cmd_rm(
 // Dispatch
 // ---------------------------------------------------------------------------
 
-pub async fn dispatch(cmd: crate::MemCmd, client: &SproutClient) -> Result<(), CliError> {
+pub async fn dispatch(cmd: crate::MemCmd, client: &BuzzClient) -> Result<(), CliError> {
     use crate::MemCmd;
     match cmd {
         MemCmd::Ls { owner, agent, json } => {
@@ -789,8 +789,8 @@ mod tests {
     // verify base-hash from the shell. Hard-coded vectors from the NIST and
     // common quick-check inputs.
 
-    fn test_client(keys: nostr::Keys) -> SproutClient {
-        SproutClient::new("http://127.0.0.1:9".into(), keys, None, None).unwrap()
+    fn test_client(keys: nostr::Keys) -> BuzzClient {
+        BuzzClient::new("http://127.0.0.1:9".into(), keys, None, None).unwrap()
     }
 
     #[test]

@@ -1,5 +1,5 @@
 [package]
-name = "sprout-media"
+name = "buzz-media"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Media storage, validation, and thumbnail generation for Sprout"
 
 [dependencies]
-sprout-core = { workspace = true }
+buzz-core = { workspace = true }
 nostr = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -18,16 +18,16 @@ pub enum CliError {
     #[error("auth error: {0}")]
     Auth(String),
 
-    /// Nostr key error (NIP-98 signing in `sprout auth`)
+    /// Nostr key error (NIP-98 signing in `buzz auth`)
     #[error("key error: {0}")]
     Key(String),
 
     /// Relay accepted the event but reported it as superseded by a newer
-    /// head — used by `sprout mem` set/rm to surface NIP-33 LWW conflicts.
+    /// head — used by `buzz mem` set/rm to surface NIP-33 LWW conflicts.
     #[error("conflict: {0}")]
     Conflict(String),
 
-    /// Requested resource was absent or tombstoned (e.g. `sprout mem get`
+    /// Requested resource was absent or tombstoned (e.g. `buzz mem get`
     /// for a slug with no head).
     #[error("{0}")]
     NotFound(String),

@@ -50,7 +50,7 @@ fn verify_bridge_auth(
             .map_err(|_| api_error(StatusCode::UNAUTHORIZED, "invalid NIP-98 event JSON"))?;
         let event_id_bytes = event.id.to_bytes();
 
-        let pubkey = sprout_auth::verify_nip98_event(&event_json, url, method, body)
+        let pubkey = buzz_auth::verify_nip98_event(&event_json, url, method, body)
             .map_err(|e| api_error(StatusCode::UNAUTHORIZED, &format!("NIP-98: {e}")))?;
 
         return Ok((pubkey, event_id_bytes));
@@ -155,7 +155,7 @@ fn extract_feed_types(raw: &Value) -> Option<Vec<String>> {
     }
 }
 
-fn event_in_accessible_channel(se: &sprout_core::StoredEvent, accessible: &[uuid::Uuid]) -> bool {
+fn event_in_accessible_channel(se: &buzz_core::StoredEvent, accessible: &[uuid::Uuid]) -> bool {
     match se.channel_id {
         Some(ch_id) => accessible.contains(&ch_id),
         None => true,
@@ -194,9 +194,9 @@ pub async fn submit_event(
     // them to the mesh handlers — the HTTP twin of the WS door's special-casing
     // in handlers::event. Membership was enforced above; the handlers re-check
     // it fail-closed.
-    let kind_u32 = sprout_core::kind::event_kind_u32(&event);
-    if kind_u32 == sprout_core::kind::KIND_MESH_STATUS_REPORT
-        || kind_u32 == sprout_core::kind::KIND_MESH_CONNECT_REQUEST
+    let kind_u32 = buzz_core::kind::event_kind_u32(&event);
+    if kind_u32 == buzz_core::kind::KIND_MESH_STATUS_REPORT
+        || kind_u32 == buzz_core::kind::KIND_MESH_CONNECT_REQUEST
     {
         let event_id = event.id.to_hex();
         return match crate::handlers::mesh_signaling::handle_mesh_event_http(
@@ -215,7 +215,7 @@ pub async fn submit_event(
 
     let auth = IngestAuth::Http {
         pubkey,
-        scopes: sprout_auth::Scope::all_known(), // Pure Nostr: full scopes, channel access via membership
+        scopes: buzz_auth::Scope::all_known(), // Pure Nostr: full scopes, channel access via membership
         auth_method: crate::handlers::ingest::HttpAuthMethod::Nip98,
     };
 
@@ -461,12 +461,12 @@ pub async fn query_events(
                     if !event_in_accessible_channel(&se, &accessible_channels) {
                         continue;
                     }
-                    if !sprout_core::filter::filters_match(std::slice::from_ref(filter), &se) {
+                    if !buzz_core::filter::filters_match(std::slice::from_ref(filter), &se) {
                         continue;
                     }
                     // Result-level read auth: never hand a viewer-private snapshot
                     // (kind:30622) to anyone but its owner, even via kindless `ids`.
-                    if !sprout_core::filter::reader_authorized_for_event(
+                    if !buzz_core::filter::reader_authorized_for_event(
                         &se.event,
                         &authed_pubkey_hex,
                     ) {
@@ -561,7 +561,7 @@ pub async fn count_events(
                 match state.db.query_events(&q).await {
                     Ok(stored_events) => {
                         for se in stored_events {
-                            if sprout_core::filter::filters_match(std::slice::from_ref(filter), &se)
+                            if buzz_core::filter::filters_match(std::slice::from_ref(filter), &se)
                             {
                                 total += 1;
                             }
@@ -595,7 +595,7 @@ pub async fn count_events(
                 match state.db.query_events(&query).await {
                     Ok(stored_events) => {
                         for se in stored_events {
-                            if sprout_core::filter::filters_match(std::slice::from_ref(filter), &se)
+                            if buzz_core::filter::filters_match(std::slice::from_ref(filter), &se)
                             {
                                 total += 1;
                             }
@@ -628,11 +628,11 @@ pub async fn count_events(
 /// outside that set are rejected regardless of NIP-01 match.
 fn search_hit_accepted(
     filter: &nostr::Filter,
-    stored: &sprout_core::StoredEvent,
+    stored: &buzz_core::StoredEvent,
     accessible_channels: &[uuid::Uuid],
     reader_pubkey_hex: &str,
 ) -> bool {
-    if !sprout_core::filter::filters_match(std::slice::from_ref(filter), stored) {
+    if !buzz_core::filter::filters_match(std::slice::from_ref(filter), stored) {
         return false;
     }
     if let Some(ch_id) = stored.channel_id {
@@ -640,7 +640,7 @@ fn search_hit_accepted(
             return false;
         }
     }
-    if !sprout_core::filter::reader_authorized_for_event(&stored.event, reader_pubkey_hex) {
+    if !buzz_core::filter::reader_authorized_for_event(&stored.event, reader_pubkey_hex) {
         return false;
     }
     true
@@ -717,7 +717,7 @@ async fn handle_bridge_search(
 
         let filter_by = filter_parts.join(" && ");
 
-        let search_query = sprout_search::SearchQuery {
+        let search_query = buzz_search::SearchQuery {
             q: search_text,
             filter_by: Some(filter_by),
             sort_by: None, // Typesense default = relevance
@@ -751,7 +751,7 @@ async fn handle_bridge_search(
             .map_err(|e| internal_error(&format!("search fetch error: {e}")))?;
 
         // Build lookup map to preserve Typesense relevance ordering.
-        let event_map: std::collections::HashMap<[u8; 32], &sprout_core::StoredEvent> =
+        let event_map: std::collections::HashMap<[u8; 32], &buzz_core::StoredEvent> =
             stored_events
                 .iter()
                 .map(|ev| (ev.event.id.to_bytes(), ev))
@@ -811,10 +811,10 @@ pub async fn workflow_webhook(
         .await
         .map_err(|_| not_found("workflow not found"))?;
 
-    let def: sprout_workflow::WorkflowDef = serde_json::from_value(workflow.definition.clone())
+    let def: buzz_workflow::WorkflowDef = serde_json::from_value(workflow.definition.clone())
         .map_err(|e| super::internal_error(&format!("corrupt workflow definition: {e}")))?;
 
-    if !matches!(def.trigger, sprout_workflow::TriggerDef::Webhook) {
+    if !matches!(def.trigger, buzz_workflow::TriggerDef::Webhook) {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
             "workflow does not have a webhook trigger",
@@ -856,7 +856,7 @@ pub async fn workflow_webhook(
         };
 
     // Build trigger context from webhook body fields.
-    let mut trigger_ctx = sprout_workflow::executor::TriggerContext {
+    let mut trigger_ctx = buzz_workflow::executor::TriggerContext {
         channel_id: workflow
             .channel_id
             .map(|ch| ch.to_string())
@@ -886,14 +886,14 @@ pub async fn workflow_webhook(
     let def_value = workflow.definition.clone();
     let trigger_ctx_clone = trigger_ctx.clone();
     tokio::spawn(async move {
-        let def: sprout_workflow::WorkflowDef = match serde_json::from_value(def_value) {
+        let def: buzz_workflow::WorkflowDef = match serde_json::from_value(def_value) {
             Ok(d) => d,
             Err(e) => {
                 tracing::error!("webhook: failed to parse definition: {e}");
                 if let Err(db_err) = db
                     .update_workflow_run(
                         run_id,
-                        sprout_db::workflow::RunStatus::Failed,
+                        buzz_db::workflow::RunStatus::Failed,
                         0,
                         &serde_json::json!([]),
                         Some(&format!("definition parse error: {e}")),
@@ -906,7 +906,7 @@ pub async fn workflow_webhook(
             }
         };
 
-        let result = sprout_workflow::executor::execute_from_step(
+        let result = buzz_workflow::executor::execute_from_step(
             &engine,
             run_id,
             &def,
@@ -936,7 +936,7 @@ pub async fn workflow_webhook(
 ///
 /// Returns `Some(events)` if handled, `None` to fall through to normal query.
 async fn synthesize_presence(state: &AppState, filters: &[nostr::Filter]) -> Option<Vec<Value>> {
-    use sprout_core::kind::{KIND_PRESENCE_SNAPSHOT, KIND_PRESENCE_UPDATE};
+    use buzz_core::kind::{KIND_PRESENCE_SNAPSHOT, KIND_PRESENCE_UPDATE};
 
     // Only intercept if every filter targets kind:20001 or 40902 with authors.
     let mut all_pubkeys: Vec<nostr::PublicKey> = Vec::new();
@@ -1004,7 +1004,7 @@ mod tests {
     use nostr::{Alphabet, EventBuilder, Keys, Kind, SingleLetterTag, Tag};
 
     /// Build a kind:30174 engram envelope authored by `agent`, tagged with `owner`.
-    fn engram_envelope(agent: &Keys, owner_hex: &str) -> sprout_core::StoredEvent {
+    fn engram_envelope(agent: &Keys, owner_hex: &str) -> buzz_core::StoredEvent {
         let d_tag = Tag::custom(
             nostr::TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::D)),
             ["abcd1234"],
@@ -1017,7 +1017,7 @@ mod tests {
             .tags([d_tag, p_tag])
             .sign_with_keys(agent)
             .expect("sign engram");
-        sprout_core::StoredEvent::new(ev, None)
+        buzz_core::StoredEvent::new(ev, None)
     }
 
     /// Regression test for the NIP-AE `/query` search leak (PR #593 review).
@@ -1231,7 +1231,7 @@ mod tests {
         let ev = EventBuilder::new(Kind::Custom(1), "test")
             .sign_with_keys(&keys)
             .unwrap();
-        let se = sprout_core::StoredEvent::new(ev, None);
+        let se = buzz_core::StoredEvent::new(ev, None);
         assert!(event_in_accessible_channel(&se, &[]));
     }
 
@@ -1242,7 +1242,7 @@ mod tests {
             .sign_with_keys(&keys)
             .unwrap();
         let ch = uuid::Uuid::new_v4();
-        let mut se = sprout_core::StoredEvent::new(ev, None);
+        let mut se = buzz_core::StoredEvent::new(ev, None);
         se.channel_id = Some(ch);
         assert!(event_in_accessible_channel(&se, &[ch]));
     }
@@ -1255,7 +1255,7 @@ mod tests {
             .unwrap();
         let ch = uuid::Uuid::new_v4();
         let other = uuid::Uuid::new_v4();
-        let mut se = sprout_core::StoredEvent::new(ev, None);
+        let mut se = buzz_core::StoredEvent::new(ev, None);
         se.channel_id = Some(ch);
         assert!(!event_in_accessible_channel(&se, &[other]));
     }
@@ -1280,13 +1280,13 @@ mod tests {
             [&viewer],
         );
         let ev = EventBuilder::new(
-            Kind::Custom(sprout_core::kind::KIND_DM_VISIBILITY as u16),
+            Kind::Custom(buzz_core::kind::KIND_DM_VISIBILITY as u16),
             "",
         )
         .tags([d_tag, p_tag])
         .sign_with_keys(&relay)
         .expect("sign snapshot");
-        let stored = sprout_core::StoredEvent::new(ev.clone(), None);
+        let stored = buzz_core::StoredEvent::new(ev.clone(), None);
 
         // Kindless filter — the exact bypass shape: no #p, just the id.
         let filter = nostr::Filter::new().id(ev.id);

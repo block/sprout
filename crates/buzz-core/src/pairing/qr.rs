@@ -67,7 +67,7 @@ impl Drop for QrPayload {
 /// # Example
 ///
 /// ```
-/// use sprout_core::pairing::qr::{QrPayload, encode_qr};
+/// use buzz_core::pairing::qr::{QrPayload, encode_qr};
 /// use nostr::Keys;
 ///
 /// let keys = Keys::generate();

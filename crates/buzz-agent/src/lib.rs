@@ -229,7 +229,7 @@ async fn initialize(id: Value, params: Value, wire_tx: &WireSender) {
                     "promptCapabilities": { "image": false, "audio": false, "embeddedContext": false },
                     "mcpCapabilities": { "http": false, "sse": false },
                 },
-                "agentInfo": { "name": "sprout-agent", "version": env!("CARGO_PKG_VERSION") },
+                "agentInfo": { "name": "buzz-agent", "version": env!("CARGO_PKG_VERSION") },
             }),
         ),
     )

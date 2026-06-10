@@ -61,7 +61,7 @@ pub struct Config {
     /// handoff threshold for this budget, before the next request can exceed
     /// the window and 400. Default 200_000 — matching Claude 4.x windows;
     /// operators lower/raise it for other models. Set via
-    /// `SPROUT_AGENT_MAX_CONTEXT_TOKENS`.
+    /// `BUZZ_AGENT_MAX_CONTEXT_TOKENS`.
     pub max_context_tokens: u64,
     pub max_handoffs: usize,
     pub max_parallel_tools: usize,
@@ -87,7 +87,7 @@ impl Config {
         let databricks_host = env("DATABRICKS_HOST");
         let databricks_model = env("DATABRICKS_MODEL");
         let provider = resolve_provider(
-            env("SPROUT_AGENT_PROVIDER").as_deref(),
+            env("BUZZ_AGENT_PROVIDER").as_deref(),
             env("ANTHROPIC_API_KEY").as_deref(),
             env("OPENAI_COMPAT_API_KEY").as_deref(),
             databricks_host.as_deref(),
@@ -97,7 +97,7 @@ impl Config {
         // Universal model override — any provider will use this when its own
         // model env var is absent. Useful for wrapper scripts that set a single
         // var regardless of which provider is active.
-        let sprout_agent_model = env("SPROUT_AGENT_MODEL");
+        let sprout_agent_model = env("BUZZ_AGENT_MODEL");
 
         // OPENAI_COMPAT_API is only read when provider=openai, so a stray
         // bad value can't break an Anthropic-only deployment.
@@ -134,9 +134,9 @@ impl Config {
                 OpenAiApi::Chat, // Databricks invocations is chat-shaped
             ),
         };
-        let system_prompt = match (env("SPROUT_AGENT_SYSTEM_PROMPT"), env("SPROUT_AGENT_SYSTEM_PROMPT_FILE")) {
+        let system_prompt = match (env("BUZZ_AGENT_SYSTEM_PROMPT"), env("BUZZ_AGENT_SYSTEM_PROMPT_FILE")) {
             (Some(_), Some(_)) => return Err(
-                "config: SPROUT_AGENT_SYSTEM_PROMPT and SPROUT_AGENT_SYSTEM_PROMPT_FILE are mutually exclusive".into()),
+                "config: BUZZ_AGENT_SYSTEM_PROMPT and BUZZ_AGENT_SYSTEM_PROMPT_FILE are mutually exclusive".into()),
             (Some(s), _) => s,
             (_, Some(p)) => std::fs::read_to_string(&p).map_err(|e| format!("config: read {p}: {e}"))?,
             _ => DEFAULT_SYSTEM_PROMPT.to_owned(),
@@ -149,30 +149,30 @@ impl Config {
             base_url,
             anthropic_api_version: env_or("ANTHROPIC_API_VERSION", "2023-06-01"),
             openai_api,
-            max_rounds: parse_env("SPROUT_AGENT_MAX_ROUNDS", 0)?,
-            max_output_tokens: parse_env("SPROUT_AGENT_MAX_OUTPUT_TOKENS", 32_768)?,
-            llm_timeout: Duration::from_secs(parse_env("SPROUT_AGENT_LLM_TIMEOUT_SECS", 120)?),
-            tool_timeout: Duration::from_secs(parse_env("SPROUT_AGENT_TOOL_TIMEOUT_SECS", 660)?),
+            max_rounds: parse_env("BUZZ_AGENT_MAX_ROUNDS", 0)?,
+            max_output_tokens: parse_env("BUZZ_AGENT_MAX_OUTPUT_TOKENS", 32_768)?,
+            llm_timeout: Duration::from_secs(parse_env("BUZZ_AGENT_LLM_TIMEOUT_SECS", 120)?),
+            tool_timeout: Duration::from_secs(parse_env("BUZZ_AGENT_TOOL_TIMEOUT_SECS", 660)?),
             mcp_init_timeout: Duration::from_secs(parse_env(
-                "SPROUT_AGENT_MCP_INIT_TIMEOUT_SECS",
+                "BUZZ_AGENT_MCP_INIT_TIMEOUT_SECS",
                 30,
             )?),
-            mcp_max_restart_attempts: parse_env("SPROUT_AGENT_MCP_RESTART_MAX_ATTEMPTS", 3u32)?,
-            mcp_restart_base_ms: parse_env("SPROUT_AGENT_MCP_RESTART_BASE_MS", 500u64)?,
-            mcp_restart_max_ms: parse_env("SPROUT_AGENT_MCP_RESTART_MAX_MS", 30_000u64)?,
-            max_sessions: parse_env("SPROUT_AGENT_MAX_SESSIONS", usize::MAX)?,
-            max_line_bytes: parse_env("SPROUT_AGENT_MAX_LINE_BYTES", 4 * 1024 * 1024)?,
-            max_history_bytes: parse_env("SPROUT_AGENT_MAX_HISTORY_BYTES", 16 * 1024 * 1024)?,
-            max_context_tokens: parse_env("SPROUT_AGENT_MAX_CONTEXT_TOKENS", 200_000u64)?,
-            max_handoffs: parse_env("SPROUT_AGENT_MAX_HANDOFFS", 10)?,
-            max_parallel_tools: parse_env("SPROUT_AGENT_MAX_PARALLEL_TOOLS", 8usize)?,
+            mcp_max_restart_attempts: parse_env("BUZZ_AGENT_MCP_RESTART_MAX_ATTEMPTS", 3u32)?,
+            mcp_restart_base_ms: parse_env("BUZZ_AGENT_MCP_RESTART_BASE_MS", 500u64)?,
+            mcp_restart_max_ms: parse_env("BUZZ_AGENT_MCP_RESTART_MAX_MS", 30_000u64)?,
+            max_sessions: parse_env("BUZZ_AGENT_MAX_SESSIONS", usize::MAX)?,
+            max_line_bytes: parse_env("BUZZ_AGENT_MAX_LINE_BYTES", 4 * 1024 * 1024)?,
+            max_history_bytes: parse_env("BUZZ_AGENT_MAX_HISTORY_BYTES", 16 * 1024 * 1024)?,
+            max_context_tokens: parse_env("BUZZ_AGENT_MAX_CONTEXT_TOKENS", 200_000u64)?,
+            max_handoffs: parse_env("BUZZ_AGENT_MAX_HANDOFFS", 10)?,
+            max_parallel_tools: parse_env("BUZZ_AGENT_MAX_PARALLEL_TOOLS", 8usize)?,
             hook_timeout: Duration::from_millis(parse_env(
-                "SPROUT_AGENT_HOOK_TIMEOUT_MS",
+                "BUZZ_AGENT_HOOK_TIMEOUT_MS",
                 2500u64,
             )?),
-            stop_max_rejections: parse_env("SPROUT_AGENT_STOP_MAX_REJECTIONS", 3u32)?,
+            stop_max_rejections: parse_env("BUZZ_AGENT_STOP_MAX_REJECTIONS", 3u32)?,
             hook_servers: parse_hook_servers_env("MCP_HOOK_SERVERS"),
-            hints_enabled: parse_env("SPROUT_AGENT_NO_HINTS", 0u8)? == 0,
+            hints_enabled: parse_env("BUZZ_AGENT_NO_HINTS", 0u8)? == 0,
         };
         cfg.validate()?;
         Ok(cfg)
@@ -184,51 +184,51 @@ impl Config {
         const MIN_TIMEOUT: Duration = Duration::from_secs(1);
 
         if self.max_output_tokens < 1 {
-            return Err("config: SPROUT_AGENT_MAX_OUTPUT_TOKENS must be >= 1".into());
+            return Err("config: BUZZ_AGENT_MAX_OUTPUT_TOKENS must be >= 1".into());
         }
         if self.max_context_tokens <= u64::from(self.max_output_tokens) {
             return Err(format!(
-                "config: SPROUT_AGENT_MAX_CONTEXT_TOKENS ({}) must be > SPROUT_AGENT_MAX_OUTPUT_TOKENS ({}) — the context window must leave room for the response",
+                "config: BUZZ_AGENT_MAX_CONTEXT_TOKENS ({}) must be > BUZZ_AGENT_MAX_OUTPUT_TOKENS ({}) — the context window must leave room for the response",
                 self.max_context_tokens, self.max_output_tokens
             ));
         }
         if self.max_history_bytes < MIN_HISTORY_BYTES {
             return Err(format!(
-                "config: SPROUT_AGENT_MAX_HISTORY_BYTES must be >= {MIN_HISTORY_BYTES}"
+                "config: BUZZ_AGENT_MAX_HISTORY_BYTES must be >= {MIN_HISTORY_BYTES}"
             ));
         }
         if self.max_history_bytes < MAX_PROMPT_BYTES {
             return Err(format!(
-                "config: SPROUT_AGENT_MAX_HISTORY_BYTES ({}) must be >= MAX_PROMPT_BYTES ({MAX_PROMPT_BYTES})",
+                "config: BUZZ_AGENT_MAX_HISTORY_BYTES ({}) must be >= MAX_PROMPT_BYTES ({MAX_PROMPT_BYTES})",
                 self.max_history_bytes
             ));
         }
         if self.max_line_bytes < MIN_LINE_BYTES {
             return Err(format!(
-                "config: SPROUT_AGENT_MAX_LINE_BYTES must be >= {MIN_LINE_BYTES}"
+                "config: BUZZ_AGENT_MAX_LINE_BYTES must be >= {MIN_LINE_BYTES}"
             ));
         }
         if self.llm_timeout < MIN_TIMEOUT {
-            return Err("config: SPROUT_AGENT_LLM_TIMEOUT_SECS must be >= 1".into());
+            return Err("config: BUZZ_AGENT_LLM_TIMEOUT_SECS must be >= 1".into());
         }
         if self.tool_timeout < MIN_TIMEOUT {
-            return Err("config: SPROUT_AGENT_TOOL_TIMEOUT_SECS must be >= 1".into());
+            return Err("config: BUZZ_AGENT_TOOL_TIMEOUT_SECS must be >= 1".into());
         }
         if self.mcp_init_timeout < MIN_TIMEOUT {
-            return Err("config: SPROUT_AGENT_MCP_INIT_TIMEOUT_SECS must be >= 1".into());
+            return Err("config: BUZZ_AGENT_MCP_INIT_TIMEOUT_SECS must be >= 1".into());
         }
         if self.max_parallel_tools < 1 {
-            return Err("config: SPROUT_AGENT_MAX_PARALLEL_TOOLS must be >= 1".into());
+            return Err("config: BUZZ_AGENT_MAX_PARALLEL_TOOLS must be >= 1".into());
         }
         if self.mcp_max_restart_attempts < 1 {
-            return Err("config: SPROUT_AGENT_MCP_RESTART_MAX_ATTEMPTS must be >= 1".into());
+            return Err("config: BUZZ_AGENT_MCP_RESTART_MAX_ATTEMPTS must be >= 1".into());
         }
         if self.mcp_restart_base_ms < 1 {
-            return Err("config: SPROUT_AGENT_MCP_RESTART_BASE_MS must be >= 1".into());
+            return Err("config: BUZZ_AGENT_MCP_RESTART_BASE_MS must be >= 1".into());
         }
         if self.mcp_restart_max_ms < self.mcp_restart_base_ms {
             return Err(
-                "config: SPROUT_AGENT_MCP_RESTART_MAX_MS must be >= SPROUT_AGENT_MCP_RESTART_BASE_MS".into(),
+                "config: BUZZ_AGENT_MCP_RESTART_MAX_MS must be >= BUZZ_AGENT_MCP_RESTART_BASE_MS".into(),
             );
         }
         Ok(())
@@ -298,13 +298,13 @@ fn resolve_provider(
                 ),
                 "databricks" => Ok(Provider::Databricks),
                 _ => Err(format!(
-                    "config: SPROUT_AGENT_PROVIDER={raw} not supported"
+                    "config: BUZZ_AGENT_PROVIDER={raw} not supported"
                 )),
             }
         }
         None if databricks_ready => Ok(Provider::Databricks),
         None => Err(
-            "config: SPROUT_AGENT_PROVIDER required (or set DATABRICKS_HOST and DATABRICKS_MODEL for Databricks OAuth fallback)".into(),
+            "config: BUZZ_AGENT_PROVIDER required (or set DATABRICKS_HOST and DATABRICKS_MODEL for Databricks OAuth fallback)".into(),
         ),
     }
 }
@@ -592,13 +592,13 @@ mod tests {
         assert!(err.contains("OPENAI_COMPAT_API_KEY required"));
         let err =
             resolve_provider(None, None, None, Some("https://dbc.example"), None).unwrap_err();
-        assert!(err.contains("SPROUT_AGENT_PROVIDER required"));
+        assert!(err.contains("BUZZ_AGENT_PROVIDER required"));
     }
 
     #[test]
     fn resolve_provider_unsupported_error_preserves_user_casing() {
         let err = resolve_provider(Some("OpenAIish"), None, None, None, None).unwrap_err();
-        assert!(err.contains("SPROUT_AGENT_PROVIDER=OpenAIish"));
+        assert!(err.contains("BUZZ_AGENT_PROVIDER=OpenAIish"));
     }
 
     #[test]

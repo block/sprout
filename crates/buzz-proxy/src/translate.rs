@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use moka::sync::Cache;
 use nostr::prelude::*;
-use sprout_core::kind::{
+use buzz_core::kind::{
     event_kind_u32, KIND_DELETION, KIND_REACTION, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_EDIT,
     KIND_STREAM_MESSAGE_V2,
 };
@@ -765,7 +765,7 @@ fn extract_plain_text(content: &str) -> String {
 mod tests {
     use super::*;
     use crate::channel_map::{ChannelDto, ChannelMap};
-    use sprout_core::kind::KIND_STREAM_MESSAGE;
+    use buzz_core::kind::KIND_STREAM_MESSAGE;
 
     // ── Test fixtures ────────────────────────────────────────────────────────
 
@@ -1248,7 +1248,7 @@ mod tests {
 
     #[test]
     fn inbound_translates_edit_message() {
-        use sprout_core::kind::KIND_STREAM_MESSAGE_EDIT;
+        use buzz_core::kind::KIND_STREAM_MESSAGE_EDIT;
 
         let (translator, kind40_event_id) = make_translator();
         let external_keys = Keys::generate();
@@ -1309,7 +1309,7 @@ mod tests {
 
     #[tokio::test]
     async fn outbound_translates_edit_message() {
-        use sprout_core::kind::KIND_STREAM_MESSAGE_EDIT;
+        use buzz_core::kind::KIND_STREAM_MESSAGE_EDIT;
 
         let (translator, _) = make_translator();
         let author_keys = Keys::generate();

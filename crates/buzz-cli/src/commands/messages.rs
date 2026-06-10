@@ -1,14 +1,14 @@
 use nostr::PublicKey;
-use sprout_sdk::{DiffMeta, ThreadRef, VoteDirection};
+use buzz_sdk::{DiffMeta, ThreadRef, VoteDirection};
 use uuid::Uuid;
 
-use crate::client::{normalize_events, normalize_write_response, SproutClient};
+use crate::client::{normalize_events, normalize_write_response, BuzzClient};
 use crate::error::CliError;
 use crate::validate::{
     infer_language, parse_event_id, parse_uuid, read_or_stdin, truncate_diff,
     validate_content_size, validate_hex64, validate_uuid, MAX_DIFF_BYTES,
 };
-use sprout_sdk::mentions::{
+use buzz_sdk::mentions::{
     extract_at_mentions_with_known, extract_nostr_uris, merge_mentions, strip_code_regions,
     MENTION_CAP,
 };
@@ -60,7 +60,7 @@ fn find_root_from_tags(tags: &serde_json::Value) -> Option<String> {
 ///
 /// Ensures CLI-sent replies thread correctly using the same NIP-10 logic.
 async fn resolve_thread_ref(
-    client: &SproutClient,
+    client: &BuzzClient,
     parent_event_id: &str,
 ) -> Result<ThreadRef, CliError> {
     let parent_eid = parse_event_id(parent_event_id)?;
@@ -90,7 +90,7 @@ async fn resolve_thread_ref(
 
 /// Resolve the channel UUID for an event by querying for it via POST /query.
 /// Extracts the `h` tag value from the returned event's tags.
-async fn resolve_channel_id(client: &SproutClient, event_id: &str) -> Result<Uuid, CliError> {
+async fn resolve_channel_id(client: &BuzzClient, event_id: &str) -> Result<Uuid, CliError> {
     let filter = serde_json::json!({
         "ids": [event_id]
     });
@@ -130,7 +130,7 @@ async fn resolve_channel_id(client: &SproutClient, event_id: &str) -> Result<Uui
 /// for multi-word matching. On any I/O or parse failure, returns an empty
 /// vec — auto-tagging is best-effort and must never block a send.
 async fn resolve_content_mentions(
-    client: &SproutClient,
+    client: &BuzzClient,
     channel_id: &str,
     content: &str,
 ) -> Vec<String> {
@@ -205,7 +205,7 @@ async fn resolve_content_mentions(
 /// Fetch raw events for `filter` via the relay's `/query` endpoint.
 /// Returns `None` on any I/O or parse failure.
 async fn fetch_events(
-    client: &SproutClient,
+    client: &BuzzClient,
     filter: &serde_json::Value,
 ) -> Option<Vec<serde_json::Value>> {
     let raw = client.query(filter).await.ok()?;
@@ -215,7 +215,7 @@ async fn fetch_events(
 
 /// Extract member pubkeys (the `p` tag values) from a single 39002 event.
 async fn fetch_member_pubkeys(
-    client: &SproutClient,
+    client: &BuzzClient,
     filter: &serde_json::Value,
 ) -> Option<Vec<String>> {
     let events = fetch_events(client, filter).await?;
@@ -269,7 +269,7 @@ fn format_events(normalized: &str, format: &crate::OutputFormat) -> String {
 }
 
 pub async fn cmd_get_messages(
-    client: &SproutClient,
+    client: &BuzzClient,
     channel_id: &str,
     limit: Option<u32>,
     before: Option<i64>,
@@ -310,7 +310,7 @@ pub async fn cmd_get_messages(
 }
 
 pub async fn cmd_get_thread(
-    client: &SproutClient,
+    client: &BuzzClient,
     channel_id: &str,
     event_id: &str,
     limit: Option<u32>,
@@ -346,7 +346,7 @@ pub async fn cmd_get_thread(
 }
 
 pub async fn cmd_search(
-    client: &SproutClient,
+    client: &BuzzClient,
     query: &str,
     limit: Option<u32>,
     format: &crate::OutputFormat,
@@ -378,7 +378,7 @@ pub struct SendMessageParams {
 }
 
 pub async fn cmd_send_message(
-    client: &SproutClient,
+    client: &BuzzClient,
     mut p: SendMessageParams,
 ) -> Result<(), CliError> {
     // Allow '-' to read content from stdin. This keeps callers from having to
@@ -436,14 +436,14 @@ pub async fn cmd_send_message(
 
     let builder = match p.kind {
         Some(45001) => {
-            sprout_sdk::build_forum_post(channel_uuid, &final_content, &mention_refs, &media_tags)
+            buzz_sdk::build_forum_post(channel_uuid, &final_content, &mention_refs, &media_tags)
                 .map_err(|e| CliError::Other(format!("build_forum_post failed: {e}")))?
         }
         Some(45003) => {
             let tr = thread_ref.as_ref().ok_or_else(|| {
                 CliError::Usage("--reply-to is required for forum comments (kind 45003)".into())
             })?;
-            sprout_sdk::build_forum_comment(
+            buzz_sdk::build_forum_comment(
                 channel_uuid,
                 &final_content,
                 tr,
@@ -452,7 +452,7 @@ pub async fn cmd_send_message(
             )
             .map_err(|e| CliError::Other(format!("build_forum_comment failed: {e}")))?
         }
-        None | Some(9) => sprout_sdk::build_message(
+        None | Some(9) => buzz_sdk::build_message(
             channel_uuid,
             &final_content,
             thread_ref.as_ref(),
@@ -491,7 +491,7 @@ pub struct SendDiffParams {
 }
 
 pub async fn cmd_send_diff_message(
-    client: &SproutClient,
+    client: &BuzzClient,
     p: SendDiffParams,
 ) -> Result<(), CliError> {
     if let Some(r) = &p.reply_to {
@@ -556,7 +556,7 @@ pub async fn cmd_send_diff_message(
     };
 
     let builder =
-        sprout_sdk::build_diff_message(channel_uuid, &diff, &diff_meta, thread_ref.as_ref())
+        buzz_sdk::build_diff_message(channel_uuid, &diff, &diff_meta, thread_ref.as_ref())
             .map_err(|e| CliError::Other(format!("build_diff_message failed: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -566,14 +566,14 @@ pub async fn cmd_send_diff_message(
     Ok(())
 }
 
-pub async fn cmd_delete_message(client: &SproutClient, event_id: &str) -> Result<(), CliError> {
+pub async fn cmd_delete_message(client: &BuzzClient, event_id: &str) -> Result<(), CliError> {
     validate_hex64(event_id)?;
 
     // Resolve channel_id from the event's h-tag
     let channel_uuid = resolve_channel_id(client, event_id).await?;
     let target_eid = parse_event_id(event_id)?;
 
-    let builder = sprout_sdk::build_delete_message(channel_uuid, target_eid)
+    let builder = buzz_sdk::build_delete_message(channel_uuid, target_eid)
         .map_err(|e| CliError::Other(format!("build_delete_message failed: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -585,7 +585,7 @@ pub async fn cmd_delete_message(client: &SproutClient, event_id: &str) -> Result
 
 /// Edit a message you previously sent.
 pub async fn cmd_edit_message(
-    client: &SproutClient,
+    client: &BuzzClient,
     event_id: &str,
     content: &str,
 ) -> Result<(), CliError> {
@@ -596,7 +596,7 @@ pub async fn cmd_edit_message(
     let channel_uuid = resolve_channel_id(client, event_id).await?;
     let target_eid = parse_event_id(event_id)?;
 
-    let builder = sprout_sdk::build_edit(channel_uuid, target_eid, content)
+    let builder = buzz_sdk::build_edit(channel_uuid, target_eid, content)
         .map_err(|e| CliError::Other(format!("build_edit failed: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -608,7 +608,7 @@ pub async fn cmd_edit_message(
 
 /// Vote on a forum post or comment.
 pub async fn cmd_vote_on_post(
-    client: &SproutClient,
+    client: &BuzzClient,
     event_id: &str,
     direction: &str,
 ) -> Result<(), CliError> {
@@ -627,7 +627,7 @@ pub async fn cmd_vote_on_post(
     let channel_uuid = resolve_channel_id(client, event_id).await?;
     let target_eid = parse_event_id(event_id)?;
 
-    let builder = sprout_sdk::build_vote(channel_uuid, target_eid, vote_dir)
+    let builder = buzz_sdk::build_vote(channel_uuid, target_eid, vote_dir)
         .map_err(|e| CliError::Other(format!("build_vote failed: {e}")))?;
 
     let event = client.sign_event(builder)?;
@@ -643,7 +643,7 @@ pub async fn cmd_vote_on_post(
 
 pub async fn dispatch(
     cmd: crate::MessagesCmd,
-    client: &SproutClient,
+    client: &BuzzClient,
     format: &crate::OutputFormat,
 ) -> Result<(), CliError> {
     use crate::MessagesCmd;
@@ -739,7 +739,7 @@ pub async fn dispatch(
 mod tests {
     use super::{find_root_from_tags, parse_member_pubkeys};
     use serde_json::json;
-    use sprout_sdk::mentions::{
+    use buzz_sdk::mentions::{
         extract_at_mentions_with_known, extract_at_names, match_names_to_profiles, MentionProfile,
     };
 

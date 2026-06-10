@@ -41,7 +41,7 @@ pub fn resolve_ttl(event: &nostr::Event, ephemeral_ttl_override: Option<i32>) ->
             tracing::debug!(
                 original,
                 override_val = ovr,
-                "Applying SPROUT_EPHEMERAL_TTL_OVERRIDE"
+                "Applying BUZZ_EPHEMERAL_TTL_OVERRIDE"
             );
             Some(ovr)
         }

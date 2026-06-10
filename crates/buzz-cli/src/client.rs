@@ -117,10 +117,10 @@ fn sign_nip98(
 }
 
 // ---------------------------------------------------------------------------
-// SproutClient
+// BuzzClient
 // ---------------------------------------------------------------------------
 
-pub struct SproutClient {
+pub struct BuzzClient {
     http: reqwest::Client,
     relay_url: String, // base URL, no trailing slash, e.g. "https://relay.sprout.place"
     keys: Keys,
@@ -130,7 +130,7 @@ pub struct SproutClient {
     auth_tag_json: Option<String>,
 }
 
-impl SproutClient {
+impl BuzzClient {
     pub fn new(
         relay_url: String,
         keys: Keys,
@@ -290,12 +290,12 @@ impl SproutClient {
     /// Publish an ephemeral event via WebSocket with NIP-42 authentication.
     ///
     /// The relay rejects ephemeral kinds (20000–29999) over HTTP. Delegates to
-    /// `sprout_ws_client::publish_event` which handles connect, NIP-42 auth,
+    /// `buzz_ws_client::publish_event` which handles connect, NIP-42 auth,
     /// EVENT send, OK wait, and graceful close.
     pub async fn publish_ephemeral_event(&self, event: nostr::Event) -> Result<String, CliError> {
         let ws_url = to_ws_url(&self.relay_url);
         let ok =
-            sprout_ws_client::publish_event(&ws_url, event, &self.keys, self.auth_tag.as_ref(), 10)
+            buzz_ws_client::publish_event(&ws_url, event, &self.keys, self.auth_tag.as_ref(), 10)
                 .await
                 .map_err(|e| CliError::Other(e.to_string()))?;
 
@@ -440,9 +440,9 @@ impl SproutClient {
                         .map(|s| s.to_string())
                 })
                 .unwrap_or(body);
-            if status == 403 && std::env::var("SPROUT_AUTH_TAG").is_ok() {
+            if status == 403 && std::env::var("BUZZ_AUTH_TAG").is_ok() {
                 let message = format!(
-                    "{message} (SPROUT_AUTH_TAG is set — it may be stale or revoked; try unsetting it)"
+                    "{message} (BUZZ_AUTH_TAG is set — it may be stale or revoked; try unsetting it)"
                 );
                 return Err(CliError::Relay {
                     status,
@@ -463,7 +463,7 @@ impl SproutClient {
 // ---------------------------------------------------------------------------
 
 /// Normalize a relay URL: ws:// → http://, wss:// → https://, strip trailing slash.
-/// SPROUT_RELAY_URL may be ws/wss (copied from MCP config).
+/// BUZZ_RELAY_URL may be ws/wss (copied from MCP config).
 pub fn normalize_relay_url(url: &str) -> String {
     url.replace("wss://", "https://")
         .replace("ws://", "http://")

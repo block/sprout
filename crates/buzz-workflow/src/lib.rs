@@ -43,9 +43,9 @@ use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
-use sprout_core::kind::{event_kind_u32, is_workflow_execution_kind, KIND_REACTION};
-use sprout_db::workflow::RunStatus;
-use sprout_db::Db;
+use buzz_core::kind::{event_kind_u32, is_workflow_execution_kind, KIND_REACTION};
+use buzz_db::workflow::RunStatus;
+use buzz_db::Db;
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
@@ -233,7 +233,7 @@ impl WorkflowEngine {
     /// clone of the `Arc` without requiring `'static` on `&self`.
     pub async fn on_event(
         self: &Arc<Self>,
-        event: &sprout_core::StoredEvent,
+        event: &buzz_core::StoredEvent,
     ) -> Result<(), WorkflowError> {
         let Some(channel_id) = event.channel_id else {
             tracing::debug!(
@@ -616,7 +616,7 @@ async fn should_fire_workflow(
 
 // ── Trigger context builder ───────────────────────────────────────────────────
 
-/// Build a [`executor::TriggerContext`] from a [`sprout_core::StoredEvent`].
+/// Build a [`executor::TriggerContext`] from a [`buzz_core::StoredEvent`].
 ///
 /// - `text` — event content (message body or reaction emoji character)
 /// - `author` — pubkey hex string
@@ -625,7 +625,7 @@ async fn should_fire_workflow(
 /// - `emoji` — for `KIND_REACTION` events, the content is the emoji; otherwise empty
 /// - `message_id` — for reactions, the target message's event ID (from `e` tag);
 ///   for all other events, the event's own ID
-pub fn build_trigger_context(event: &sprout_core::StoredEvent) -> executor::TriggerContext {
+pub fn build_trigger_context(event: &buzz_core::StoredEvent) -> executor::TriggerContext {
     let kind_u32 = event_kind_u32(&event.event);
     let content = event.event.content.clone();
 
@@ -699,7 +699,7 @@ pub fn build_trigger_context(event: &sprout_core::StoredEvent) -> executor::Trig
 
 /// Returns `true` if the trigger type matches the given event kind.
 fn trigger_matches_event(trigger: &TriggerDef, kind_u32: u32) -> bool {
-    use sprout_core::kind::{KIND_REACTION, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_DIFF};
+    use buzz_core::kind::{KIND_REACTION, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_DIFF};
     match trigger {
         TriggerDef::MessagePosted { .. } => kind_u32 == KIND_STREAM_MESSAGE,
         TriggerDef::ReactionAdded { .. } => kind_u32 == KIND_REACTION,
@@ -886,11 +886,11 @@ steps:
         let trigger = TriggerDef::MessagePosted { filter: None };
         assert!(trigger_matches_event(
             &trigger,
-            sprout_core::kind::KIND_STREAM_MESSAGE
+            buzz_core::kind::KIND_STREAM_MESSAGE
         ));
         assert!(!trigger_matches_event(
             &trigger,
-            sprout_core::kind::KIND_REACTION
+            buzz_core::kind::KIND_REACTION
         ));
     }
 
@@ -899,11 +899,11 @@ steps:
         let trigger = TriggerDef::ReactionAdded { emoji: None };
         assert!(trigger_matches_event(
             &trigger,
-            sprout_core::kind::KIND_REACTION
+            buzz_core::kind::KIND_REACTION
         ));
         assert!(!trigger_matches_event(
             &trigger,
-            sprout_core::kind::KIND_STREAM_MESSAGE
+            buzz_core::kind::KIND_STREAM_MESSAGE
         ));
     }
 
@@ -916,15 +916,15 @@ steps:
         // Schedule triggers are fired by the cron loop, not by events.
         assert!(!trigger_matches_event(
             &trigger,
-            sprout_core::kind::KIND_STREAM_MESSAGE
+            buzz_core::kind::KIND_STREAM_MESSAGE
         ));
         assert!(!trigger_matches_event(
             &trigger,
-            sprout_core::kind::KIND_REACTION
+            buzz_core::kind::KIND_REACTION
         ));
         assert!(!trigger_matches_event(
             &trigger,
-            sprout_core::kind::KIND_WORKFLOW_TRIGGERED
+            buzz_core::kind::KIND_WORKFLOW_TRIGGERED
         ));
     }
 
@@ -933,7 +933,7 @@ steps:
         let trigger = TriggerDef::Webhook;
         assert!(!trigger_matches_event(
             &trigger,
-            sprout_core::kind::KIND_STREAM_MESSAGE
+            buzz_core::kind::KIND_STREAM_MESSAGE
         ));
         assert!(!trigger_matches_event(&trigger, 0));
     }
@@ -994,8 +994,8 @@ steps:
         let msg_trigger = TriggerDef::MessagePosted { filter: None };
         let react_trigger = TriggerDef::ReactionAdded { emoji: None };
 
-        for kind in sprout_core::kind::KIND_WORKFLOW_TRIGGERED
-            ..=sprout_core::kind::KIND_WORKFLOW_APPROVAL_DENIED
+        for kind in buzz_core::kind::KIND_WORKFLOW_TRIGGERED
+            ..=buzz_core::kind::KIND_WORKFLOW_APPROVAL_DENIED
         {
             assert!(
                 !trigger_matches_event(&msg_trigger, kind),
@@ -1052,7 +1052,7 @@ steps:
 
     // ── build_trigger_context ─────────────────────────────────────────────────
 
-    fn make_message_event() -> sprout_core::StoredEvent {
+    fn make_message_event() -> buzz_core::StoredEvent {
         use nostr::{EventBuilder, Keys, Kind};
         use uuid::Uuid;
         let keys = Keys::generate();
@@ -1060,11 +1060,11 @@ steps:
             .tags([])
             .sign_with_keys(&keys)
             .expect("sign");
-        sprout_core::StoredEvent::new(event, Some(Uuid::new_v4()))
+        buzz_core::StoredEvent::new(event, Some(Uuid::new_v4()))
     }
 
     /// Create a reaction event with an `e` tag pointing to a target message.
-    fn make_reaction_event() -> (sprout_core::StoredEvent, String) {
+    fn make_reaction_event() -> (buzz_core::StoredEvent, String) {
         use nostr::{EventBuilder, Keys, Kind, Tag};
         use uuid::Uuid;
         let keys = Keys::generate();
@@ -1082,7 +1082,7 @@ steps:
             .sign_with_keys(&keys)
             .expect("sign");
         (
-            sprout_core::StoredEvent::new(event, Some(Uuid::new_v4())),
+            buzz_core::StoredEvent::new(event, Some(Uuid::new_v4())),
             target_id_hex,
         )
     }
@@ -1126,7 +1126,7 @@ steps:
             .sign_with_keys(&keys)
             .expect("sign");
         // channel_id = None (global/DM event)
-        let stored = sprout_core::StoredEvent::new(event, None);
+        let stored = buzz_core::StoredEvent::new(event, None);
         let ctx = build_trigger_context(&stored);
 
         assert_eq!(ctx.channel_id, "");
@@ -1179,7 +1179,7 @@ steps:
             .sign_with_keys(&keys)
             .expect("sign");
 
-        let stored = sprout_core::StoredEvent::new(event, Some(Uuid::new_v4()));
+        let stored = buzz_core::StoredEvent::new(event, Some(Uuid::new_v4()));
         let ctx = build_trigger_context(&stored);
 
         // Should pick the LAST e tag (direct target), not the first (thread root)

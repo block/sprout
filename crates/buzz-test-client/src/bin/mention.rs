@@ -2,7 +2,7 @@
 //! Usage: mention <channel_uuid> <target_pubkey_hex> <message>
 
 use nostr::{EventBuilder, Keys, Kind, Tag};
-use sprout_test_client::SproutTestClient;
+use buzz_test_client::BuzzTestClient;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -17,11 +17,11 @@ async fn main() -> anyhow::Result<()> {
     let target_pubkey = &args[2];
     let message = args[3..].join(" ");
 
-    let url = std::env::var("SPROUT_RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".into());
+    let url = std::env::var("BUZZ_RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".into());
     let keys = Keys::generate();
     println!("Sender pubkey: {}", keys.public_key().to_hex());
 
-    let mut client = SproutTestClient::connect(&url, &keys).await?;
+    let mut client = BuzzTestClient::connect(&url, &keys).await?;
 
     let h_tag = Tag::parse(["h", channel_id])?;
     let p_tag = Tag::parse(["p", target_pubkey])?;

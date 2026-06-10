@@ -74,7 +74,7 @@ pub struct WsParams {
 /// - `DELETE /admin/guests` — Revoke a guest pubkey
 /// - `GET /admin/guests`   — List all registered guests
 ///
-/// All `/admin/*` routes are protected by `SPROUT_PROXY_ADMIN_SECRET` if set.
+/// All `/admin/*` routes are protected by `BUZZ_PROXY_ADMIN_SECRET` if set.
 pub fn router(state: ProxyState) -> Router {
     Router::new()
         .route("/", get(root_handler))
@@ -124,10 +124,10 @@ async fn root_handler(
 
 fn nip11_response() -> impl IntoResponse {
     let nip11 = serde_json::json!({
-        "name": "sprout-proxy",
+        "name": "buzz-proxy",
         "description": "Sprout NIP-28 guest proxy for standard Nostr clients",
         "supported_nips": [1, 11, 28, 42],
-        "software": "sprout-proxy",
+        "software": "buzz-proxy",
         "version": env!("CARGO_PKG_VERSION"),
         "limitation": {
             "auth_required": true

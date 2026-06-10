@@ -82,7 +82,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(git_router)
         .merge(git_policy_router);
 
-    // When SPROUT_WEB_DIR is set, serve the SPA as a fallback for unmatched routes.
+    // When BUZZ_WEB_DIR is set, serve the SPA as a fallback for unmatched routes.
     if let Some(ref web_dir) = state.config.web_dir {
         let index_path = web_dir.join("index.html");
         let spa_fallback = ServeDir::new(web_dir).not_found_service(tower::service_fn(
@@ -227,7 +227,7 @@ async fn readiness_handler(State(state): State<Arc<AppState>>) -> impl IntoRespo
 async fn status_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let uptime_secs = state.started_at.elapsed().as_secs();
     Json(json!({
-        "service": "sprout-relay",
+        "service": "buzz-relay",
         "version": env!("CARGO_PKG_VERSION"),
         "uptime_seconds": uptime_secs,
     }))
@@ -246,7 +246,7 @@ fn build_cors_layer(cors_origins: &[String]) -> CorsLayer {
 
     if origins.is_empty() {
         tracing::error!(
-            "SPROUT_CORS_ORIGINS set but no valid origins could be parsed — \
+            "BUZZ_CORS_ORIGINS set but no valid origins could be parsed — \
              refusing to fall back to permissive CORS. Fix the origins or unset \
              the variable for development mode."
         );

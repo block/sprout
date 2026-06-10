@@ -11,7 +11,7 @@
 //! It must never be used in a standard Nostr interop path where signature
 //! verification is expected to pass.
 
-use sprout_core::kind::{
+use buzz_core::kind::{
     KIND_DM_CREATED, KIND_NIP29_DELETE_EVENT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_EDIT,
     KIND_STREAM_MESSAGE_V2,
 };
@@ -104,7 +104,7 @@ impl Default for KindTranslator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sprout_core::kind::{
+    use buzz_core::kind::{
         KIND_DM_CREATED, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_V2,
     };
 

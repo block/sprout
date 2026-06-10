@@ -1,4 +1,4 @@
-use crate::client::SproutClient;
+use crate::client::BuzzClient;
 use crate::error::CliError;
 use crate::validate::validate_repo_id;
 
@@ -7,7 +7,7 @@ use crate::validate::validate_repo_id;
 // ---------------------------------------------------------------------------
 
 pub async fn cmd_create_repo(
-    client: &SproutClient,
+    client: &BuzzClient,
     repo_id: &str,
     name: Option<&str>,
     description: Option<&str>,
@@ -20,7 +20,7 @@ pub async fn cmd_create_repo(
     let clone_refs: Vec<&str> = clone_urls.iter().map(|s| s.as_str()).collect();
     let relay_refs: Vec<&str> = relays.iter().map(|s| s.as_str()).collect();
 
-    let builder = sprout_sdk::build_repo_announcement(
+    let builder = buzz_sdk::build_repo_announcement(
         repo_id,
         name,
         description,
@@ -41,7 +41,7 @@ pub async fn cmd_create_repo(
 // ---------------------------------------------------------------------------
 
 pub async fn cmd_get_repo(
-    client: &SproutClient,
+    client: &BuzzClient,
     repo_id: &str,
     owner: Option<&str>,
 ) -> Result<(), CliError> {
@@ -69,7 +69,7 @@ pub async fn cmd_get_repo(
 // ---------------------------------------------------------------------------
 
 pub async fn cmd_list_repos(
-    client: &SproutClient,
+    client: &BuzzClient,
     owner: Option<&str>,
     limit: Option<u32>,
 ) -> Result<(), CliError> {
@@ -100,7 +100,7 @@ pub async fn cmd_list_repos(
 // Dispatch
 // ---------------------------------------------------------------------------
 
-pub async fn dispatch(cmd: crate::ReposCmd, client: &SproutClient) -> Result<(), CliError> {
+pub async fn dispatch(cmd: crate::ReposCmd, client: &BuzzClient) -> Result<(), CliError> {
     use crate::ReposCmd;
     match cmd {
         ReposCmd::Create {

@@ -11,7 +11,7 @@ use zeroize::Zeroize;
 ///    builds ephemeral `GIT_CONFIG_*` env vars, then removes the env var
 /// 3. Prepends the shim dir to PATH
 ///
-/// Shell children receive `path_env`, `git_env`, and `SPROUT_PRIVATE_KEY` (for
+/// Shell children receive `path_env`, `git_env`, and `BUZZ_PRIVATE_KEY` (for
 /// the sprout CLI). `NOSTR_PRIVATE_KEY` is removed from the process env after
 /// the keyfile is written — git helpers read from the keyfile only.
 /// Cleaned up on drop (TempDir).
@@ -151,7 +151,7 @@ fn write_keyfile_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
 /// Format: `<hex_pubkey>@<relay_host>` (e.g., `ab12...cd@relay.sprout.dev`).
 /// Falls back to `<hex_pubkey>@sprout` if no relay URL is configured.
 fn derive_git_email(pubkey_hex: &str) -> String {
-    let host = std::env::var("SPROUT_RELAY_URL")
+    let host = std::env::var("BUZZ_RELAY_URL")
         .ok()
         .and_then(|url| {
             // Strip scheme, port, and trailing paths
