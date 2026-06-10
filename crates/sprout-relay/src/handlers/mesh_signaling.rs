@@ -24,10 +24,79 @@ use std::sync::Arc;
 
 use nostr::{EventBuilder, Kind, Tag};
 use sprout_core::event::StoredEvent;
-use sprout_core::kind::KIND_MESH_CALL_ME_NOW;
+use sprout_core::kind::{
+    event_kind_u32, KIND_MESH_CALL_ME_NOW, KIND_MESH_CONNECT_REQUEST, KIND_MESH_STATUS_REPORT,
+};
 
 use crate::api::relay_members::{check_relay_membership, MembershipDecision};
 use crate::state::AppState;
+
+/// Check + bump the per-requester 24621 rate limit (20/sec window).
+///
+/// Each accepted connect request makes the relay sign + fan TWO 24622s, so we
+/// bound the amplification. 20/sec is far above any real interactive use; a
+/// buggy desktop loop can't storm the relay. Shared by the WS door
+/// (`handlers::event`) and the HTTP door (`handle_mesh_event_http`) — one
+/// limiter, two transports.
+pub(crate) fn connect_request_rate_limited(state: &AppState, pubkey: &nostr::PublicKey) -> bool {
+    let key: [u8; 32] = pubkey.to_bytes();
+    let now = std::time::Instant::now();
+    let mut entry = state
+        .mesh_connect_rate_limiter
+        .entry(key)
+        .or_insert((0, now));
+    let (count, window_start) = entry.value_mut();
+    if now.duration_since(*window_start).as_secs() >= 1 {
+        *count = 1;
+        *window_start = now;
+        false
+    } else {
+        *count += 1;
+        *count > 20
+    }
+}
+
+/// HTTP-door entry point for the two desktop-published mesh signaling kinds
+/// (24620 status report, 24621 connect request).
+///
+/// These kinds are ephemeral, so `ingest_event`'s per-kind allowlist
+/// (deliberately) rejects them — historically they arrived only over the WS
+/// path in `handlers::event`. Since the desktop's Rust coordinator publishes
+/// them via `POST /events` (NIP-98), the bridge routes them here instead.
+/// Mirrors the WS door's checks in the same order: signature, pubkey-match
+/// (strict — mesh kinds are never proxy-submittable), rate limit, then the
+/// shared handlers. Membership is enforced both at the bridge and inside the
+/// handlers (fail-closed `require_mesh_member`).
+///
+/// Returns the same message the WS door would put in its OK frame; the bridge
+/// maps `Err` to HTTP 400.
+pub async fn handle_mesh_event_http(
+    state: &Arc<AppState>,
+    auth_pubkey: &nostr::PublicKey,
+    event: &nostr::Event,
+) -> Result<(), String> {
+    let event_clone = event.clone();
+    tokio::task::spawn_blocking(move || sprout_core::verification::verify_event(&event_clone))
+        .await
+        .map_err(|_| "error: internal verification error".to_string())?
+        .map_err(|e| format!("invalid: {e}"))?;
+
+    if event.pubkey != *auth_pubkey {
+        return Err("invalid: event pubkey does not match authenticated identity".to_string());
+    }
+
+    let pubkey_hex = auth_pubkey.to_hex();
+    match event_kind_u32(event) {
+        k if k == KIND_MESH_STATUS_REPORT => handle_status_report(state, &pubkey_hex, event).await,
+        k if k == KIND_MESH_CONNECT_REQUEST => {
+            if connect_request_rate_limited(state, auth_pubkey) {
+                return Err("rate-limited: mesh connect request rate exceeded (20/sec)".to_string());
+            }
+            handle_connect_request(state, &pubkey_hex, event).await
+        }
+        k => Err(format!("invalid: kind {k} is not a mesh signaling kind")),
+    }
+}
 
 /// Parsed `KIND_MESH_CONNECT_REQUEST` (24621) content.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -608,5 +677,111 @@ mod tests {
             "requester receives no event"
         );
         assert!(target_rx.try_recv().is_err(), "target receives no event");
+    }
+
+    // ── HTTP door (handle_mesh_event_http) ──────────────────────────────────
+    // Regression coverage for the post-#879 transport: the desktop's Rust
+    // coordinator publishes 24620/24621 via POST /events, which used to fall
+    // into ingest_event's allowlist and 400 with "unknown event kind".
+
+    fn signed_connect_request(keys: &nostr::Keys, target_hex: &str) -> nostr::Event {
+        let content = serde_json::json!({
+            "self_endpoint_addr": "SELF_ADDR",
+            "peer_endpoint_addr": "PEER_ADDR",
+            "attempt_id": "attempt-http-1"
+        })
+        .to_string();
+        nostr::EventBuilder::new(nostr::Kind::Custom(24621), content)
+            .tags([nostr::Tag::parse(["p", target_hex]).unwrap()])
+            .sign_with_keys(keys)
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn http_door_accepts_connect_request_and_emits_pair() {
+        let state = test_state().await;
+        let requester = nostr::Keys::generate();
+        let requester_hex = requester.public_key().to_hex();
+        let target_hex = nostr::Keys::generate().public_key().to_hex();
+        let (_rc, mut requester_rx) =
+            register_call_me_now_sub(&state, &requester_hex, "http_requester");
+        let (_tc, mut target_rx) = register_call_me_now_sub(&state, &target_hex, "http_target");
+
+        handle_mesh_event_http(
+            &state,
+            &requester.public_key(),
+            &signed_connect_request(&requester, &target_hex),
+        )
+        .await
+        .expect("HTTP door accepts a valid connect request");
+
+        event_from_ws_message(requester_rx.try_recv().expect("requester call-me-now"));
+        event_from_ws_message(target_rx.try_recv().expect("target call-me-now"));
+    }
+
+    #[tokio::test]
+    async fn http_door_rejects_pubkey_mismatch() {
+        let state = test_state().await;
+        let signer = nostr::Keys::generate();
+        let other = nostr::Keys::generate();
+        let target_hex = nostr::Keys::generate().public_key().to_hex();
+
+        let err = handle_mesh_event_http(
+            &state,
+            &other.public_key(),
+            &signed_connect_request(&signer, &target_hex),
+        )
+        .await
+        .expect_err("signer != authenticated identity must be rejected");
+        assert!(err.contains("does not match"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn http_door_rejects_bad_signature() {
+        let state = test_state().await;
+        let keys = nostr::Keys::generate();
+        let target_hex = nostr::Keys::generate().public_key().to_hex();
+        let mut event = signed_connect_request(&keys, &target_hex);
+        // Tamper after signing.
+        event.content = "{}".to_string();
+
+        let err = handle_mesh_event_http(&state, &keys.public_key(), &event)
+            .await
+            .expect_err("tampered event must be rejected");
+        assert!(err.starts_with("invalid:"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn http_door_rejects_non_mesh_kind() {
+        let state = test_state().await;
+        let keys = nostr::Keys::generate();
+        let event = nostr::EventBuilder::new(nostr::Kind::Custom(20001), "online")
+            .sign_with_keys(&keys)
+            .unwrap();
+
+        let err = handle_mesh_event_http(&state, &keys.public_key(), &event)
+            .await
+            .expect_err("only 24620/24621 route through the mesh HTTP door");
+        assert!(
+            err.contains("not a mesh signaling kind"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_request_rate_limiter_trips_on_21st_in_window() {
+        let state = test_state().await;
+        let pubkey = nostr::Keys::generate().public_key();
+        for i in 0..20 {
+            assert!(
+                !connect_request_rate_limited(&state, &pubkey),
+                "request {} should pass",
+                i + 1
+            );
+        }
+        assert!(
+            connect_request_rate_limited(&state, &pubkey),
+            "21st request in the same window must be limited"
+        );
     }
 }

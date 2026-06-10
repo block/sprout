@@ -188,6 +188,31 @@ pub async fn submit_event(
     let event: nostr::Event = serde_json::from_slice(&body)
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, &format!("invalid event JSON: {e}")))?;
 
+    // Mesh signaling kinds (24620 status report, 24621 connect request) are
+    // ephemeral and deliberately absent from ingest_event's per-kind allowlist.
+    // The desktop's Rust coordinator publishes them via this bridge, so route
+    // them to the mesh handlers — the HTTP twin of the WS door's special-casing
+    // in handlers::event. Membership was enforced above; the handlers re-check
+    // it fail-closed.
+    let kind_u32 = sprout_core::kind::event_kind_u32(&event);
+    if kind_u32 == sprout_core::kind::KIND_MESH_STATUS_REPORT
+        || kind_u32 == sprout_core::kind::KIND_MESH_CONNECT_REQUEST
+    {
+        let event_id = event.id.to_hex();
+        return match crate::handlers::mesh_signaling::handle_mesh_event_http(
+            &state, &pubkey, &event,
+        )
+        .await
+        {
+            Ok(()) => Ok(Json(serde_json::json!({
+                "event_id": event_id,
+                "accepted": true,
+                "message": "",
+            }))),
+            Err(msg) => Err(api_error(StatusCode::BAD_REQUEST, &msg)),
+        };
+    }
+
     let auth = IngestAuth::Http {
         pubkey,
         scopes: sprout_auth::Scope::all_known(), // Pure Nostr: full scopes, channel access via membership
