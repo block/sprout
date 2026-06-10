@@ -232,7 +232,7 @@ test("welcome can continue using an existing Nostr key", async ({ page }) => {
 
   await page.getByTestId("welcome-continue-nostr").click();
   await expect(
-    page.getByRole("heading", { name: "Continue using Nostr" }),
+    page.getByRole("heading", { name: "Use your existing key" }),
   ).toBeVisible();
 
   const importedNsec = nsecEncode(hexToBytes(TEST_IDENTITIES.alice.privateKey));
