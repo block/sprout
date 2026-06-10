@@ -195,8 +195,7 @@ export const CustomEmojiNode = Node.create<CustomEmojiNodeOptions>({
         "data-shortcode": shortcode,
         draggable: "false",
         // Match the message-view <img data-custom-emoji> sizing exactly.
-        class:
-          "mx-px inline-block h-[1.25em] w-auto max-w-none align-text-bottom",
+        class: "mx-px inline-block h-[1.25em] w-auto max-w-none align-middle",
       }),
     ];
   },

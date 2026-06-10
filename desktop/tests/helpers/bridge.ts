@@ -63,9 +63,29 @@ type MockSearchProfileSeed = {
   isAgent?: boolean;
 };
 
+export type MockEngramEntry = {
+  slug: string;
+  body: string;
+  eventId: string;
+  createdAt: number;
+  outgoingRefs: string[];
+};
+
+export type MockAgentMemoryListing = {
+  core: MockEngramEntry | null;
+  memories: MockEngramEntry[];
+  truncated: boolean;
+  fetchedAt: number;
+};
+
 type MockBridgeOptions = {
   acpRuntimesCatalog?: Record<string, unknown>[];
   activePersonaIds?: string[];
+  /**
+   * Listing returned by the mocked `get_agent_memory` command. Pass a single
+   * listing for any managed agent, or a pubkey-keyed record for per-agent data.
+   */
+  agentMemory?: MockAgentMemoryListing | Record<string, MockAgentMemoryListing>;
   managedAgentPrereqs?: {
     acp?: MockCommandAvailability;
     mcp?: MockCommandAvailability;
@@ -75,6 +95,7 @@ type MockBridgeOptions = {
   profileReadError?: string;
   profileUpdateError?: string;
   searchProfiles?: MockSearchProfileSeed[];
+  updateChannelDelayMs?: number;
   stallWebsocketSends?: boolean;
   userSearchDelayMs?: number;
   // NIP-IA gate inputs — drive the archive-button gate matrix in
@@ -138,6 +159,115 @@ const ONBOARDING_COMPLETION_STORAGE_KEY_PREFIX =
   "sprout-onboarding-complete.v1:";
 const DEFAULT_MOCK_PUBKEY = "deadbeef".repeat(8);
 const DEFAULT_RELAY_WS_URL = "ws://localhost:3000";
+
+function cloneEngramEntry(entry: MockEngramEntry): MockEngramEntry {
+  return {
+    ...entry,
+    outgoingRefs: [...entry.outgoingRefs],
+  };
+}
+
+/**
+ * Recreates the old Memories UI development fixture as explicit Playwright
+ * seed data. Use with `installMockBridge(page, { agentMemory: ... })`.
+ */
+export function createMockAgentMemoryListing(
+  overrides: Partial<MockAgentMemoryListing> = {},
+): MockAgentMemoryListing {
+  const listing: MockAgentMemoryListing = {
+    core: {
+      slug: "core",
+      body: `I am a mock agent used to flesh out the Memories panel.
+
+I prefer concise updates, explicit next steps, and visual polish before edge-case handling.
+
+See [[mem/preferences/ui-density]] and [[mem/projects/sprout-memory-viewer]] for details.
+
+A retired launch checklist used to live at [[mem/archive/deleted-launch-checklist]], but that memory was deleted after the plan changed.`,
+      eventId: "mock-core",
+      createdAt: 1_700_000_000,
+      outgoingRefs: [
+        "mem/preferences/ui-density",
+        "mem/projects/sprout-memory-viewer",
+        "mem/archive/deleted-launch-checklist",
+      ],
+    },
+    memories: [
+      {
+        slug: "mem/preferences/ui-density",
+        body: "Prefer compact lists with generous body text when expanded.\n\nNested ref: [[mem/working-style/review-loop]]",
+        eventId: "mock-ui-density",
+        createdAt: 1_700_000_100,
+        outgoingRefs: ["mem/working-style/review-loop"],
+      },
+      {
+        slug: "mem/working-style/review-loop",
+        body: "Ship small slices, screenshot the happy path, then iterate on empty/error states.",
+        eventId: "mock-review-loop",
+        createdAt: 1_700_000_200,
+        outgoingRefs: [],
+      },
+      {
+        slug: "mem/projects/sprout-memory-viewer",
+        body: "Building the IXI-7 read-only memory viewer in the profile panel.\n\nChild memory: [[mem/projects/sprout-memory-viewer/notes]]",
+        eventId: "mock-project",
+        createdAt: 1_700_000_300,
+        outgoingRefs: ["mem/projects/sprout-memory-viewer/notes"],
+      },
+      {
+        slug: "mem/projects/sprout-memory-viewer/notes",
+        body: "Tree should auto-expand core. Everything else collapsed with a one-line preview.",
+        eventId: "mock-project-notes",
+        createdAt: 1_700_000_400,
+        outgoingRefs: [],
+      },
+      {
+        slug: "mem/people/alice",
+        body: "Alice prefers async updates in #design.",
+        eventId: "mock-alice",
+        createdAt: 1_700_000_500,
+        outgoingRefs: [],
+      },
+      {
+        slug: "mem/people/bob",
+        body: "Bob reviews PRs quickly but wants screenshots.",
+        eventId: "mock-bob",
+        createdAt: 1_700_000_600,
+        outgoingRefs: ["mem/people/alice"],
+      },
+      {
+        slug: "mem/scratch/todo",
+        body: "",
+        eventId: "mock-empty",
+        createdAt: 1_700_000_700,
+        outgoingRefs: [],
+      },
+      {
+        slug: "mem/orphan/unreferenced",
+        body: "This orphaned note is not reachable from core. It still points at [[mem/research/old-panel-sketches]], a deleted design scratchpad from an earlier pass.",
+        eventId: "mock-orphan",
+        createdAt: 1_700_000_800,
+        outgoingRefs: ["mem/research/old-panel-sketches"],
+      },
+    ],
+    truncated: true,
+    fetchedAt: Math.floor(Date.now() / 1000),
+  };
+
+  return {
+    core:
+      overrides.core === undefined
+        ? listing.core
+          ? cloneEngramEntry(listing.core)
+          : null
+        : overrides.core
+          ? cloneEngramEntry(overrides.core)
+          : null,
+    memories: (overrides.memories ?? listing.memories).map(cloneEngramEntry),
+    truncated: overrides.truncated ?? listing.truncated,
+    fetchedAt: overrides.fetchedAt ?? listing.fetchedAt,
+  };
+}
 
 async function seedOnboardingCompletionForKnownIdentities(page: Page) {
   const pubkeys = [

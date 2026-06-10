@@ -319,8 +319,19 @@ Right-click shows "Mark as read".
 {{02-context-menu}}
 ```
 
-Re-runs for the same PR overwrite previous images. Cleanup:
-`git push origin --delete agent-screenshots/<username>`.
+Re-runs overwrite the image blobs on the `agent-screenshots/<username>`
+branch, but the script **appends a new PR comment** — it does not edit or
+delete the previous one. After reposting, delete the superseded comment so
+only the current set remains, otherwise reviewers still see the stale images:
+
+```bash
+# List screenshot comments to find the stale one's id
+gh pr view <pr> --repo block/sprout --json comments \
+  --jq '.comments[] | select(.body | test("pr-<pr>--")) | {id, url}'
+gh api -X DELETE repos/block/sprout/issues/comments/<stale-comment-id>
+```
+
+Branch cleanup when fully done: `git push origin --delete agent-screenshots/<username>`.
 
 ### Writing E2E Screenshot Specs
 
@@ -356,6 +367,20 @@ await menuItem.evaluate((el) =>
 
 **Cropping:** Use `clip` — full-window (1280x720) screenshots are unreadable
 for sidebar features. Sidebar = 256px; context menus ~450px.
+
+**Distinct states — verify before posting:** when one view renders many
+elements at once (e.g. all team cards in a single grid), an unscoped
+full-page `page.screenshot()` captures the *same* pixels for every shot, so
+multiple PNGs come out byte-identical. Scope each shot to its subject with
+`locator.screenshot()` (full-page `clip` only when an overlay like an open
+dropdown must be included). Then gate on hash distinctness before posting:
+
+```bash
+shasum -a 256 test-results/<dir>/*.png   # every hash must be unique
+```
+
+Identical hashes mean two shots captured the same state — fix the spec, do
+not post. This catches the most common screenshot regression.
 
 **`general` has pre-seeded messages** making `hasUnread` always true. Use
 `engineering` for "muted + no unread" visual states.

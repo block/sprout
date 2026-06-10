@@ -41,7 +41,7 @@ const SPROUT_CLI_SKILL_MD: &str = include_str!("nest_skill.md");
 /// Template content version for AGENTS.md static content (above managed markers).
 /// Bump this when changing `nest_agents.md` to trigger refresh on existing installs.
 /// Version 1 is implicitly "before this mechanism existed" (no version file).
-const NEST_AGENTS_VERSION: u32 = 3;
+const NEST_AGENTS_VERSION: u32 = 4;
 
 /// Template content version for SKILL.md.
 /// Bump this when changing `nest_skill.md` to trigger refresh on existing installs.
@@ -943,11 +943,12 @@ mod tests {
             system_prompt: String::new(),
             runtime: None,
             model: None,
+            provider: None,
             name_pool: vec![],
             is_builtin: false,
             is_active: true,
-            source_pack: None,
-            source_pack_persona_slug: None,
+            source_team: None,
+            source_team_persona_slug: None,
             env_vars: std::collections::BTreeMap::new(),
             created_at: String::new(),
             updated_at: String::new(),
@@ -979,8 +980,8 @@ mod tests {
             backend: BackendKind::default(),
             backend_agent_id: None,
             provider_binary_path: None,
-            persona_pack_path: None,
-            persona_name_in_pack: None,
+            persona_team_dir: None,
+            persona_name_in_team: None,
             created_at: String::new(),
             updated_at: String::new(),
             last_started_at: None,

@@ -150,6 +150,9 @@ export function AgentsView() {
               onEdit={teamActions.openEditDialog}
               onExport={teamActions.handleExportTeam}
               onImportFile={teamActions.handleImportFile}
+              onInstallFromDirectory={teamActions.handleInstallFromDirectory}
+              onSync={teamActions.handleSyncTeam}
+              onRevealInFinder={teamActions.handleRevealInFinder}
               onAddToChannel={teamActions.setTeamToAddToChannel}
               personas={personas.libraryPersonas}
               teams={teamActions.teams}

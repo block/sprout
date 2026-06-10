@@ -17,6 +17,7 @@ import { toast } from "sonner";
 
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
 import { Badge } from "@/shared/ui/badge";
+import { AgentStatusBadge } from "@/features/agents/ui/AgentStatusBadge";
 import type {
   ManagedAgent,
   PresenceLookup,
@@ -471,41 +472,6 @@ function AgentOriginBadge({ agent }: { agent: ManagedAgent }) {
   return (
     <Badge variant="outline">
       {agent.backend.type === "local" ? "Local" : "Remote"}
-    </Badge>
-  );
-}
-
-/** Grace period after mount before treating "running + no presence" as "Starting…" */
-const PRESENCE_GRACE_MS = 15_000;
-
-function AgentStatusBadge({
-  presenceLoaded,
-  presenceStatus,
-  status,
-}: {
-  presenceLoaded: boolean;
-  presenceStatus: PresenceStatus | undefined;
-  status: ManagedAgent["status"];
-}) {
-  const [inGracePeriod, setInGracePeriod] = React.useState(true);
-
-  React.useEffect(() => {
-    const timer = setTimeout(() => setInGracePeriod(false), PRESENCE_GRACE_MS);
-    return () => clearTimeout(timer);
-  }, []);
-
-  const isActive = status === "running" || status === "deployed";
-  const isStarting =
-    !inGracePeriod &&
-    presenceLoaded &&
-    status === "running" &&
-    (!presenceStatus || presenceStatus === "offline");
-
-  const variant = isStarting ? "warning" : isActive ? "default" : "secondary";
-
-  return (
-    <Badge variant={variant}>
-      {isStarting ? "Starting\u2026" : status.replace(/_/g, " ")}
     </Badge>
   );
 }

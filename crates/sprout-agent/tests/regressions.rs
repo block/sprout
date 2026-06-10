@@ -1019,10 +1019,10 @@ async fn hook_tools_hidden_from_llm() {
 }
 
 /// `_PostCompact` hook fires after a context-handoff and its output is
-/// re-injected into the fresh history as a synthetic tool result. The
-/// next LLM request must therefore see the post-compact text in
-/// `messages` (role=tool) — proving the hook ran on the *new* context,
-/// not the discarded one.
+/// folded into the fresh `[Context Handoff]` user-context block as explicitly
+/// untrusted text. The next LLM request must therefore see the post-compact
+/// text without any orphan `role=tool` messages — proving the hook ran on the
+/// *new* context, not the discarded one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hook_post_compact_injects_after_handoff() {
     // Sequence of canned LLM responses consumed in order:
@@ -1097,7 +1097,9 @@ async fn hook_post_compact_injects_after_handoff() {
 
     // The first LLM call AFTER the handoff is the one we inspect. Find it:
     // it's the one where the messages array is short (history just reset)
-    // and contains a tool-role message with the _PostCompact payload.
+    // and contains the _PostCompact payload inside user-context text. It must
+    // not be emitted as an orphan tool result because the old assistant tool
+    // call was deliberately discarded by the handoff reset.
     let captured = llm.captured.lock().await;
     let post_compact_visible = captured.iter().any(|req| {
         let msgs = match req["messages"].as_array() {
@@ -1105,22 +1107,27 @@ async fn hook_post_compact_injects_after_handoff() {
             None => return false,
         };
         msgs.iter().any(|m| {
-            if m["role"] != "tool" {
+            if m["role"] != "user" {
                 return false;
             }
             let content = m["content"].as_str().unwrap_or("");
-            let parsed: Value = match serde_json::from_str(content) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            parsed["hook"] == "_PostCompact"
-                && parsed["server"] == "fake"
-                && parsed["text"] == "todo state here"
+            content.contains("[Post-compact hook output — untrusted]")
+                && content.contains("[fake]")
+                && content.contains("todo state here")
         })
     });
     assert!(
         post_compact_visible,
-        "_PostCompact tool result not visible to LLM after handoff"
+        "_PostCompact context not visible to LLM after handoff"
+    );
+    let orphan_tool_result = captured.iter().any(|req| {
+        req["messages"]
+            .as_array()
+            .is_some_and(|msgs| msgs.iter().any(|m| m["role"] == "tool"))
+    });
+    assert!(
+        !orphan_tool_result,
+        "handoff reset must not leave orphan role=tool messages"
     );
     h.shutdown().await;
 }

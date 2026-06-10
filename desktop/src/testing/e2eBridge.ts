@@ -62,10 +62,12 @@ type E2eConfig = {
       mcp?: MockCommandAvailability;
     };
     managedAgents?: MockManagedAgentSeed[];
+    agentMemory?: RawAgentMemoryListing | Record<string, RawAgentMemoryListing>;
     profileReadDelayMs?: number;
     profileReadError?: string;
     profileUpdateError?: string;
     searchProfiles?: MockSearchProfileSeed[];
+    updateChannelDelayMs?: number;
     stallWebsocketSends?: boolean;
     userSearchDelayMs?: number;
     // NIP-IA gate inputs — see tests/helpers/bridge.ts:MockBridgeOptions for
@@ -373,6 +375,21 @@ type RawManagedAgentLog = {
   log_path: string;
 };
 
+type RawEngramEntry = {
+  slug: string;
+  body: string;
+  eventId: string;
+  createdAt: number;
+  outgoingRefs: string[];
+};
+
+type RawAgentMemoryListing = {
+  core: RawEngramEntry | null;
+  memories: RawEngramEntry[];
+  truncated: boolean;
+  fetchedAt: number;
+};
+
 type RawCommandAvailability = {
   command: string;
   resolved_path: string | null;
@@ -402,6 +419,10 @@ type RawTeam = {
   description: string | null;
   persona_ids: string[];
   is_builtin: boolean;
+  source_dir: string | null;
+  is_symlink: boolean;
+  symlink_target: string | null;
+  version: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -526,6 +547,10 @@ declare global {
     __SPROUT_E2E__?: E2eConfig;
     __SPROUT_E2E_COMMANDS__?: string[];
     __SPROUT_E2E_COMMAND_PAYLOADS__?: Array<{
+      command: string;
+      payload: unknown;
+    }>;
+    __SPROUT_E2E_COMMAND_LOG__?: Array<{
       command: string;
       payload: unknown;
     }>;
@@ -847,6 +872,24 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
   };
 }
 
+function cloneEngramEntry(entry: RawEngramEntry): RawEngramEntry {
+  return {
+    ...entry,
+    outgoingRefs: [...entry.outgoingRefs],
+  };
+}
+
+function cloneAgentMemoryListing(
+  listing: RawAgentMemoryListing,
+): RawAgentMemoryListing {
+  return {
+    core: listing.core ? cloneEngramEntry(listing.core) : null,
+    memories: listing.memories.map(cloneEngramEntry),
+    truncated: listing.truncated,
+    fetchedAt: listing.fetchedAt,
+  };
+}
+
 function resetMockRelayMembers(config: E2eConfig | undefined) {
   const pubkey = getMockMemberPubkey(config);
   // Drive the active identity's role from `mock.relayRole` so the e2e harness
@@ -990,7 +1033,50 @@ function resetMockPersonas(config?: E2eConfig) {
 }
 
 function resetMockTeams() {
-  mockTeams = [];
+  const now = new Date().toISOString();
+  mockTeams = [
+    {
+      id: "team-engineering-001",
+      name: "Engineering",
+      description: "Core engineering personas",
+      // Scout is intentionally excluded so the clean deselect flow has a
+      // built-in persona that is not pre-referenced by any default team.
+      persona_ids: ["builtin:solo", "builtin:kit"],
+      is_builtin: false,
+      source_dir: null,
+      is_symlink: false,
+      symlink_target: null,
+      version: null,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: "team-research-002",
+      name: "Research Agents",
+      description: "Directory-backed research team",
+      persona_ids: ["builtin:solo", "builtin:kit"],
+      is_builtin: false,
+      source_dir: "/Users/dev/agents/research",
+      is_symlink: false,
+      symlink_target: null,
+      version: "1.2.0",
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: "team-platform-003",
+      name: "Platform Tools",
+      description: "Symlinked platform team",
+      persona_ids: ["builtin:kit"],
+      is_builtin: false,
+      source_dir: "/Users/dev/agents/platform",
+      is_symlink: true,
+      symlink_target: "/opt/shared-teams/platform",
+      version: "2.0.1",
+      created_at: now,
+      updated_at: now,
+    },
+  ];
 }
 
 function seedMockSearchProfiles(config?: E2eConfig) {
@@ -3369,6 +3455,11 @@ async function handleUpdateChannel(
   },
   config: E2eConfig | undefined,
 ) {
+  const delayMs = config?.mock?.updateChannelDelayMs ?? 0;
+  if (delayMs > 0) {
+    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+  }
+
   const identity = getIdentity(config);
   if (!identity) {
     const channel = getMockChannel(args.channelId);
@@ -4179,6 +4270,59 @@ async function handleListManagedAgents(): Promise<RawManagedAgent[]> {
   return mockManagedAgents.map(cloneManagedAgent);
 }
 
+function isAgentMemoryListing(
+  value: RawAgentMemoryListing | Record<string, RawAgentMemoryListing>,
+): value is RawAgentMemoryListing {
+  return (
+    "memories" in value &&
+    Array.isArray(value.memories) &&
+    "truncated" in value &&
+    "fetchedAt" in value
+  );
+}
+
+async function handleGetAgentMemory(
+  args: { agentPubkey?: string },
+  config: E2eConfig | undefined,
+): Promise<RawAgentMemoryListing> {
+  const pubkey = args.agentPubkey?.toLowerCase();
+  if (!pubkey) {
+    throw new Error("mock get_agent_memory: missing agent pubkey");
+  }
+
+  const isManagedAgent = mockManagedAgents.some(
+    (agent) => agent.pubkey.toLowerCase() === pubkey,
+  );
+  if (!isManagedAgent) {
+    throw new Error(`mock get_agent_memory: unmanaged agent ${pubkey}`);
+  }
+
+  const configuredMemory = config?.mock?.agentMemory;
+  if (!configuredMemory) {
+    return {
+      core: null,
+      memories: [],
+      truncated: false,
+      fetchedAt: Math.floor(Date.now() / 1000),
+    };
+  }
+
+  if (isAgentMemoryListing(configuredMemory)) {
+    return cloneAgentMemoryListing(configuredMemory);
+  }
+
+  const listing =
+    configuredMemory[pubkey] ?? configuredMemory[args.agentPubkey ?? ""];
+  return listing
+    ? cloneAgentMemoryListing(listing)
+    : {
+        core: null,
+        memories: [],
+        truncated: false,
+        fetchedAt: Math.floor(Date.now() / 1000),
+      };
+}
+
 async function handleListPersonas(): Promise<RawPersona[]> {
   return mockPersonas.map((persona) => ({ ...persona }));
 }
@@ -4337,6 +4481,10 @@ async function handleCreateTeam(args: {
     description: args.input.description?.trim() || null,
     persona_ids: [...args.input.personaIds],
     is_builtin: false,
+    source_dir: null,
+    is_symlink: false,
+    symlink_target: null,
+    version: null,
     created_at: now,
     updated_at: now,
   };
@@ -4391,6 +4539,50 @@ async function handleExportTeamToJson(args: { id: string }): Promise<boolean> {
   }
 
   return true;
+}
+
+async function handlePickTeamDirectory(): Promise<string | null> {
+  return "/Users/dev/agents/new-team";
+}
+
+async function handleInstallTeamFromDirectory(args: {
+  path: string;
+  symlink: boolean;
+}): Promise<RawTeam> {
+  const now = new Date().toISOString();
+  const team: RawTeam = {
+    id: crypto.randomUUID(),
+    name: "Installed Team",
+    description: null,
+    persona_ids: [],
+    is_builtin: false,
+    source_dir: args.path,
+    is_symlink: args.symlink,
+    symlink_target: args.symlink ? args.path : null,
+    version: null,
+    created_at: now,
+    updated_at: now,
+  };
+  mockTeams.push(team);
+  return { ...team, persona_ids: [...team.persona_ids] };
+}
+
+async function handleSyncTeamDirectory(args: { teamId: string }): Promise<{
+  personas_added: string[];
+  personas_removed: string[];
+  personas_updated: string[];
+  metadata_changed: boolean;
+}> {
+  const team = mockTeams.find((candidate) => candidate.id === args.teamId);
+  if (!team) {
+    throw new Error(`Team ${args.teamId} not found.`);
+  }
+  return {
+    personas_added: [],
+    personas_removed: [],
+    personas_updated: [],
+    metadata_changed: false,
+  };
 }
 
 async function handleParseTeamFile(): Promise<{
@@ -4528,6 +4720,14 @@ async function handleCreateManagedAgent(args: {
   mockManagedAgents.unshift(managedAgent);
   applyMockDisplayName(pubkey, name);
   mockAgentPubkeys.add(pubkey);
+  mockProfiles.set(pubkey, {
+    pubkey,
+    display_name: name,
+    avatar_url: args.input.avatarUrl?.trim() || null,
+    about: args.input.systemPrompt?.trim() || null,
+    nip05_handle: null,
+    is_agent: true,
+  });
   syncMockRelayAgentsFromManagedAgents();
 
   return {
@@ -5483,6 +5683,7 @@ export function maybeInstallE2eTauriMocks() {
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
   window.__SPROUT_E2E_COMMAND_PAYLOADS__ = [];
+  window.__SPROUT_E2E_COMMAND_LOG__ = [];
   window.__SPROUT_E2E_SIGNED_EVENTS__ = [];
   window.__SPROUT_E2E_WEBVIEW_ZOOM__ = 1;
   window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__ = ({
@@ -5610,6 +5811,7 @@ export function maybeInstallE2eTauriMocks() {
       command,
       payload: loggedPayload,
     });
+    window.__SPROUT_E2E_COMMAND_LOG__?.push({ command, payload });
 
     switch (command) {
       case "mesh_availability":
@@ -5865,6 +6067,16 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "export_team_to_json":
         return handleExportTeamToJson(payload as { id: string });
+      case "pick_team_directory":
+        return handlePickTeamDirectory();
+      case "install_team_from_directory":
+        return handleInstallTeamFromDirectory(
+          payload as Parameters<typeof handleInstallTeamFromDirectory>[0],
+        );
+      case "sync_team_directory":
+        return handleSyncTeamDirectory(
+          payload as Parameters<typeof handleSyncTeamDirectory>[0],
+        );
       case "parse_team_file":
         return handleParseTeamFile();
       case "parse_persona_files":
@@ -5875,6 +6087,11 @@ export function maybeInstallE2eTauriMocks() {
         return handleExportPersonaToJson(payload as { id: string });
       case "list_managed_agents":
         return handleListManagedAgents();
+      case "get_agent_memory":
+        return handleGetAgentMemory(
+          (payload as Parameters<typeof handleGetAgentMemory>[0]) ?? {},
+          activeConfig,
+        );
       case "create_managed_agent":
         return handleCreateManagedAgent(
           payload as Parameters<typeof handleCreateManagedAgent>[0],

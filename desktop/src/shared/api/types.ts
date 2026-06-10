@@ -475,11 +475,13 @@ export type AgentPersona = {
   runtime: string | null;
   /** Opaque, harness-specific model identifier string. Sprout stores and passes through without interpretation. */
   model: string | null;
+  /** LLM inference provider (e.g. "databricks", "anthropic"). Injected as the runtime's provider env var at spawn time. */
+  provider: string | null;
   namePool: string[];
   isBuiltIn: boolean;
   isActive: boolean;
-  /** Pack ID if this persona was imported from a persona pack. Pack personas are non-editable. */
-  sourcePack?: string | null;
+  /** Team ID if this persona was imported from a team directory. Team personas are non-editable. */
+  sourceTeam?: string | null;
   /** Environment variables injected for agents created from this persona.
    * Layered as: desktop parent env < persona envVars < agent envVars. */
   envVars: Record<string, string>;
@@ -493,6 +495,7 @@ export type CreatePersonaInput = {
   systemPrompt: string;
   runtime?: string;
   model?: string;
+  provider?: string;
   namePool?: string[];
   envVars?: Record<string, string>;
 };
@@ -504,6 +507,7 @@ export type UpdatePersonaInput = {
   systemPrompt: string;
   runtime?: string;
   model?: string;
+  provider?: string;
   namePool?: string[];
   envVars?: Record<string, string>;
 };
@@ -515,6 +519,14 @@ export type AgentTeam = {
   description: string | null;
   personaIds: string[];
   isBuiltin: boolean;
+  /** Absolute path to the team's backing directory (if directory-backed). */
+  sourceDir: string | null;
+  /** Whether sourceDir is a symlink to an external directory. */
+  isSymlink: boolean;
+  /** Resolved symlink target path (for display). Only set when isSymlink is true. */
+  symlinkTarget: string | null;
+  /** Version from the team's plugin.json manifest. */
+  version: string | null;
   createdAt: string;
   updatedAt: string;
 };

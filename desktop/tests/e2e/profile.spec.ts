@@ -1,6 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { installMockBridge } from "../helpers/bridge";
+import {
+  createMockAgentMemoryListing,
+  installMockBridge,
+} from "../helpers/bridge";
 import { openProfileMenu, openSettings } from "../helpers/settings";
 
 async function expectHomeView(page: import("@playwright/test").Page) {
@@ -49,6 +52,61 @@ async function waitForReactEffects(page: Page) {
         });
       }),
   );
+}
+
+async function addGenericAgent(
+  page: Page,
+  channelName: string,
+  agentName: string,
+) {
+  await page.getByTestId(`channel-${channelName}`).click();
+  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+  await page.getByTestId("channel-add-bot-trigger").click();
+  await expect(page.getByRole("heading", { name: "Add agents" })).toBeVisible();
+  await page.getByRole("button", { name: "Generic" }).click();
+  await page.locator("#channel-generic-name").fill(agentName);
+  await page
+    .locator("#channel-generic-prompt")
+    .fill("Watch the channel and help when asked.");
+  await page.getByRole("button", { name: "Add agent" }).click();
+  await expect(page.getByRole("heading", { name: "Add agents" })).toHaveCount(
+    0,
+  );
+}
+
+async function getManagedAgentPubkey(page: Page, agentName: string) {
+  await page.getByTestId("open-agents-view").click();
+  const managedAgentRow = page
+    .locator('[data-testid^="managed-agent-"]')
+    .filter({ hasText: agentName });
+  await expect(managedAgentRow).toHaveCount(1);
+  const managedAgentTestId = await managedAgentRow
+    .first()
+    .getAttribute("data-testid");
+  if (!managedAgentTestId) {
+    throw new Error("Managed agent row test id missing.");
+  }
+
+  return managedAgentTestId.replace("managed-agent-", "");
+}
+
+async function waitForMockLiveSubscription(page: Page, channelName: string) {
+  await expect
+    .poll(async () => {
+      return page.evaluate((channelName) => {
+        return (
+          (
+            window as Window & {
+              __SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+                channelName: string;
+              }) => boolean;
+            }
+          ).__SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({ channelName }) ??
+          false
+        );
+      }, channelName);
+    })
+    .toBe(true);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -495,6 +553,67 @@ test("updates presence from the profile menu", async ({ page }) => {
   await expect(
     page.getByTestId("profile-popover-current-status"),
   ).toContainText("Offline");
+});
+
+test("renders agent memories seeded through the Playwright mock bridge", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    agentMemory: createMockAgentMemoryListing(),
+  });
+  await page.goto("/");
+
+  await addGenericAgent(page, "general", "Memory Bot");
+  const agentPubkey = await getManagedAgentPubkey(page, "Memory Bot");
+
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await waitForMockLiveSubscription(page, "general");
+
+  await page.evaluate(
+    ({ pubkey }) => {
+      const emit = (
+        window as Window & {
+          __SPROUT_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+            channelName: string;
+            content: string;
+            pubkey: string;
+          }) => unknown;
+        }
+      ).__SPROUT_E2E_EMIT_MOCK_MESSAGE__;
+      if (!emit) {
+        throw new Error("Mock message emitter is unavailable.");
+      }
+      emit({
+        channelName: "general",
+        content: "Memory bot check-in",
+        pubkey,
+      });
+    },
+    { pubkey: agentPubkey },
+  );
+
+  const messageRow = page
+    .getByTestId("message-row")
+    .filter({ hasText: "Memory bot check-in" });
+  await expect(messageRow).toBeVisible();
+  await messageRow.locator("button").first().click();
+
+  await expect(page.getByTestId("user-profile-panel")).toBeVisible();
+  const memoriesIngress = page.getByTestId("user-profile-memories-ingress");
+  await expect(memoriesIngress).toContainText("Memories");
+  await expect(memoriesIngress).toContainText("9");
+  await memoriesIngress.click();
+
+  await expect(page.getByTestId("agent-memory-section")).toBeVisible();
+  await expect(page.getByTestId("agent-memory-list")).toContainText(
+    "ui-density",
+  );
+  await expect(page.getByTestId("agent-memory-truncated")).toContainText(
+    "View all (9)",
+  );
+  await page.getByTestId("agent-memory-truncated").click();
+  await expect(page.getByTestId("agent-memory-list")).toContainText("orphan");
 });
 
 test("renders settings in the app shell with a back button", async ({

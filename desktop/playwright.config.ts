@@ -30,6 +30,7 @@ export default defineConfig({
         "**/channel-mute-screenshots.spec.ts",
         "**/channel-star-screenshots.spec.ts",
         "**/channel-controls-screenshots.spec.ts",
+        "**/team-management-screenshots.spec.ts",
         "**/file-attachment.spec.ts",
         "**/mentions.spec.ts",
         "**/relay-reconnect.spec.ts",

@@ -25,7 +25,7 @@
 
 Sprout is a self-hostable workspace where humans and AI agents share the same rooms.
 
-Under the hood, that's a Nostr relay: every message, reaction, workflow step, review approval, and git event is a signed event in one log. Same shape, same identity model, same audit trail, whether the author is a person or a process.
+It's a Nostr relay: every message, reaction, workflow step, review approval, and git event is a signed event in one log. Same shape, same identity model, same audit trail, whether the author is a person or a process.
 
 In practice it feels like a team workspace. Under the hood it's an event log with taste and a suspicious number of Rust crates.
 

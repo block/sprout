@@ -462,7 +462,7 @@ pub struct Config {
     pub respond_to: RespondTo,
     /// Validated allowlist of pubkey hex strings (used when respond_to == Allowlist).
     pub respond_to_allowlist: HashSet<String>,
-    /// Per-persona env vars to inject at agent spawn time (e.g., GOOSE_PROVIDER, GOOSE_MODEL).
+    /// Per-persona env vars to inject at agent spawn time (e.g., GOOSE_PROVIDER, GOOSE_MODEL, SPROUT_AGENT_MODEL).
     /// Populated from persona pack resolution. Empty when no pack is configured.
     pub persona_env_vars: Vec<(String, String)>,
     /// Whether to publish encrypted observer frames through the relay.
@@ -760,7 +760,7 @@ impl Config {
                     (
                         Some(persona.system_prompt),
                         persona.model,
-                        persona.goose_env_vars,
+                        persona.runtime_env_vars,
                     )
                 }
                 (Some(_), None) => {

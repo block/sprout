@@ -357,7 +357,7 @@ function InlineEmojiPopover({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex border-0 bg-transparent p-0 align-baseline text-inherit"
+          className="inline-flex border-0 bg-transparent p-0 align-middle text-inherit"
           aria-label={label}
           onMouseEnter={handleMouseEnter}
           onMouseLeave={scheduleClose}
@@ -369,7 +369,7 @@ function InlineEmojiPopover({
             title={label}
             src={resolvedSrc}
             data-custom-emoji=""
-            className="mx-px inline-block h-[1.25em] w-auto max-w-none align-text-bottom"
+            className="mx-px inline-block h-[1.25em] w-auto max-w-none align-middle"
             draggable={false}
             onContextMenu={(e) => e.preventDefault()}
           />
