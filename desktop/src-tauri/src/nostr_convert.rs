@@ -533,7 +533,7 @@ pub fn relay_members_from_event(event: &Event) -> Value {
 // ── Time helpers ────────────────────────────────────────────────────────────
 
 /// Convert a unix-seconds timestamp to a UTC RFC-3339 string.
-fn timestamp_to_iso(secs: u64) -> String {
+pub(crate) fn timestamp_to_iso(secs: u64) -> String {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     let dt = UNIX_EPOCH + Duration::from_secs(secs);
     // Format manually as RFC-3339 — the `time` crate is already a transitive
