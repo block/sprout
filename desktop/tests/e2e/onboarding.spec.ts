@@ -236,9 +236,9 @@ test("welcome can continue using an existing Nostr key", async ({ page }) => {
   ).toBeVisible();
 
   const importedNsec = nsecEncode(hexToBytes(TEST_IDENTITIES.alice.privateKey));
-  await page.getByTestId("welcome-nostr-nsec-input").fill(importedNsec);
-  await expect(page.getByTestId("welcome-nostr-npub-preview")).toBeVisible();
-  await page.getByTestId("welcome-nostr-submit").click();
+  await page.getByTestId("nostr-import-nsec-input").fill(importedNsec);
+  await expect(page.getByTestId("nostr-import-npub-preview")).toBeVisible();
+  await page.getByTestId("nostr-import-submit").click();
 
   await expect(page.getByTestId("onboarding-display-name")).toHaveValue(
     "alice",
@@ -584,6 +584,33 @@ test("existing relay profile prefills the name step without localStorage complet
   );
   await expect(page.getByTestId("onboarding-next")).toBeEnabled();
   await expect(page.getByTestId("onboarding-back")).toHaveCount(0);
+});
+
+test("onboarding can import an existing key when the workspace is already set up", async ({
+  page,
+}) => {
+  // Workspace exists (default seed), but this identity has no profile yet,
+  // so the app lands on the onboarding name step — Tyler's moved-laptop /
+  // fresh-dev-instance case.
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await installMockBridge(page, undefined, { skipOnboardingSeed: true });
+  await page.goto("/");
+
+  await expect(page.getByTestId("onboarding-display-name")).toHaveValue("");
+  await page.getByTestId("onboarding-import-key").click();
+  await expect(
+    page.getByRole("heading", { name: "Use your existing key" }),
+  ).toBeVisible();
+
+  const importedNsec = nsecEncode(hexToBytes(TEST_IDENTITIES.alice.privateKey));
+  await page.getByTestId("nostr-import-nsec-input").fill(importedNsec);
+  await expect(page.getByTestId("nostr-import-npub-preview")).toBeVisible();
+  await page.getByTestId("nostr-import-submit").click();
+
+  // Identity swap remounts the flow; alice's relay profile prefills the name.
+  await expect(page.getByTestId("onboarding-display-name")).toHaveValue(
+    "alice",
+  );
 });
 
 test("finishing onboarding auto-joins the #general channel for a new member", async ({
