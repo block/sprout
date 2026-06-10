@@ -67,12 +67,12 @@ jobs:
       - name: Generate release config
         run: cd desktop && node scripts/build-release-config.mjs
         env:
-          SPROUT_UPDATER_PUBLIC_KEY: ${{ secrets.SPROUT_UPDATER_PUBLIC_KEY }}
-          SPROUT_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/sprout-desktop-latest/latest.json
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY }}
+          BUZZ_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/buzz-desktop-latest/latest.json
 
       - name: Build sidecars
         run: |
-          cargo build --release -p sprout-acp -p sprout-agent -p sprout-dev-mcp -p git-credential-nostr -p sprout-cli
+          cargo build --release -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
           ./scripts/bundle-sidecars.sh
 
       # Mesh rev derived from Cargo.lock (no lockstep edit on dep bump); cache key tracks it.
@@ -118,8 +118,8 @@ jobs:
       - name: Build unsigned Tauri app
         run: cd desktop && pnpm tauri build --verbose --no-sign --config src-tauri/tauri.release.conf.json
         env:
-          SPROUT_UPDATER_PUBLIC_KEY: ${{ secrets.SPROUT_UPDATER_PUBLIC_KEY }}
-          SPROUT_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/sprout-desktop-latest/latest.json
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY }}
+          BUZZ_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/buzz-desktop-latest/latest.json
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
@@ -148,7 +148,7 @@ jobs:
           codesign-s3-bucket: ${{ secrets.CODESIGN_S3_BUCKET }}
           unsigned-artifact-path: ${{ steps.unsigned.outputs.dmg }}
           entitlements-plist-path: desktop/src-tauri/Entitlements.plist
-          artifact-name: sprout-${{ github.sha }}-${{ github.run_id }}-arm64
+          artifact-name: buzz-${{ github.sha }}-${{ github.run_id }}-arm64
 
       - name: Replace DMG and rebuild updater archive
         env:
@@ -214,7 +214,7 @@ jobs:
           bash desktop/scripts/generate-oss-latest-json.sh \
             "$VERSION" \
             "$SIG_PATH" \
-            "https://github.com/block/sprout/releases/download/sprout-desktop-latest/$ARCHIVE_NAME" \
+            "https://github.com/block/sprout/releases/download/buzz-desktop-latest/$ARCHIVE_NAME" \
             > latest.json
           cat latest.json
         env:
@@ -244,12 +244,12 @@ jobs:
 
       - name: Update rolling release for auto-updater
         run: |
-          gh release create sprout-desktop-latest \
+          gh release create buzz-desktop-latest \
             --prerelease \
             --title "Sprout Desktop Auto-Update" \
             --notes "Rolling release for the Tauri auto-updater. Do not download manually — use the versioned release instead." \
             2>/dev/null || true
-          gh release upload sprout-desktop-latest \
+          gh release upload buzz-desktop-latest \
             latest.json \
             "$ARCHIVE_PATH" \
             "$SIG_PATH" \
@@ -292,19 +292,19 @@ jobs:
       - name: Generate release config
         run: cd desktop && node scripts/build-release-config.mjs
         env:
-          SPROUT_UPDATER_PUBLIC_KEY: ${{ secrets.SPROUT_UPDATER_PUBLIC_KEY }}
-          SPROUT_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/sprout-desktop-latest/latest.json
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY }}
+          BUZZ_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/buzz-desktop-latest/latest.json
 
       - name: Build sidecars
         run: |
-          cargo build --release --target "$TARGET" -p sprout-acp -p sprout-agent -p sprout-dev-mcp -p git-credential-nostr -p sprout-cli
+          cargo build --release --target "$TARGET" -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
           ./scripts/bundle-sidecars.sh "$TARGET"
 
       - name: Build unsigned Tauri app
         run: cd desktop && pnpm tauri build --verbose --no-sign --target "$TARGET" --config src-tauri/tauri.release.conf.json
         env:
-          SPROUT_UPDATER_PUBLIC_KEY: ${{ secrets.SPROUT_UPDATER_PUBLIC_KEY }}
-          SPROUT_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/sprout-desktop-latest/latest.json
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY }}
+          BUZZ_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/buzz-desktop-latest/latest.json
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
@@ -330,7 +330,7 @@ jobs:
           codesign-s3-bucket: ${{ secrets.CODESIGN_S3_BUCKET }}
           unsigned-artifact-path: ${{ steps.unsigned.outputs.dmg }}
           entitlements-plist-path: desktop/src-tauri/Entitlements.plist
-          artifact-name: sprout-${{ github.sha }}-${{ github.run_id }}-x64
+          artifact-name: buzz-${{ github.sha }}-${{ github.run_id }}-x64
 
       - name: Replace DMG and signed .app
         env:
@@ -422,7 +422,7 @@ jobs:
 
       - name: Build sidecars
         run: |
-          cargo build --release -p sprout-acp -p sprout-agent -p sprout-dev-mcp -p git-credential-nostr -p sprout-cli
+          cargo build --release -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
           ./scripts/bundle-sidecars.sh
 
       - name: Build Linux Tauri app

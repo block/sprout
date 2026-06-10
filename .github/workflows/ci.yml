@@ -262,37 +262,37 @@ jobs:
             docker logs "${container}" || true
             return 1
           }
-          wait_healthy "Postgres" "sprout-postgres"
-          wait_healthy "Redis" "sprout-redis"
-          wait_healthy "Typesense" "sprout-typesense"
-          wait_healthy "MinIO" "sprout-minio"
+          wait_healthy "Postgres" "buzz-postgres"
+          wait_healthy "Redis" "buzz-redis"
+          wait_healthy "Typesense" "buzz-typesense"
+          wait_healthy "MinIO" "buzz-minio"
       - name: Apply database schema
         run: ./bin/pgschema apply --file schema/schema.sql --auto-approve
         env:
           PGHOST: localhost
           PGPORT: "5432"
-          PGUSER: sprout
-          PGPASSWORD: sprout_dev
-          PGDATABASE: sprout
+          PGUSER: buzz
+          PGPASSWORD: buzz_dev
+          PGDATABASE: buzz
       - name: Build relay
-        run: cargo build --profile ci -p sprout-relay
+        run: cargo build --profile ci -p buzz-relay
       - name: Start relay
         run: |
           nohup env \
-            DATABASE_URL=postgres://sprout:sprout_dev@localhost:5432/sprout \
+            DATABASE_URL=postgres://buzz:buzz_dev@localhost:5432/buzz \
             REDIS_URL=redis://localhost:6379 \
             TYPESENSE_URL=http://localhost:8108 \
-            TYPESENSE_API_KEY=sprout_dev_key \
+            TYPESENSE_API_KEY=buzz_dev_key \
             RELAY_URL=ws://localhost:3000 \
-            SPROUT_BIND_ADDR=0.0.0.0:3000 \
-            SPROUT_REQUIRE_AUTH_TOKEN=false \
-            SPROUT_RECONCILE_CHANNELS=true \
-            SPROUT_GIT_PROBE_WRITERS=8 \
-            ./target/ci/sprout-relay > /tmp/sprout-relay.log 2>&1 &
-          echo $! > /tmp/sprout-relay.pid
+            BUZZ_BIND_ADDR=0.0.0.0:3000 \
+            BUZZ_REQUIRE_AUTH_TOKEN=false \
+            BUZZ_RECONCILE_CHANNELS=true \
+            BUZZ_GIT_PROBE_WRITERS=8 \
+            ./target/ci/buzz-relay > /tmp/buzz-relay.log 2>&1 &
+          echo $! > /tmp/buzz-relay.pid
           for attempt in $(seq 1 60); do
-            if ! kill -0 "$(cat /tmp/sprout-relay.pid)" 2>/dev/null; then
-              cat /tmp/sprout-relay.log
+            if ! kill -0 "$(cat /tmp/buzz-relay.pid)" 2>/dev/null; then
+              cat /tmp/buzz-relay.log
               exit 1
             fi
             status_code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/_readiness || true)
@@ -301,7 +301,7 @@ jobs:
             fi
             sleep 1
           done
-          cat /tmp/sprout-relay.log
+          cat /tmp/buzz-relay.log
           exit 1
       - name: Seed desktop e2e data
         run: bash scripts/setup-desktop-test-data.sh
@@ -315,7 +315,7 @@ jobs:
           path: |
             desktop/playwright-report
             desktop/test-results
-            /tmp/sprout-relay.log
+            /tmp/buzz-relay.log
           if-no-files-found: ignore
       - name: Save pnpm store cache
         if: github.event_name == 'push'
@@ -444,10 +444,10 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           cross build --release --target "$TARGET" \
-            -p sprout-relay \
-            -p sprout-acp \
-            -p sprout-agent \
-            -p sprout-dev-mcp \
+            -p buzz-relay \
+            -p buzz-acp \
+            -p buzz-agent \
+            -p buzz-dev-mcp \
             -p git-credential-nostr \
             -p git-sign-nostr
 
@@ -472,11 +472,11 @@ jobs:
         run: |
           TARGET=$(rustc -vV | sed -n 's|host: ||p')
           mkdir -p desktop/src-tauri/binaries
-          touch "desktop/src-tauri/binaries/sprout-acp-$TARGET"
-          touch "desktop/src-tauri/binaries/sprout-agent-$TARGET"
-          touch "desktop/src-tauri/binaries/sprout-dev-mcp-$TARGET"
+          touch "desktop/src-tauri/binaries/buzz-acp-$TARGET"
+          touch "desktop/src-tauri/binaries/buzz-agent-$TARGET"
+          touch "desktop/src-tauri/binaries/buzz-dev-mcp-$TARGET"
           touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
-          touch "desktop/src-tauri/binaries/sprout-$TARGET"
+          touch "desktop/src-tauri/binaries/buzz-$TARGET"
       # Mesh rev is derived from Cargo.lock so a dependency bump needs no
       # lockstep edit here; the cache key tracks it automatically.
       - name: Resolve mesh-llm rev
