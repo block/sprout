@@ -787,7 +787,7 @@ impl HarnessRelay {
         message: &str,
         thread_root: Option<&str>,
     ) -> Result<Event, RelayError> {
-        use sprout_core::kind::KIND_STREAM_MESSAGE;
+        use buzz_core::kind::KIND_STREAM_MESSAGE;
 
         let h_tag = Tag::parse(["h", &channel_id.to_string()])
             .map_err(|e| RelayError::EventBuild(e.to_string()))?;
