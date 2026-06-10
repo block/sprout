@@ -187,7 +187,7 @@ pub fn import_identity(
         bech32
     };
 
-    eprintln!("sprout-desktop: imported identity pubkey {}", pubkey_hex);
+    eprintln!("buzz-desktop: imported identity pubkey {}", pubkey_hex);
 
     Ok(IdentityInfo {
         pubkey: pubkey_hex,

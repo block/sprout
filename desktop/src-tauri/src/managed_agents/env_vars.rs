@@ -260,7 +260,7 @@ pub(crate) fn merged_user_env(
     merged.retain(|k, v| {
         if is_reserved_env_key(k) {
             eprintln!(
-                "sprout-desktop: ignoring reserved env var `{k}` from persona/agent overrides"
+                "buzz-desktop: ignoring reserved env var `{k}` from persona/agent overrides"
             );
             return false;
         }
@@ -270,7 +270,7 @@ pub(crate) fn merged_user_env(
             // smuggle a reserved key past us via `=`-in-key tricks. See
             // `is_well_formed_env_key` for the exploit.
             eprintln!(
-                "sprout-desktop: ignoring malformed env var key `{}` from persona/agent overrides",
+                "buzz-desktop: ignoring malformed env var key `{}` from persona/agent overrides",
                 display_invalid_key(k)
             );
             return false;
@@ -280,13 +280,13 @@ pub(crate) fn merged_user_env(
             // have escaped the value validator; drop them here rather
             // than crash the spawn. We deliberately do NOT log the value.
             eprintln!(
-                "sprout-desktop: ignoring env var `{k}` with NUL byte in value"
+                "buzz-desktop: ignoring env var `{k}` with NUL byte in value"
             );
             return false;
         }
         if v.len() > MAX_ENV_VALUE_BYTES {
             eprintln!(
-                "sprout-desktop: ignoring env var `{k}` with oversize value ({} bytes > {MAX_ENV_VALUE_BYTES})",
+                "buzz-desktop: ignoring env var `{k}` with oversize value ({} bytes > {MAX_ENV_VALUE_BYTES})",
                 v.len()
             );
             return false;

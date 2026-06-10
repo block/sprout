@@ -4203,7 +4203,7 @@ async function handleDiscoverAcpRuntimes(
       binary_path: "/usr/local/bin/sprout-agent",
       default_args: [],
       mcp_command: "sprout-dev-mcp",
-      install_hint: "Ships with the Sprout desktop app.",
+      install_hint: "Ships with the Buzz desktop app.",
       install_instructions_url: "https://github.com/block/sprout",
       can_auto_install: false,
       underlying_cli_path: null,

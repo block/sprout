@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Sprout",
+  "productName": "Buzz",
   "version": "0.3.16",
-  "identifier": "xyz.block.sprout.app",
+  "identifier": "xyz.block.buzz.app",
   "build": {
     "beforeDevCommand": {
       "script": "exec ./node_modules/.bin/vite",

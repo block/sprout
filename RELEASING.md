@@ -1,4 +1,4 @@
-# Releasing Sprout Desktop
+# Releasing Buzz Desktop
 
 ## Quick Start
 

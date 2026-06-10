@@ -190,7 +190,7 @@ test("first-run default workspace handoff gives immediate stepper feedback", asy
   );
   await page.goto("/");
 
-  await expect(page.getByText("Welcome to Sprout")).toBeVisible();
+  await expect(page.getByText("Welcome to Buzz")).toBeVisible();
   await page
     .getByRole("button", { name: "Continue with Block Inc. workspace" })
     .click();

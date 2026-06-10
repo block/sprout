@@ -118,7 +118,7 @@ pub(crate) fn process_belongs_to_us(_pid: u32) -> bool {
 
 /// The value stamped into the `BUZZ_MANAGED_AGENT` env var of every agent we
 /// spawn, identifying *which* desktop instance owns it. We use the app's bundle
-/// identifier (`xyz.block.sprout.app` for release, `xyz.block.sprout.app.dev`
+/// identifier (`xyz.block.buzz.app` for release, `xyz.block.buzz.app.dev`
 /// for `just dev`) because it is stable across restarts — a relaunched dev
 /// instance still recognizes its own previously-spawned agents as reclaimable,
 /// while never matching another instance's (e.g. a dev build never reaps a DMG
@@ -478,7 +478,7 @@ pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32])
 
     if !orphans.is_empty() {
         eprintln!(
-            "sprout-desktop: system sweep found {} orphaned agent process(es), cleaning up",
+            "buzz-desktop: system sweep found {} orphaned agent process(es), cleaning up",
             orphans.len()
         );
         sigterm_then_sigkill(&orphans);
@@ -547,7 +547,7 @@ pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32])
 
     if !orphans.is_empty() {
         eprintln!(
-            "sprout-desktop: system sweep found {} orphaned agent process(es), cleaning up",
+            "buzz-desktop: system sweep found {} orphaned agent process(es), cleaning up",
             orphans.len()
         );
         sigterm_then_sigkill(&orphans);
@@ -1488,7 +1488,7 @@ pub fn spawn_agent_child(
             Some(path) => Some(path),
             None => {
                 eprintln!(
-                    "sprout-desktop: mcp_command {:?} not found, skipping",
+                    "buzz-desktop: mcp_command {:?} not found, skipping",
                     record.mcp_command
                 );
                 None
@@ -1676,7 +1676,7 @@ pub fn spawn_agent_child(
         command.env("GIT_CONFIG_VALUE_1", "true");
     } else {
         eprintln!(
-            "sprout-desktop: git-credential-nostr not found — agent {} will not have automatic Sprout git auth",
+            "buzz-desktop: git-credential-nostr not found — agent {} will not have automatic Sprout git auth",
             record.name,
         );
     }

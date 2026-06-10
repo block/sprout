@@ -270,7 +270,7 @@ pub async fn update_managed_agent(
             {
                 Ok(()) => None,
                 Err(e) => {
-                    eprintln!("sprout-desktop: relay profile sync failed after rename: {e}");
+                    eprintln!("buzz-desktop: relay profile sync failed after rename: {e}");
                     Some(e)
                 }
             }

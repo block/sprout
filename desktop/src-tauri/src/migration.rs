@@ -1,8 +1,8 @@
-//! Worktree data sync and on-launch reconciliation for the Sprout desktop app.
+//! Worktree data sync and on-launch reconciliation for the Buzz desktop app.
 //!
 //! **Worktree sync** (`sync_shared_agent_data`): Per-launch symlink creation
 //! from the current worktree data directory to the canonical dev data
-//! directory (`xyz.block.sprout.app.dev`). Only runs when
+//! directory (`xyz.block.buzz.app.dev`). Only runs when
 //! `SPROUT_SHARE_IDENTITY=1` and `SPROUT_PRIVATE_KEY` is set. All dev
 //! instances share the same physical files — edits in any worktree are
 //! immediately visible to all others.
@@ -15,7 +15,9 @@
 use std::path::{Path, PathBuf};
 use tauri::Manager;
 
-const CANONICAL_DEV_IDENTIFIER: &str = "xyz.block.sprout.app.dev";
+const CANONICAL_DEV_IDENTIFIER: &str = "xyz.block.buzz.app.dev";
+const LEGACY_CANONICAL_DEV_IDENTIFIER: &str = "xyz.block.sprout.app.dev";
+const LEGACY_RELEASE_IDENTIFIER: &str = "xyz.block.sprout.app";
 
 /// JSON files symlinked from worktree data directories to the canonical
 /// dev data directory. Only data files — never `agent-pids/` or `logs/`.
@@ -35,6 +37,84 @@ fn canonical_dev_data_dir(current: &Path) -> Option<PathBuf> {
     current.parent().map(|p| p.join(CANONICAL_DEV_IDENTIFIER))
 }
 
+fn legacy_app_data_dir(current: &Path) -> Option<PathBuf> {
+    let name = current.file_name()?.to_str()?;
+    let legacy_name = if name.starts_with(CANONICAL_DEV_IDENTIFIER) {
+        name.replacen(CANONICAL_DEV_IDENTIFIER, LEGACY_CANONICAL_DEV_IDENTIFIER, 1)
+    } else if name.starts_with("xyz.block.buzz.app") {
+        name.replacen("xyz.block.buzz.app", LEGACY_RELEASE_IDENTIFIER, 1)
+    } else {
+        return None;
+    };
+    current.parent().map(|parent| parent.join(legacy_name))
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        let metadata = std::fs::symlink_metadata(&src_path)?;
+        if metadata.file_type().is_symlink() {
+            #[cfg(unix)]
+            {
+                let target = std::fs::read_link(&src_path)?;
+                if dst_path.exists() || dst_path.is_symlink() {
+                    let _ = std::fs::remove_file(&dst_path);
+                }
+                std::os::unix::fs::symlink(target, &dst_path)?;
+            }
+            #[cfg(not(unix))]
+            {
+                continue;
+            }
+        } else if metadata.is_dir() {
+            copy_dir_all(&src_path, &dst_path)?;
+        } else if metadata.is_file() {
+            if let Some(parent) = dst_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            if !dst_path.exists() {
+                std::fs::copy(&src_path, &dst_path)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Copy one-time app state from the legacy Sprout app identifier directory to
+/// the current Buzz identifier directory. The Tauri identifier controls the app
+/// data path, so without this copy a product rename would look like a fresh
+/// install and users would lose their persisted identity and agent settings.
+pub fn migrate_legacy_app_data_dir(app: &tauri::AppHandle) {
+    let current_dir = match app.path().app_data_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("buzz-desktop: app-data-migration: cannot resolve app data dir: {e}");
+            return;
+        }
+    };
+    let Some(legacy_dir) = legacy_app_data_dir(&current_dir) else {
+        return;
+    };
+    if !legacy_dir.exists() {
+        return;
+    }
+    match copy_dir_all(&legacy_dir, &current_dir) {
+        Ok(()) => eprintln!(
+            "buzz-desktop: app-data-migration: copied legacy data from {} to {}",
+            legacy_dir.display(),
+            current_dir.display()
+        ),
+        Err(error) => eprintln!(
+            "buzz-desktop: app-data-migration: failed to copy {} to {}: {error}",
+            legacy_dir.display(),
+            current_dir.display()
+        ),
+    }
+}
+
 /// Read a JSON array of objects from `path`, apply `f` to each object,
 /// and write back if any mutation returned `true`.
 fn patch_json_records(
@@ -46,7 +126,7 @@ fn patch_json_records(
     };
     let Ok(mut records) = serde_json::from_str::<Vec<serde_json::Value>>(&content) else {
         eprintln!(
-            "sprout-desktop: patch-json-records: failed to parse {}",
+            "buzz-desktop: patch-json-records: failed to parse {}",
             path.display()
         );
         return;
@@ -88,7 +168,7 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
         .is_some();
     if !has_valid_key {
         eprintln!(
-            "sprout-desktop: shared-agent-sync: SPROUT_PRIVATE_KEY missing or invalid, skipping"
+            "buzz-desktop: shared-agent-sync: SPROUT_PRIVATE_KEY missing or invalid, skipping"
         );
         return;
     }
@@ -96,7 +176,7 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
     let current_dir = match app.path().app_data_dir() {
         Ok(dir) => dir,
         Err(e) => {
-            eprintln!("sprout-desktop: shared-agent-sync: cannot resolve app data dir: {e}");
+            eprintln!("buzz-desktop: shared-agent-sync: cannot resolve app data dir: {e}");
             return;
         }
     };
@@ -104,9 +184,7 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
     let canonical_dir = match canonical_dev_data_dir(&current_dir) {
         Some(dir) => dir,
         None => {
-            eprintln!(
-                "sprout-desktop: shared-agent-sync: cannot compute canonical dir (no parent)"
-            );
+            eprintln!("buzz-desktop: shared-agent-sync: cannot compute canonical dir (no parent)");
             return;
         }
     };
@@ -124,7 +202,7 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
     // Guard: skip if canonical dir doesn't exist.
     if !canonical_dir.exists() {
         eprintln!(
-            "sprout-desktop: shared-agent-sync: canonical dir does not exist: {}",
+            "buzz-desktop: shared-agent-sync: canonical dir does not exist: {}",
             canonical_dir.display()
         );
         return;
@@ -142,7 +220,7 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
         if let Some(parent) = dst.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 eprintln!(
-                    "sprout-desktop: shared-agent-sync: failed to create {}: {e}",
+                    "buzz-desktop: shared-agent-sync: failed to create {}: {e}",
                     parent.display()
                 );
                 continue;
@@ -166,7 +244,7 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
         match std::os::unix::fs::symlink(&src, &dst) {
             Ok(_) => synced += 1,
             Err(e) => {
-                eprintln!("sprout-desktop: shared-agent-sync: failed to symlink {rel}: {e}");
+                eprintln!("buzz-desktop: shared-agent-sync: failed to symlink {rel}: {e}");
             }
         }
     }
@@ -179,7 +257,7 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
         if !canonical_target.exists() {
             if let Err(e) = std::fs::create_dir_all(&canonical_target) {
                 eprintln!(
-                    "sprout-desktop: shared-agent-sync: failed to create {}: {e}",
+                    "buzz-desktop: shared-agent-sync: failed to create {}: {e}",
                     canonical_target.display()
                 );
             }
@@ -205,7 +283,7 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
                             let _ = std::fs::remove_dir_all(&sibling_dir);
                             let _ = std::os::unix::fs::symlink(&canonical_target, &sibling_dir);
                             eprintln!(
-                                "sprout-desktop: shared-agent-sync: migrated {rel} from {}",
+                                "buzz-desktop: shared-agent-sync: migrated {rel} from {}",
                                 sibling.display()
                             );
                             break;
@@ -227,7 +305,7 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
         if let Some(parent) = dst.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 eprintln!(
-                    "sprout-desktop: shared-agent-sync: failed to create {}: {e}",
+                    "buzz-desktop: shared-agent-sync: failed to create {}: {e}",
                     parent.display()
                 );
                 continue;
@@ -251,14 +329,14 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
         match std::os::unix::fs::symlink(&src, &dst) {
             Ok(_) => synced += 1,
             Err(e) => {
-                eprintln!("sprout-desktop: shared-agent-sync: failed to symlink {rel}: {e}");
+                eprintln!("buzz-desktop: shared-agent-sync: failed to symlink {rel}: {e}");
             }
         }
     }
 
     if synced > 0 {
         eprintln!(
-            "sprout-desktop: shared-agent-sync: {synced} item(s) linked to {}",
+            "buzz-desktop: shared-agent-sync: {synced} item(s) linked to {}",
             canonical_dir.display()
         );
     }
@@ -300,7 +378,7 @@ fn reconcile_team_dirs_in_file(path: &Path, canonical_dir: &Path) {
             return false;
         }
         eprintln!(
-            "sprout-desktop: team-dir-reconcile: {:?}: {:?} → {:?}",
+            "buzz-desktop: team-dir-reconcile: {:?}: {:?} → {:?}",
             obj.get("name").and_then(|v| v.as_str()).unwrap_or("?"),
             team_path,
             expected,
@@ -417,9 +495,7 @@ pub fn migrate_packs_to_teams(app: &tauri::AppHandle) {
                     report
                         .errors
                         .push(format!("failed to rename packs → teams: {e}"));
-                    eprintln!(
-                        "sprout-desktop: packs→teams migration: directory rename failed: {e}"
-                    );
+                    eprintln!("buzz-desktop: packs→teams migration: directory rename failed: {e}");
                     return;
                 }
             }
@@ -472,7 +548,7 @@ pub fn migrate_packs_to_teams(app: &tauri::AppHandle) {
 
     if report.packs_migrated > 0 || report.personas_updated > 0 || report.agents_updated > 0 {
         eprintln!(
-            "sprout-desktop: packs→teams migration complete: {} dirs, {} personas, {} agents{}",
+            "buzz-desktop: packs→teams migration complete: {} dirs, {} personas, {} agents{}",
             report.packs_migrated,
             report.personas_updated,
             report.agents_updated,
@@ -508,7 +584,7 @@ fn reconcile_mcp_commands_in_file(path: &Path) {
             return false;
         }
         eprintln!(
-            "sprout-desktop: runtime-reconcile: {:?} ({:?}): mcp_command {:?} → {:?}",
+            "buzz-desktop: runtime-reconcile: {:?} ({:?}): mcp_command {:?} → {:?}",
             obj.get("name").and_then(|v| v.as_str()).unwrap_or("?"),
             agent_command,
             current,

@@ -361,7 +361,7 @@ export function ProfileSettingsCard({
         <div className="mb-12 space-y-1">
           <h2 className="text-2xl font-semibold tracking-tight">Profile</h2>
           <p className="text-base font-normal text-muted-foreground">
-            Update how your name, avatar, and bio appear across Sprout.
+            Update how your name, avatar, and bio appear across Buzz.
           </p>
         </div>
 

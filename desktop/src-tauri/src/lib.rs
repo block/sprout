@@ -290,13 +290,13 @@ fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
     let url = match Url::parse(url_str) {
         Ok(u) => u,
         Err(e) => {
-            eprintln!("sprout-desktop: invalid deep link URL {url_str:?}: {e}");
+            eprintln!("buzz-desktop: invalid deep link URL {url_str:?}: {e}");
             return;
         }
     };
 
     if url.scheme() != "sprout" && url.scheme() != "buzz" {
-        eprintln!("sprout-desktop: ignoring unsupported deep link scheme: {url_str}");
+        eprintln!("buzz-desktop: ignoring unsupported deep link scheme: {url_str}");
         return;
     }
 
@@ -307,7 +307,7 @@ fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
                 .find(|(k, _)| k == "relay")
                 .map(|(_, v)| v.into_owned());
             let Some(relay_url) = relay else {
-                eprintln!("sprout-desktop: connect deep link missing relay param: {url_str}");
+                eprintln!("buzz-desktop: connect deep link missing relay param: {url_str}");
                 return;
             };
             // Validate the relay URL is ws:// or wss://
@@ -315,13 +315,13 @@ fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
                 Ok(parsed) if parsed.scheme() == "ws" || parsed.scheme() == "wss" => {}
                 Ok(parsed) => {
                     eprintln!(
-                        "sprout-desktop: rejecting non-websocket relay URL scheme {:?}: {relay_url}",
+                        "buzz-desktop: rejecting non-websocket relay URL scheme {:?}: {relay_url}",
                         parsed.scheme()
                     );
                     return;
                 }
                 Err(e) => {
-                    eprintln!("sprout-desktop: invalid relay URL {relay_url:?}: {e}");
+                    eprintln!("buzz-desktop: invalid relay URL {relay_url:?}: {e}");
                     return;
                 }
             }
@@ -337,16 +337,16 @@ fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
             // structure on this side (serde JSON) and let the TS code own
             // any further normalisation.
             let Some(payload) = parse_message_deep_link(&url) else {
-                eprintln!("sprout-desktop: message deep link missing channel or id: {url_str}");
+                eprintln!("buzz-desktop: message deep link missing channel or id: {url_str}");
                 return;
             };
             let _ = app.emit("deep-link-message", payload);
         }
         Some(action) => {
-            eprintln!("sprout-desktop: unknown deep link action: {action}");
+            eprintln!("buzz-desktop: unknown deep link action: {action}");
         }
         None => {
-            eprintln!("sprout-desktop: deep link missing action: {url_str}");
+            eprintln!("buzz-desktop: deep link missing action: {url_str}");
         }
     }
 }
@@ -520,6 +520,10 @@ pub fn run() {
             let app_handle = app.handle().clone();
             let shutdown_started = Arc::clone(&restore_shutdown_started);
 
+            // Copy legacy Sprout app data into the new Buzz app data directory
+            // before any state is loaded from disk.
+            migration::migrate_legacy_app_data_dir(&app_handle);
+
             // Sync shared agent data from the canonical dev data directory to
             // this worktree's data directory. Must run before
             // restore_managed_agents_on_launch (which reads managed-agents.json).
@@ -530,7 +534,7 @@ pub fn run() {
             migration::migrate_persona_provider_to_runtime(&app_handle);
 
             if let Err(e) = managed_agents::sync_team_personas(&app_handle) {
-                eprintln!("sprout-desktop: sync-team-personas: {e}");
+                eprintln!("buzz-desktop: sync-team-personas: {e}");
             }
 
             // Resolve persisted identity key (env var → file → generate+save).
@@ -578,7 +582,7 @@ pub fn run() {
             // so default_agent_workdir() resolves to the nest directory.
             // Non-fatal: agents fall back to $HOME if nest creation fails.
             if let Err(error) = ensure_nest() {
-                eprintln!("sprout-desktop: failed to create nest: {error}");
+                eprintln!("buzz-desktop: failed to create nest: {error}");
             }
 
             // Create/update ~/.local/bin/sprout symlink pointing to the
@@ -586,7 +590,7 @@ pub fn run() {
             if let Ok(exe) = std::env::current_exe() {
                 if let Some(parent) = exe.parent() {
                     if let Err(error) = managed_agents::ensure_cli_symlink(parent) {
-                        eprintln!("sprout-desktop: failed to create CLI symlink: {error}");
+                        eprintln!("buzz-desktop: failed to create CLI symlink: {error}");
                     }
                 }
             }
@@ -604,7 +608,7 @@ pub fn run() {
                 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
                 let shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Space);
                 if let Err(e) = app.handle().global_shortcut().register(shortcut) {
-                    eprintln!("sprout-desktop: failed to register PTT shortcut: {e}");
+                    eprintln!("buzz-desktop: failed to register PTT shortcut: {e}");
                 }
             }
 
@@ -628,7 +632,7 @@ pub fn run() {
                 if let Err(error) =
                     restore_managed_agents_on_launch(&app_handle, shutdown_started.as_ref()).await
                 {
-                    eprintln!("sprout-desktop: failed to restore managed agents: {error}");
+                    eprintln!("buzz-desktop: failed to restore managed agents: {error}");
                 }
             });
 
@@ -855,7 +859,7 @@ pub fn run() {
             }
             std::process::exit(0);
         }) {
-            eprintln!("sprout-desktop: failed to register signal handler: {e}");
+            eprintln!("buzz-desktop: failed to register signal handler: {e}");
         }
     }
 
@@ -866,7 +870,7 @@ pub fn run() {
             if !run_shutdown_done.swap(true, Ordering::SeqCst) {
                 prevent_sleep::release(&app_handle.state::<AppState>().prevent_sleep);
                 if let Err(error) = shutdown_managed_agents(app_handle) {
-                    eprintln!("sprout-desktop: failed to stop managed agents: {error}");
+                    eprintln!("buzz-desktop: failed to stop managed agents: {error}");
                 }
             }
         }

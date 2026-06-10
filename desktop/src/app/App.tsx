@@ -1,7 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
-import { Sprout } from "lucide-react";
+import { Hexagon } from "lucide-react";
 import {
   type ReactNode,
   useCallback,
@@ -72,11 +72,11 @@ function OnboardingLoadingGate() {
           transitionKey="workspace-connecting"
         >
           <div className="flex h-14 w-14 items-center justify-center rounded-lg border border-border bg-background text-foreground shadow-xs">
-            <Sprout className="h-7 w-7" aria-hidden="true" />
+            <Hexagon className="h-7 w-7" aria-hidden="true" />
           </div>
 
           <h1 className="mt-6 text-3xl font-semibold tracking-tight">
-            Welcome to Sprout
+            Welcome to Buzz
           </h1>
           <p className="mt-3 max-w-[440px] text-sm leading-6 text-muted-foreground">
             Choose your first workspace to get started.

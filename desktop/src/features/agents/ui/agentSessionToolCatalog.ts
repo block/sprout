@@ -151,8 +151,8 @@ export function getSproutToolInfo(title: string): SproutToolInfo | null {
     return {
       icon: Workflow,
       label: isRead
-        ? "Reads workflow state from Sprout."
-        : "Updates workflow state in Sprout.",
+        ? "Reads workflow state from Buzz."
+        : "Updates workflow state in Buzz.",
       tone: isWrite ? "write" : "read",
     };
   }
@@ -164,8 +164,8 @@ export function getSproutToolInfo(title: string): SproutToolInfo | null {
     return {
       icon: Hash,
       label: isRead
-        ? "Reads channel context from the Sprout relay."
-        : "Changes channel state in the Sprout relay.",
+        ? "Reads channel context from the Buzz relay."
+        : "Changes channel state in the Buzz relay.",
       tone: isWrite ? "write" : "read",
     };
   }
@@ -177,15 +177,15 @@ export function getSproutToolInfo(title: string): SproutToolInfo | null {
     return {
       icon: Users,
       label: isRead
-        ? "Reads Sprout identity or presence data."
-        : "Updates Sprout identity or membership data.",
+        ? "Reads Buzz identity or presence data."
+        : "Updates Buzz identity or membership data.",
       tone: isWrite ? "write" : "admin",
     };
   }
   if (name.includes("search") || name === "get_feed") {
     return {
       icon: Search,
-      label: "Searches relay-visible Sprout history.",
+      label: "Searches relay-visible Buzz history.",
       tone: "read",
     };
   }
@@ -196,14 +196,14 @@ export function getSproutToolInfo(title: string): SproutToolInfo | null {
   ) {
     return {
       icon: Send,
-      label: "Publishes relay-visible Sprout activity.",
+      label: "Publishes relay-visible Buzz activity.",
       tone: "write",
     };
   }
 
   return {
     icon: MessageSquare,
-    label: isRead ? "Reads from Sprout." : "Writes to Sprout.",
+    label: isRead ? "Reads from Buzz." : "Writes to Buzz.",
     tone: isWrite ? "write" : "read",
   };
 }

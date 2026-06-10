@@ -220,7 +220,7 @@ pub fn sync_team_personas(app: &AppHandle) -> Result<(), String> {
     for team in &teams {
         if team.source_dir.as_ref().is_some_and(|d| d.exists()) {
             if let Err(e) = sync_team_from_dir(app, &team.id) {
-                eprintln!("sprout-desktop: sync team {}: {e}", team.id);
+                eprintln!("buzz-desktop: sync team {}: {e}", team.id);
             }
         }
     }

@@ -194,7 +194,7 @@ pub(super) fn extract_poster_frame(
     {
         if !result.status.success() {
             let stderr = String::from_utf8_lossy(&result.stderr);
-            eprintln!("sprout-desktop: poster seek-to-1s failed, trying first frame: {stderr}");
+            eprintln!("buzz-desktop: poster seek-to-1s failed, trying first frame: {stderr}");
         }
         let _ = std::fs::remove_file(&output);
         let fallback = run_ffmpeg_with_timeout(
@@ -211,7 +211,7 @@ pub(super) fn extract_poster_frame(
 
         if !fallback.status.success() || !output.exists() {
             let stderr = String::from_utf8_lossy(&fallback.stderr);
-            eprintln!("sprout-desktop: poster frame extraction failed: {stderr}");
+            eprintln!("buzz-desktop: poster frame extraction failed: {stderr}");
             let _ = std::fs::remove_file(&output);
             return Err("ffmpeg could not extract a poster frame".to_string());
         }
@@ -238,7 +238,7 @@ pub(super) fn transcode_and_extract_poster(
             bytes
         }
         Err(e) => {
-            eprintln!("sprout-desktop: poster extraction failed (non-fatal): {e}");
+            eprintln!("buzz-desktop: poster extraction failed (non-fatal): {e}");
             None
         }
     };

@@ -73,7 +73,7 @@ export function deriveWorkspaceName(relayUrl: string): string {
     const parts = host.split(".");
     // Detect staging environments (e.g. sprout-oss.stage.blox.sqprod.co)
     if (parts.some((p) => p === "stage" || p === "staging")) {
-      return "Sprout (staging)";
+      return "Buzz (staging)";
     }
     // Use the first subdomain segment or the domain itself
     if (parts.length >= 2) {

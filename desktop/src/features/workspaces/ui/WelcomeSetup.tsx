@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Check, KeyRound, Sprout } from "lucide-react";
+import { Check, Hexagon, KeyRound } from "lucide-react";
 import { flushSync } from "react-dom";
 
 import {
@@ -135,7 +135,7 @@ function NostrKeyImportPage({
           Continue using Nostr
         </h1>
         <p className="mt-3 text-sm leading-6 text-muted-foreground">
-          Import an existing Nostr private key to use that identity with Sprout.
+          Import an existing Nostr private key to use that identity with Buzz.
         </p>
       </div>
 
@@ -440,11 +440,11 @@ export function WelcomeSetup({
             transitionKey={`welcome-${welcomeEffect}-${transitionDirection}`}
           >
             <div className="flex h-14 w-14 items-center justify-center rounded-lg border border-border bg-background text-foreground shadow-xs">
-              <Sprout className="h-7 w-7" aria-hidden="true" />
+              <Hexagon className="h-7 w-7" aria-hidden="true" />
             </div>
 
             <h1 className="mt-6 text-3xl font-semibold tracking-tight">
-              Welcome to Sprout
+              Welcome to Buzz
             </h1>
             <p className="mt-3 max-w-[440px] text-sm leading-6 text-muted-foreground">
               Choose your first workspace to get started.

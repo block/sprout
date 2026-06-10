@@ -621,7 +621,7 @@ export function CreateAgentDialog({
                     />
 
                     <p className="rounded-2xl border border-border/70 bg-background/70 px-4 py-3 text-sm text-muted-foreground">
-                      Local Sprout binary checks and ACP runtime discovery now
+                      Local Buzz binary checks and ACP runtime discovery now
                       live in Settings &gt; Doctor.
                     </p>
 

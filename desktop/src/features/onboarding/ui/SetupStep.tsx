@@ -345,7 +345,7 @@ function RuntimeProvidersSection({
             Agent harnesses
           </h1>
           <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
-            Sprout can launch local ACP-compatible agent harnesses. Install or
+            Buzz can launch local ACP-compatible agent harnesses. Install or
             verify the runtimes this desktop app can see.
           </p>
         </div>

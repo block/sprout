@@ -321,7 +321,7 @@ async fn process_picked_path(
     if let Some(poster) = poster_bytes {
         match do_upload(poster, "image/jpeg", state).await {
             Ok(poster_desc) => descriptor.image = Some(poster_desc.url),
-            Err(e) => eprintln!("sprout-desktop: poster upload failed (non-fatal): {e}"),
+            Err(e) => eprintln!("buzz-desktop: poster upload failed (non-fatal): {e}"),
         }
     }
 
@@ -422,7 +422,7 @@ pub async fn upload_media_bytes(
     if let Some(poster) = poster_bytes {
         match do_upload(poster, "image/jpeg", &state).await {
             Ok(poster_desc) => descriptor.image = Some(poster_desc.url),
-            Err(e) => eprintln!("sprout-desktop: poster upload failed (non-fatal): {e}"),
+            Err(e) => eprintln!("buzz-desktop: poster upload failed (non-fatal): {e}"),
         }
     }
 

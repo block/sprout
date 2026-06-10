@@ -647,7 +647,7 @@ pub async fn create_managed_agent(
                     if let Err(persist_err) = persist_create_deploy_error(&app, &state, &pubkey, &e)
                     {
                         eprintln!(
-                            "sprout-desktop: failed to persist deploy-prep error for {pubkey}: {persist_err}"
+                            "buzz-desktop: failed to persist deploy-prep error for {pubkey}: {persist_err}"
                         );
                     }
                     Some(e)
@@ -834,7 +834,7 @@ pub async fn start_managed_agent(
                     .await
             {
                 eprintln!(
-                    "sprout-desktop: profile reconciliation failed for agent {reconcile_pubkey}: {e}"
+                    "buzz-desktop: profile reconciliation failed for agent {reconcile_pubkey}: {e}"
                 );
             }
         });

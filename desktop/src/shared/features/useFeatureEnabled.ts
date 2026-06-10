@@ -73,7 +73,7 @@ const getServerSnapshot = (): string => "{}";
 function getParsedSnapshot(): Record<string, boolean> {
   // Ensure snapshot is fresh
   getSnapshot();
-  return cachedParsed!;
+  return cachedParsed ?? {};
 }
 
 // ---------------------------------------------------------------------------

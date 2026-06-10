@@ -616,7 +616,7 @@ fn migrate_retired_personas(stored: &mut [PersonaRecord], now: &str) -> bool {
             if needs_suffix || record.is_active {
                 let was_unmodified = record.system_prompt == *original_prompt;
                 eprintln!(
-                    "sprout-desktop: persona-migration: retiring {} persona '{}' → '{} (retired)'",
+                    "buzz-desktop: persona-migration: retiring {} persona '{}' → '{} (retired)'",
                     if was_unmodified {
                         "unmodified"
                     } else {

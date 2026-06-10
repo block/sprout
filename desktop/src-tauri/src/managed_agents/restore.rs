@@ -232,7 +232,7 @@ pub async fn restore_managed_agents_on_launch(
                 crate::commands::reconcile_agent_profile(&state, &reconcile_app, &pubkey, &data)
                     .await
             {
-                eprintln!("sprout-desktop: profile reconciliation failed for agent {pubkey}: {e}");
+                eprintln!("buzz-desktop: profile reconciliation failed for agent {pubkey}: {e}");
             }
         });
     }

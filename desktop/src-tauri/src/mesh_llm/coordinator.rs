@@ -176,7 +176,7 @@ fn stopped_status_payload() -> serde_json::Value {
     })
 }
 
-/// The listener task body. Connects, authenticates as the Sprout identity,
+/// The listener task body. Connects, authenticates as the Buzz identity,
 /// subscribes `24622 #p=self`, and dials each paired call-me-now. Reconnects
 /// with backoff on connection loss; flips `active` to `false` while down so
 /// `start_client` won't publish during an outage.
@@ -296,7 +296,7 @@ pub async fn start_client(
     ))
 }
 
-/// Build + sign + submit the kind:24621 connect-request as the Sprout identity.
+/// Build + sign + submit the kind:24621 connect-request as the Buzz identity.
 async fn publish_connect_request(
     state: &AppState,
     request: &RelayMeshConnectRequest<'_>,
@@ -366,7 +366,7 @@ fn call_me_now_peer_addr(event: &nostr::Event) -> Option<String> {
         .map(str::to_string)
 }
 
-/// NIP-42 AUTH as the Sprout identity. Generalized from `commands::pairing`'s
+/// NIP-42 AUTH as the Buzz identity. Generalized from `commands::pairing`'s
 /// `handle_nip42_auth` — same flow, signs with `state.keys` instead of a
 /// pairing session. Returns `Ok(())` when the relay does not challenge.
 async fn authenticate<R, W>(

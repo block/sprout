@@ -148,7 +148,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         cli_install_commands: &[],
         adapter_install_commands: &[],
         install_instructions_url: "https://github.com/block/sprout",
-        cli_install_hint: "Ships with the Sprout desktop app.",
+        cli_install_hint: "Ships with the Buzz desktop app.",
         adapter_install_hint: "",
         skill_dir: None,
         supports_acp_model_switching: true,
