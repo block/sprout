@@ -4765,9 +4765,18 @@ async function handleStartManagedAgent(args: {
 }): Promise<RawManagedAgent> {
   const agent = getMockManagedAgent(args.pubkey);
   if (isRelayMeshManagedAgent(agent)) {
-    throw new Error(
-      "relay mesh agents cannot be started from saved state because the selected serve target is not persisted. Create a new agent with Run on relay mesh selected to refresh the target for http://127.0.0.1:9337/v1.",
-    );
+    // Model the backend start preflight (ensure_relay_mesh_for_record): a
+    // saved relay-mesh agent re-resolves a live serve target for its model
+    // and only fails when no peer currently serves it.
+    const modelId = agent.env_vars?.OPENAI_COMPAT_MODEL;
+    const hasLiveTarget =
+      mockMeshState.admitted &&
+      mockMeshState.models.some((model) => model.id === modelId);
+    if (!hasLiveTarget) {
+      throw new Error(
+        "relay mesh agents cannot be started from saved state because no live serve target is available for this model. Start serving on a mesh peer, or create a new agent with Run on relay mesh selected to refresh the target for http://127.0.0.1:9337/v1.",
+      );
+    }
   }
 
   const now = new Date().toISOString();
