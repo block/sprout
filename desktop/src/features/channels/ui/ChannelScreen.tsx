@@ -45,11 +45,8 @@ import { useChannelFind } from "@/features/search/useChannelFind";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
 import { AgentSessionProvider } from "@/shared/context/AgentSessionContext";
 import { ProfilePanelProvider } from "@/shared/context/ProfilePanelContext";
-import {
-  CHANNEL_CONTENT_TOP_PADDING_DEFAULT,
-  SPROUT_CHANNEL_CONTENT_TOP_PADDING_VAR,
-} from "@/shared/layout/chromeLayout";
 import { useMainInsetRef } from "@/shared/layout/MainInsetContext";
+import { channelContentTopPaddingMeasurement } from "@/shared/layout/chromeLayout";
 import { useMeasuredCssVariable } from "@/shared/layout/useMeasuredCssVariable";
 import { useElementWidth } from "@/shared/hooks/use-mobile";
 import {
@@ -492,8 +489,7 @@ export function ChannelScreen({
   useMeasuredCssVariable({
     sourceRef: channelHeaderChromeRef,
     targetRef: mainInsetRef,
-    cssVariable: SPROUT_CHANNEL_CONTENT_TOP_PADDING_VAR,
-    resetValue: CHANNEL_CONTENT_TOP_PADDING_DEFAULT,
+    ...channelContentTopPaddingMeasurement,
     resetKey: activeChannelId,
     enabled: !isSinglePanelView,
   });

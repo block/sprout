@@ -1,16 +1,20 @@
-/** Fixed global top chrome height (search bar / drag region). */
-export const SPROUT_TOP_CHROME_HEIGHT_VAR = "--sprout-top-chrome-height";
-
-/** Scroll-content inset for channel layouts with an overlaid channel header. */
-export const SPROUT_CHANNEL_CONTENT_TOP_PADDING_VAR =
-  "--sprout-channel-content-top-padding";
-
 export const TOP_CHROME_HEIGHT_DEFAULT = "2.5rem";
 export const CHANNEL_CONTENT_TOP_PADDING_DEFAULT = "5.75rem";
 
-/** No-flash defaults applied to the app `<main>` inset. */
-export const MAIN_INSET_CHROME_VARS_CLASS =
-  "[--sprout-top-chrome-height:2.5rem] [--sprout-channel-content-top-padding:5.75rem]";
+export const chromeCssVars = {
+  topChromeHeight: "--sprout-top-chrome-height",
+  channelContentTopPadding: "--sprout-channel-content-top-padding",
+} as const;
+
+export const chromeCssVarDefaults = {
+  [chromeCssVars.topChromeHeight]: TOP_CHROME_HEIGHT_DEFAULT,
+  [chromeCssVars.channelContentTopPadding]: CHANNEL_CONTENT_TOP_PADDING_DEFAULT,
+} as const;
+
+export const channelContentTopPaddingMeasurement = {
+  cssVariable: chromeCssVars.channelContentTopPadding,
+  resetValue: chromeCssVarDefaults[chromeCssVars.channelContentTopPadding],
+} as const;
 
 /** Tailwind class fragments for layout under the global top chrome. */
 export const topChromeInset = {

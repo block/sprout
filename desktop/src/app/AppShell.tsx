@@ -67,8 +67,7 @@ import { joinChannel } from "@/shared/api/tauri";
 import type { Channel, RelayEvent, SearchHit } from "@/shared/api/types";
 import { ChannelNavigationProvider } from "@/shared/context/ChannelNavigationContext";
 import { MainInsetProvider } from "@/shared/layout/MainInsetContext";
-import { MAIN_INSET_CHROME_VARS_CLASS } from "@/shared/layout/chromeLayout";
-import { cn } from "@/shared/lib/cn";
+import { chromeCssVarDefaults } from "@/shared/layout/chromeLayout";
 import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
 import { useMessageDeepLinks } from "@/shared/useMessageDeepLinks";
 import { SidebarInset, SidebarProvider } from "@/shared/ui/sidebar";
@@ -870,10 +869,8 @@ export function AppShell() {
                     <MainInsetProvider mainInsetRef={mainInsetRef}>
                       <SidebarInset
                         ref={mainInsetRef}
-                        className={cn(
-                          "min-h-0 min-w-0 overflow-hidden",
-                          MAIN_INSET_CHROME_VARS_CLASS,
-                        )}
+                        className="min-h-0 min-w-0 overflow-hidden"
+                        style={chromeCssVarDefaults}
                       >
                         <Outlet />
                       </SidebarInset>
