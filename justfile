@@ -277,6 +277,10 @@ dev *ARGS: _ensure-sidecar-stubs
     cd {{desktop_dir}}
     [[ -d node_modules ]] || pnpm install
     source ../scripts/instance-env.sh
+    # Ctrl+C kills the Tauri app before its in-process sweep finishes, leaking
+    # agent workers. Reap this instance's agents on exit as a backstop.
+    INSTANCE_ID=$(node -e "console.log(JSON.parse(process.env.SPROUT_TAURI_CONFIG).identifier)")
+    trap '../scripts/cleanup-instance-agents.sh "$INSTANCE_ID"' EXIT
     echo "Starting on Vite port ${SPROUT_VITE_PORT}, relay ${SPROUT_RELAY_URL}"
     pnpm exec tauri dev --features mesh-llm --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
 
@@ -294,6 +298,10 @@ staging *ARGS: _ensure-sidecar-stubs
     cd {{desktop_dir}}
     source ../scripts/instance-env.sh
     export SPROUT_RELAY_URL="wss://sprout-oss.stage.blox.sqprod.co"
+    # Ctrl+C kills the Tauri app before its in-process sweep finishes, leaking
+    # agent workers. Reap this instance's agents on exit as a backstop.
+    INSTANCE_ID=$(node -e "console.log(JSON.parse(process.env.SPROUT_TAURI_CONFIG).identifier)")
+    trap '../scripts/cleanup-instance-agents.sh "$INSTANCE_ID"' EXIT
     echo "Starting staging on Vite port ${SPROUT_VITE_PORT}, relay ${SPROUT_RELAY_URL}"
     pnpm exec tauri dev --features mesh-llm --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
 
