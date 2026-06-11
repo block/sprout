@@ -63,9 +63,7 @@ async fn spawn_fake_llm(responses: Vec<Value>) -> String {
 
 /// Like `spawn_fake_llm` but also captures the full JSON request body from each
 /// incoming HTTP request. Returns (url, captured_requests).
-async fn spawn_capturing_fake_llm(
-    responses: Vec<Value>,
-) -> (String, Arc<Mutex<Vec<Value>>>) {
+async fn spawn_capturing_fake_llm(responses: Vec<Value>) -> (String, Arc<Mutex<Vec<Value>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let queue = Arc::new(Mutex::new(VecDeque::from(responses)));
@@ -93,18 +91,18 @@ async fn spawn_capturing_fake_llm(
                     }
                 }
                 // Parse Content-Length from headers to read the body.
-                let header_end = buf
-                    .windows(4)
-                    .position(|w| w == b"\r\n\r\n")
-                    .unwrap()
-                    + 4;
+                let header_end = buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
                 let header_str = String::from_utf8_lossy(&buf[..header_end]);
                 let content_length: usize = header_str
                     .lines()
                     .find_map(|line| {
                         let lower = line.to_lowercase();
                         if lower.starts_with("content-length:") {
-                            lower.trim_start_matches("content-length:").trim().parse().ok()
+                            lower
+                                .trim_start_matches("content-length:")
+                                .trim()
+                                .parse()
+                                .ok()
                         } else {
                             None
                         }
@@ -121,7 +119,9 @@ async fn spawn_capturing_fake_llm(
                 }
 
                 // Parse and store the request body.
-                if let Ok(parsed) = serde_json::from_slice::<Value>(&body_buf[..content_length.min(body_buf.len())]) {
+                if let Ok(parsed) =
+                    serde_json::from_slice::<Value>(&body_buf[..content_length.min(body_buf.len())])
+                {
                     captures.lock().await.push(parsed);
                 }
 
@@ -508,7 +508,10 @@ async fn system_prompt_reaches_llm_system_role() {
 
     // First message should be the system role.
     let system_msg = &messages[0];
-    assert_eq!(system_msg["role"], "system", "first message must be system role");
+    assert_eq!(
+        system_msg["role"], "system",
+        "first message must be system role"
+    );
     let system_content = system_msg["content"].as_str().unwrap_or("");
 
     // Canary must appear in the system message (proves systemPrompt was appended).
@@ -519,9 +522,9 @@ async fn system_prompt_reaches_llm_system_role() {
 
     // The agent's default prompt must appear BEFORE the canary (additive ordering).
     let default_prompt = "You are buzz-agent";
-    let default_pos = system_content.find(default_prompt).expect(
-        "system message must contain the agent's default prompt"
-    );
+    let default_pos = system_content
+        .find(default_prompt)
+        .expect("system message must contain the agent's default prompt");
     let canary_pos = system_content.find(canary).unwrap();
     assert!(
         default_pos < canary_pos,
