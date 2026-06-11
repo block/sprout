@@ -180,6 +180,7 @@ export function MessageThreadPanel({
       className={cn(
         "min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain pb-24 [overflow-anchor:none]",
         isSplitLayout && auxiliaryPanelContentPaddingClass,
+        !isSplitLayout && !isFloatingOverlay && "pt-[4.75rem]",
       )}
       data-testid="message-thread-body"
       onScroll={syncScrollState}
@@ -380,10 +381,7 @@ export function MessageThreadPanel({
 
   if (isSplitLayout) {
     return (
-      <div
-        className="relative flex min-h-0 flex-1 flex-col"
-        data-testid="message-thread-panel"
-      >
+      <div className="relative flex min-h-0 flex-1 flex-col">
         <AuxiliaryPanelHeader>{threadHeaderContent}</AuxiliaryPanelHeader>
         {threadScrollRegion}
         {threadFooter}

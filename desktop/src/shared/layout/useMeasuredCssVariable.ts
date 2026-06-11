@@ -7,7 +7,6 @@ type UseMeasuredCssVariableArgs = {
   enabled?: boolean;
   resetKey?: unknown;
   resetValue: string;
-  sourceRef: React.RefObject<HTMLElement | null>;
   targetRef: React.RefObject<HTMLElement | null>;
 };
 
@@ -15,15 +14,20 @@ type UseMeasuredCssVariableArgs = {
  * Observes an element's block size and writes it as a CSS custom property on a
  * target element. Uses `useLayoutEffect` so the first measurement happens
  * before paint.
+ *
+ * Returns a callback ref for the source element. Attach it instead of a ref
+ * object so the measurement re-runs when the source mounts later than this
+ * hook's owner — e.g. inside a lazy-loaded subtree.
  */
 export function useMeasuredCssVariable({
-  sourceRef,
   targetRef,
   cssVariable,
   resetValue,
   resetKey,
   enabled = true,
-}: UseMeasuredCssVariableArgs) {
+}: UseMeasuredCssVariableArgs): React.RefCallback<HTMLElement> {
+  const [sourceEl, setSourceEl] = React.useState<HTMLElement | null>(null);
+
   React.useLayoutEffect(() => {
     void resetKey;
 
@@ -31,7 +35,6 @@ export function useMeasuredCssVariable({
       return;
     }
 
-    const sourceEl = sourceRef.current;
     const targetEl = targetRef.current;
 
     if (!sourceEl || !targetEl) {
@@ -56,5 +59,7 @@ export function useMeasuredCssVariable({
       disconnect();
       targetEl.style.setProperty(cssVariable, resetValue);
     };
-  }, [sourceRef, targetRef, cssVariable, resetValue, resetKey, enabled]);
+  }, [sourceEl, targetRef, cssVariable, resetValue, resetKey, enabled]);
+
+  return setSourceEl;
 }

@@ -170,10 +170,7 @@ export function AgentSessionThreadPanel({
 
   if (isSplitLayout) {
     return (
-      <div
-        className="flex min-h-0 flex-1 flex-col"
-        data-testid="agent-session-thread-panel"
-      >
+      <div className="flex min-h-0 flex-1 flex-col">
         <AuxiliaryPanelHeader>{agentHeaderContent}</AuxiliaryPanelHeader>
         {agentBody}
       </div>

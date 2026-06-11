@@ -113,7 +113,6 @@ export function ChannelScreen({
     string | null
   >(null);
   const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
-  const channelHeaderChromeRef = React.useRef<HTMLDivElement>(null);
   const mainInsetRef = useMainInsetRef();
   const currentPubkey = currentIdentity?.pubkey;
   const activeChannelId = activeChannel?.id ?? null;
@@ -486,8 +485,7 @@ export function ChannelScreen({
     hasAuxiliaryPanel &&
     channelContentWidthPx > 0 &&
     channelContentWidthPx < HEADER_ACTIONS_COMPACT_BREAKPOINT_PX;
-  useMeasuredCssVariable({
-    sourceRef: channelHeaderChromeRef,
+  const channelHeaderChromeRef = useMeasuredCssVariable({
     targetRef: mainInsetRef,
     ...channelContentTopPaddingMeasurement,
     resetKey: activeChannelId,
