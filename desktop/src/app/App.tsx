@@ -116,7 +116,7 @@ function OnboardingLoadingGate() {
               type="button"
               variant="ghost"
             >
-              Continue using Nostr
+              I already have a key
             </Button>
           </div>
         </OnboardingSlideTransition>

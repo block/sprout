@@ -122,7 +122,7 @@ async function expectIntroActionIconStackedAboveTitle(
 }
 
 async function expectWelcomeComposerBannerLayout(page: Page) {
-  const banner = page.getByTestId("welcome-composer-kit-banner");
+  const banner = page.getByTestId("welcome-composer-guide-banner");
   const personaMention = page.getByTestId("welcome-composer-persona-mention");
   const composer = page.getByTestId("message-composer");
   const bannerBox = await banner.boundingBox();
@@ -134,7 +134,7 @@ async function expectWelcomeComposerBannerLayout(page: Page) {
   }
 
   expect(
-    await composer.getByTestId("welcome-composer-kit-banner").count(),
+    await composer.getByTestId("welcome-composer-guide-banner").count(),
   ).toBe(0);
   expect(bannerBox.y).toBeLessThan(composerBox.y);
   expect(bannerBox.y + bannerBox.height).toBeGreaterThan(composerBox.y);
@@ -156,11 +156,11 @@ async function expectWelcomeComposerBannerLayout(page: Page) {
 }
 
 async function expectWelcomePersonaMention(page: Page) {
-  const banner = page.getByTestId("welcome-composer-kit-banner");
+  const banner = page.getByTestId("welcome-composer-guide-banner");
   const personaMention = page.getByTestId("welcome-composer-persona-mention");
   await expect(personaMention).toBeVisible();
-  await expect(personaMention).toHaveAttribute("data-persona-options", "Kit");
-  await expect(personaMention).toHaveAttribute("data-active-persona", "Kit");
+  await expect(personaMention).toHaveAttribute("data-persona-options", "Fizz");
+  await expect(personaMention).toHaveAttribute("data-active-persona", "Fizz");
   await expect(personaMention).toHaveAttribute(
     "data-animation-target",
     "per-character",
@@ -198,7 +198,8 @@ async function expectWelcomePersonaMention(page: Page) {
   const alignment = await personaMention.evaluate((element) => {
     const mentionStyles = window.getComputedStyle(element);
     const bannerStyles = window.getComputedStyle(
-      element.closest('[data-testid="welcome-composer-kit-banner"]') ?? element,
+      element.closest('[data-testid="welcome-composer-guide-banner"]') ??
+        element,
     );
     return {
       display: mentionStyles.display,
@@ -262,11 +263,11 @@ async function expectWelcomeView(page: Page) {
     page.getByTestId("welcome-intro-action-create-agent-description"),
   ).toHaveCount(0);
   await expect(page.getByTestId("message-composer")).toBeVisible();
-  await expect(page.getByTestId("welcome-composer-kit-banner")).toBeVisible();
-  await expect(page.getByTestId("welcome-composer-kit-banner")).toContainText(
+  await expect(page.getByTestId("welcome-composer-guide-banner")).toBeVisible();
+  await expect(page.getByTestId("welcome-composer-guide-banner")).toContainText(
     "Try mentioning",
   );
-  await expect(page.getByTestId("welcome-composer-kit-banner")).toContainText(
+  await expect(page.getByTestId("welcome-composer-guide-banner")).toContainText(
     "to chat with an agent in this channel.",
   );
   await expectWelcomePersonaMention(page);
@@ -276,10 +277,10 @@ async function expectWelcomeView(page: Page) {
 async function expectWelcomeComposerBannerCompletesAfterPersonaMention(
   page: Page,
 ) {
-  const banner = page.getByTestId("welcome-composer-kit-banner");
+  const banner = page.getByTestId("welcome-composer-guide-banner");
   const channelIntro = page.getByTestId("message-channel-intro");
 
-  await page.getByTestId("message-input").fill("Thanks @Kit");
+  await page.getByTestId("message-input").fill("Thanks @Fizz");
   await page.getByTestId("send-message").click();
 
   await expect(banner).toHaveAttribute("data-state", "complete");
@@ -303,7 +304,7 @@ async function expectWelcomeComposerBannerCompletesAfterPersonaMention(
   await page.waitForFunction(
     ({ beforeY }) => {
       const bannerElement = document.querySelector(
-        '[data-testid="welcome-composer-kit-banner"]',
+        '[data-testid="welcome-composer-guide-banner"]',
       );
       const introElement = document.querySelector(
         '[data-testid="message-channel-intro"]',
@@ -463,57 +464,57 @@ async function expectWelcomeGuideIntro(
         invokeMockCommand<{
           hits: Array<{ pubkey: string; content: string }>;
         }>(page, "search_messages", {
-          q: "Hi, I'm Kit",
+          q: "Hi, I'm Fizz",
           limit: 10,
         }),
       ]);
-      const kit = agents.find(
-        (agent) => agent.name === "Kit" && agent.persona_id === "builtin:kit",
+      const fizz = agents.find(
+        (agent) => agent.name === "Fizz" && agent.persona_id === "builtin:fizz",
       );
-      const kitMember = kit
-        ? members.members.find((member) => member.pubkey === kit.pubkey)
+      const fizzMember = fizz
+        ? members.members.find((member) => member.pubkey === fizz.pubkey)
         : null;
-      const intro = kit
-        ? introSearch.hits.find((hit) => hit.pubkey === kit.pubkey)
+      const intro = fizz
+        ? introSearch.hits.find((hit) => hit.pubkey === fizz.pubkey)
         : null;
-      const kitWelcomeHits = kit
-        ? introSearch.hits.filter((hit) => hit.pubkey === kit.pubkey)
+      const fizzWelcomeHits = fizz
+        ? introSearch.hits.filter((hit) => hit.pubkey === fizz.pubkey)
         : [];
-      const profileAvatarUrl = kit
+      const profileAvatarUrl = fizz
         ? (
             await invokeMockCommand<{
               profiles: Record<string, { avatar_url: string | null }>;
             }>(page, "get_users_batch", {
-              pubkeys: [kit.pubkey],
+              pubkeys: [fizz.pubkey],
             })
-          ).profiles[kit.pubkey]?.avatar_url
+          ).profiles[fizz.pubkey]?.avatar_url
         : null;
 
       return {
-        kitIsBot: kitMember?.role === "bot" && kitMember.is_agent,
-        kitPersonaId: kit?.persona_id ?? null,
+        fizzIsBot: fizzMember?.role === "bot" && fizzMember.is_agent,
+        fizzPersonaId: fizz?.persona_id ?? null,
         introContent: intro?.content ?? null,
-        introMatchesKit: Boolean(kit && intro?.pubkey === kit.pubkey),
-        kitWelcomeHitCount: kitWelcomeHits.length,
+        introMatchesFizz: Boolean(fizz && intro?.pubkey === fizz.pubkey),
+        fizzWelcomeHitCount: fizzWelcomeHits.length,
         profileAvatarUrl,
       };
     })
     .toEqual({
-      kitIsBot: true,
-      kitPersonaId: "builtin:kit",
+      fizzIsBot: true,
+      fizzPersonaId: "builtin:fizz",
       introContent:
-        "Hi, I'm Kit. Welcome to Sprout.\n\nI can help you get oriented, answer questions, and make the first few steps feel less mysterious.\n\nFeel free to ask me what else you can do in Sprout, or just talk through what you want to build.",
-      introMatchesKit: true,
-      kitWelcomeHitCount: 1,
-      profileAvatarUrl: "https://example.test/avatars/kit.png",
+        "Hi, I'm Fizz. Welcome to Buzz.\n\nI can help you get oriented, answer questions, and make the first few steps feel less mysterious.\n\nFeel free to ask me what else you can do in Buzz, or just talk through what you want to build.",
+      introMatchesFizz: true,
+      fizzWelcomeHitCount: 1,
+      profileAvatarUrl: null,
     });
 
   if (expectVisible) {
     await expect(page.getByTestId("message-timeline")).toContainText(
-      "Hi, I'm Kit. Welcome to Sprout.",
+      "Hi, I'm Fizz. Welcome to Buzz.",
     );
     await expect(page.getByTestId("message-timeline")).toContainText(
-      "Feel free to ask me what else you can do in Sprout",
+      "Feel free to ask me what else you can do in Buzz",
     );
     await expect(
       page.getByTestId("message-timeline-day-divider"),
@@ -582,7 +583,10 @@ test("completed users skip the loading gate while profile is still settling", as
 test("first-run default workspace handoff gives immediate stepper feedback", async ({
   page,
 }) => {
-  await seedActiveIdentity(page, FIRST_RUN_KENNY);
+  // Use a blank-username identity so the profile has no display name and
+  // the auto-skip logic does not fire — we need to stay in onboarding to
+  // verify the stepper UX.
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await installMockBridge(
     page,
     {
@@ -616,7 +620,7 @@ test("first-run default workspace handoff gives immediate stepper feedback", asy
   );
 
   const nameInput = page.getByTestId("onboarding-display-name");
-  await expect(nameInput).toHaveValue("Kenny QA");
+  await expect(nameInput).toHaveValue("");
   await expect(page.getByRole("progressbar")).toHaveAttribute(
     "aria-valuenow",
     "2",
@@ -634,17 +638,16 @@ test("welcome can continue using an existing Nostr key", async ({ page }) => {
 
   await page.getByTestId("welcome-continue-nostr").click();
   await expect(
-    page.getByRole("heading", { name: "Continue using Nostr" }),
+    page.getByRole("heading", { name: "Use your existing key" }),
   ).toBeVisible();
 
   const importedNsec = nsecEncode(hexToBytes(TEST_IDENTITIES.alice.privateKey));
-  await page.getByTestId("welcome-nostr-nsec-input").fill(importedNsec);
-  await expect(page.getByTestId("welcome-nostr-npub-preview")).toBeVisible();
-  await page.getByTestId("welcome-nostr-submit").click();
+  await page.getByTestId("nostr-import-nsec-input").fill(importedNsec);
+  await expect(page.getByTestId("nostr-import-npub-preview")).toBeVisible();
+  await page.getByTestId("nostr-import-submit").click();
 
-  await expect(page.getByTestId("onboarding-display-name")).toHaveValue(
-    "alice",
-  );
+  // Alice already has a relay profile with a display name, so onboarding
+  // auto-completes after the identity swap.
   await expect
     .poll(() =>
       page.evaluate(() => {
@@ -656,17 +659,8 @@ test("welcome can continue using an existing Nostr key", async ({ page }) => {
       }),
     )
     .toBe(TEST_IDENTITIES.alice.pubkey);
-  await expect
-    .poll(() =>
-      page.evaluate((storageKey) => {
-        const rawIdentity = window.localStorage.getItem(storageKey);
-        const identity = rawIdentity
-          ? (JSON.parse(rawIdentity) as { pubkey?: string })
-          : null;
-        return identity?.pubkey ?? null;
-      }, E2E_IDENTITY_OVERRIDE_STORAGE_KEY),
-    )
-    .toBe(TEST_IDENTITIES.alice.pubkey);
+  await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
+  await expectHomeView(page);
 });
 
 test("welcome presents custom workspace setup as joining a workspace", async ({
@@ -691,6 +685,7 @@ test("welcome presents custom workspace setup as joining a workspace", async ({
 test("identity fallback text does not count as a real onboarding name", async ({
   page,
 }) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await installMockBridge(page, undefined, { skipOnboardingSeed: true });
   await page.goto("/");
 
@@ -1033,20 +1028,44 @@ test("first-run onboarding shows setup loading until Welcome bootstrap completes
   await expectWelcomeGuideIntro(page);
 });
 
-test("existing relay profile prefills the name step without localStorage completion", async ({
+test("existing relay profile with display name auto-skips onboarding without localStorage", async ({
   page,
 }) => {
+  // A user whose relay profile already has a display name should skip
+  // onboarding even without the localStorage completion flag.
   await seedActiveIdentity(page, TEST_IDENTITIES.alice);
   await installMockBridge(page, undefined, { skipOnboardingSeed: true });
   await page.goto("/");
 
-  await expect(page.getByTestId("onboarding-gate")).toBeVisible();
-  await expectShellHidden(page);
-  await expect(page.getByTestId("onboarding-display-name")).toHaveValue(
-    "alice",
-  );
-  await expect(page.getByTestId("onboarding-next")).toBeEnabled();
-  await expect(page.getByTestId("onboarding-back")).toHaveCount(0);
+  await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
+  await expectHomeView(page);
+});
+
+test("onboarding can import an existing key when the workspace is already set up", async ({
+  page,
+}) => {
+  // Workspace exists (default seed), but this identity has no profile yet,
+  // so the app lands on the onboarding name step — Tyler's moved-laptop /
+  // fresh-dev-instance case.
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await installMockBridge(page, undefined, { skipOnboardingSeed: true });
+  await page.goto("/");
+
+  await expect(page.getByTestId("onboarding-display-name")).toHaveValue("");
+  await page.getByTestId("onboarding-import-key").click();
+  await expect(
+    page.getByRole("heading", { name: "Use your existing key" }),
+  ).toBeVisible();
+
+  const importedNsec = nsecEncode(hexToBytes(TEST_IDENTITIES.alice.privateKey));
+  await page.getByTestId("nostr-import-nsec-input").fill(importedNsec);
+  await expect(page.getByTestId("nostr-import-npub-preview")).toBeVisible();
+  await page.getByTestId("nostr-import-submit").click();
+
+  // Identity swap remounts the flow; alice already has a relay profile with
+  // a display name, so onboarding auto-completes and lands in the app.
+  await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
+  await expectHomeView(page);
 });
 
 test("completed onboarding backfills a missing private Welcome channel", async ({
@@ -1145,38 +1164,18 @@ test("failed first profile saves can be skipped for the current session", async 
   await expectHomeView(page);
 });
 
-test("failed saved profile saves can continue without retrying the display name", async ({
+test("existing relay profile with display name auto-completes onboarding", async ({
   page,
 }) => {
+  // A user whose relay profile already has a display name should skip
+  // onboarding entirely — they've already set up their identity previously
+  // (possibly on another machine or app data directory).
   await seedActiveIdentity(page, TEST_IDENTITIES.alice);
-  await installMockBridge(
-    page,
-    {
-      profileUpdateError: "Temporary profile sync failure.",
-    },
-    { skipOnboardingSeed: true },
-  );
+  await installMockBridge(page, undefined, { skipOnboardingSeed: true });
   await page.goto("/");
 
-  await expect(page.getByTestId("onboarding-display-name")).toHaveValue(
-    "alice",
-  );
-  await page.getByTestId("onboarding-display-name").fill("Alice Draft");
-  await page.getByTestId("onboarding-next").click();
-
-  await expect(page.getByText("Temporary profile sync failure.")).toBeVisible();
-  await page.getByTestId("onboarding-next-without-saving").click();
-
-  await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
-  const avatarUrl = "https://example.com/alice-onboarding-avatar.png";
-  await page.getByTestId("onboarding-avatar-url").fill(avatarUrl);
-  await page.getByTestId("onboarding-next").click();
-
-  await expect(page.getByTestId("onboarding-page-theme")).toBeVisible();
-  await expect(await getMockProfile(page)).toMatchObject({
-    avatar_url: avatarUrl,
-    display_name: "alice",
-  });
+  await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
+  await expectHomeView(page);
 });
 
 test("membership denial can import a different invited key", async ({
@@ -1205,6 +1204,8 @@ test("membership denial can import a different invited key", async ({
   ).toBeVisible();
   await page.getByTestId("membership-denied-import-key").click();
 
+  // Alice already has a relay profile with a display name, so after the
+  // identity swap the onboarding gate auto-completes.
   await expect
     .poll(() =>
       page.evaluate(
@@ -1214,7 +1215,6 @@ test("membership denial can import a different invited key", async ({
       ),
     )
     .toEqual(expect.arrayContaining(["plugin:websocket|disconnect"]));
-  await expect(page.getByTestId("onboarding-page-1")).toBeVisible();
   await expect
     .poll(() =>
       page.evaluate((storageKey) => {
@@ -1226,7 +1226,6 @@ test("membership denial can import a different invited key", async ({
       }, E2E_IDENTITY_OVERRIDE_STORAGE_KEY),
     )
     .toBe(TEST_IDENTITIES.alice.pubkey);
-  await page.getByTestId("onboarding-next").click();
-
-  await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
+  await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
+  await expectHomeView(page);
 });

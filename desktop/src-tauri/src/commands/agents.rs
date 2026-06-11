@@ -135,7 +135,8 @@ async fn start_local_agent_with_preflight(
         .iter()
         .find(|record| record.pubkey == pubkey)
         .ok_or_else(|| format!("agent {pubkey} not found"))?;
-    build_managed_agent_summary(app, record, &runtimes)
+    let personas = load_personas(app).unwrap_or_default();
+    build_managed_agent_summary(app, record, &runtimes, &personas)
 }
 
 /// Build the standard agent JSON payload for provider deploy calls.
@@ -307,9 +308,10 @@ pub fn list_managed_agents(
         save_managed_agents(&app, &records)?;
     }
 
+    let personas = load_personas(&app).unwrap_or_default();
     records
         .iter()
-        .map(|record| build_managed_agent_summary(&app, record, &runtimes))
+        .map(|record| build_managed_agent_summary(&app, record, &runtimes, &personas))
         .collect()
 }
 
@@ -594,8 +596,9 @@ pub async fn create_managed_agent(
             .iter()
             .find(|record| record.pubkey == pubkey)
             .ok_or_else(|| "created agent disappeared unexpectedly".to_string())?;
+        let personas = load_personas(&app).unwrap_or_default();
         (
-            build_managed_agent_summary(&app, record, &runtimes)?,
+            build_managed_agent_summary(&app, record, &runtimes, &personas)?,
             resolved_avatar_url,
         )
     };
@@ -624,7 +627,8 @@ pub async fn create_managed_agent(
                     .iter()
                     .find(|record| record.pubkey == pubkey)
                     .ok_or_else(|| "created agent disappeared unexpectedly".to_string())?;
-                build_managed_agent_summary(&app, record, &runtimes)?
+                let personas = load_personas(&app).unwrap_or_default();
+                build_managed_agent_summary(&app, record, &runtimes, &personas)?
             }
         }
     } else {
@@ -710,7 +714,8 @@ pub async fn create_managed_agent(
             .iter()
             .find(|r| r.pubkey == pubkey)
             .ok_or_else(|| "agent disappeared".to_string())?;
-        build_managed_agent_summary(&app, record, &runtimes)?
+        let personas = load_personas(&app).unwrap_or_default();
+        build_managed_agent_summary(&app, record, &runtimes, &personas)?
     } else {
         agent
     };
@@ -840,7 +845,8 @@ pub async fn start_managed_agent(
                 .iter()
                 .find(|r| r.pubkey == pubkey)
                 .ok_or_else(|| format!("agent {pubkey} not found"))?;
-            build_managed_agent_summary(&app, record, &runtimes)
+            let personas = load_personas(&app).unwrap_or_default();
+            build_managed_agent_summary(&app, record, &runtimes, &personas)
         }
         StartTarget::Provider { backend, .. } => Err(format!(
             "agent {pubkey} has unsupported backend kind: {backend:?}"
@@ -1032,7 +1038,8 @@ pub fn stop_managed_agent(
         .iter()
         .find(|record| record.pubkey == pubkey)
         .ok_or_else(|| format!("agent {pubkey} not found"))?;
-    build_managed_agent_summary(&app, record, &runtimes)
+    let personas = load_personas(&app).unwrap_or_default();
+    build_managed_agent_summary(&app, record, &runtimes, &personas)
 }
 
 #[tauri::command]

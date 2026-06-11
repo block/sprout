@@ -9,13 +9,14 @@ import { listPersonas, setPersonaActive } from "@/shared/api/tauriPersonas";
 import type { ManagedAgent } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
-export const WELCOME_GUIDE_AGENT_NAME = "Kit";
-export const WELCOME_GUIDE_PERSONA_ID = "builtin:kit";
+export const WELCOME_GUIDE_AGENT_NAME = "Fizz";
+export const WELCOME_GUIDE_PERSONA_ID = "builtin:fizz";
 export const WELCOME_GUIDE_INTRO_MARKER = "sprout-welcome-intro.v1";
+const LEGACY_WELCOME_GUIDE_AGENT_NAME = "Kit";
 export const LEGACY_WELCOME_GUIDE_SYSTEM_PROMPT =
   "You are Kit, Sprout's friendly welcome guide. Help new users understand the workspace, channels, messages, and agents. Keep introductions concise, practical, and warm.";
 export const WELCOME_GUIDE_INTRO_MESSAGE =
-  "Hi, I'm Kit. Welcome to Sprout.\n\nI can help you get oriented, answer questions, and make the first few steps feel less mysterious.\n\nFeel free to ask me what else you can do in Sprout, or just talk through what you want to build.";
+  "Hi, I'm Fizz. Welcome to Buzz.\n\nI can help you get oriented, answer questions, and make the first few steps feel less mysterious.\n\nFeel free to ask me what else you can do in Buzz, or just talk through what you want to build.";
 
 function normalizeRelayUrl(relayUrl: string | null | undefined) {
   return relayUrl?.trim().replace(/\/+$/, "") ?? null;
@@ -29,25 +30,31 @@ function isAgentScopedToRelay(agent: ManagedAgent, relayUrl?: string | null) {
   return normalizeRelayUrl(agent.relayUrl) === targetRelayUrl;
 }
 
-function isNamedKitAgent(agent: ManagedAgent) {
+function isNamedWelcomeGuideAgent(agent: ManagedAgent) {
   return (
     agent.name.trim().toLowerCase() === WELCOME_GUIDE_AGENT_NAME.toLowerCase()
   );
 }
 
 function isBuiltInWelcomeGuideAgent(agent: ManagedAgent) {
-  return agent.personaId === WELCOME_GUIDE_PERSONA_ID && isNamedKitAgent(agent);
+  return (
+    agent.personaId === WELCOME_GUIDE_PERSONA_ID &&
+    isNamedWelcomeGuideAgent(agent)
+  );
 }
 
-function isLegacyWelcomeGuideAgent(agent: ManagedAgent) {
+function isLegacyKitWelcomeGuideAgent(agent: ManagedAgent) {
   return (
-    isNamedKitAgent(agent) &&
+    agent.name.trim().toLowerCase() ===
+      LEGACY_WELCOME_GUIDE_AGENT_NAME.toLowerCase() &&
     agent.systemPrompt?.trim() === LEGACY_WELCOME_GUIDE_SYSTEM_PROMPT
   );
 }
 
 function isWelcomeGuideAgent(agent: ManagedAgent) {
-  return isBuiltInWelcomeGuideAgent(agent) || isLegacyWelcomeGuideAgent(agent);
+  return (
+    isBuiltInWelcomeGuideAgent(agent) || isLegacyKitWelcomeGuideAgent(agent)
+  );
 }
 
 function pickAgentByStatus(agents: ManagedAgent[]) {
@@ -85,13 +92,13 @@ export async function getWelcomeGuideAgentPubkeys(relayUrl?: string | null) {
 }
 
 async function ensureWelcomeGuidePersonaActive() {
-  const kit = (await listPersonas()).find(
+  const guidePersona = (await listPersonas()).find(
     (persona) => persona.id === WELCOME_GUIDE_PERSONA_ID,
   );
-  if (!kit) {
-    throw new Error("Kit persona not found.");
+  if (!guidePersona) {
+    throw new Error(`${WELCOME_GUIDE_AGENT_NAME} persona not found.`);
   }
-  if (!kit.isActive) {
+  if (!guidePersona.isActive) {
     await setPersonaActive(WELCOME_GUIDE_PERSONA_ID, true);
   }
 }
