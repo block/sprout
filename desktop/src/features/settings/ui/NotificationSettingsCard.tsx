@@ -143,7 +143,7 @@ export function NotificationSettingsCard({
               exit={{ opacity: 0 }}
               initial={{ opacity: 0 }}
               key="sound-panels"
-              layout
+              layout="position"
             >
               <SettingsOptionGroup>
                 <SettingsOptionRow>
@@ -177,7 +177,7 @@ export function NotificationSettingsCard({
                     exit={{ opacity: 0 }}
                     initial={{ opacity: 0 }}
                     key="event-rows"
-                    layout
+                    layout="position"
                   >
                     <SettingsOptionGroup>
                       {visibleSlots.map((slot) => {
@@ -264,7 +264,7 @@ export function NotificationSettingsCard({
           ) : null}
         </AnimatePresence>
 
-        <motion.div layout>
+        <motion.div layout="position">
           <SettingsOptionGroup>
             <SettingsOptionRow>
               <div className="min-w-0">
