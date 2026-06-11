@@ -159,9 +159,7 @@ export function ForumThreadPanel({
 
   if (isLoading || !thread) {
     return (
-      <div
-        className={cn("flex h-full flex-col", channelChrome.contentPadding)}
-      >
+      <div className={cn("flex h-full flex-col", channelChrome.contentPadding)}>
         <div className="border-b border-border/60 px-4 py-3">
           <Button
             className="gap-1.5 text-muted-foreground"
