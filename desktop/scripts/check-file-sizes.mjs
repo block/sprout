@@ -31,6 +31,7 @@ const rules = [
 // file is broken up. Tracked as a follow-up.
 const overrides = new Map([
   ["src-tauri/src/commands/agents.rs", 1370],
+  ["src-tauri/src/managed_agents/teams.rs", 1020],
   ["src-tauri/src/managed_agents/nest.rs", 1420],
   ["src-tauri/src/managed_agents/runtime.rs", 1940],
   ["src-tauri/src/managed_agents/personas.rs", 1080],

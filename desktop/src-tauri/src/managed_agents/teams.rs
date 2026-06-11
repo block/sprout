@@ -743,7 +743,6 @@ pub fn sync_team_personas(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{

@@ -12,6 +12,8 @@
 //! future-proofing for when it becomes the runtime source; keeping it current
 //! is the only job here.
 
+use buzz_core_pkg::engram::{conversation_key, d_tag, select_head};
+use buzz_core_pkg::kind::KIND_AGENT_ENGRAM;
 use nostr::PublicKey;
 use tauri::{AppHandle, Manager};
 
@@ -24,8 +26,6 @@ use super::storage::load_managed_agents;
 use super::{ManagedAgentRecord, PersonaRecord};
 use crate::app_state::AppState;
 use crate::relay;
-use buzz_core_pkg::engram::{conversation_key, d_tag, select_head};
-use buzz_core_pkg::kind::KIND_AGENT_ENGRAM;
 
 /// What fleet update should do with one agent's persona engram.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
