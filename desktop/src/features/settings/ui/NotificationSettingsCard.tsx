@@ -1,3 +1,6 @@
+import { useState } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
+
 import type {
   DesktopNotificationPermissionState,
   NotificationSettings,
@@ -13,6 +16,7 @@ import {
   type SoundSlot,
 } from "@/features/notifications/lib/sound";
 import { cn } from "@/shared/lib/cn";
+import { Button } from "@/shared/ui/button";
 import { Switch } from "@/shared/ui/switch";
 import { SettingsOptionGroup, SettingsOptionRow } from "./SettingsOptionGroup";
 import { SoundPicker } from "./SoundPicker";
@@ -47,6 +51,10 @@ export function NotificationSettingsCard({
     notificationPermission === "unsupported";
   const soundControlsVisible =
     notificationSettings.desktopEnabled && notificationSettings.soundEnabled;
+  const [showComingSoon, setShowComingSoon] = useState(false);
+  const visibleSlots = SOUND_SLOTS.filter(
+    (slot) => showComingSoon || !COMING_SOON_SLOTS.has(slot),
+  );
 
   return (
     <section className="min-w-0" data-testid="settings-notifications">
@@ -138,15 +146,21 @@ export function NotificationSettingsCard({
               </p>
             </div>
             <span className="flex items-center gap-3">
-              {soundControlsVisible ? (
+              <span
+                className={cn(
+                  "transition-opacity duration-200",
+                  !soundControlsVisible && "pointer-events-none opacity-40",
+                )}
+              >
                 <SoundPicker
+                  disabled={!soundControlsVisible}
                   onChange={(next) =>
                     onSetSingleSound(next ?? RECOMMENDED_SINGLE_SOUND)
                   }
                   recommended={RECOMMENDED_SINGLE_SOUND}
                   value={notificationSettings.singleSound}
                 />
-              ) : null}
+              </span>
               <Switch
                 checked={
                   notificationSettings.desktopEnabled &&
@@ -163,76 +177,90 @@ export function NotificationSettingsCard({
           </SettingsOptionRow>
 
           <div
-            className={
-              notificationSettings.desktopEnabled
-                ? "grid grid-rows-[1fr] transition-[grid-template-rows] duration-200"
-                : "grid grid-rows-[0fr] transition-[grid-template-rows] duration-200"
-            }
+            className={cn(
+              "border-t border-border/55 transition-opacity duration-200",
+              !notificationSettings.desktopEnabled &&
+                "pointer-events-none opacity-40",
+            )}
           >
-            <div className="min-h-0 overflow-hidden">
-              <div className="border-t border-border/55">
-                {SOUND_SLOTS.map((slot) => {
-                  const comingSoon = COMING_SOON_SLOTS.has(slot);
-                  // Cascade: the Sound master switch off renders every row
-                  // off and inert; stored per-row values are preserved.
-                  const alertsOn =
-                    soundControlsVisible &&
-                    notificationSettings.slotAlertsEnabled[slot];
-                  return (
-                    <SettingsOptionRow
-                      aria-disabled={comingSoon || undefined}
-                      className={cn(
-                        comingSoon && "pointer-events-none opacity-40",
-                      )}
-                      key={slot}
-                    >
-                      <div className="min-w-0">
-                        <span className="flex items-center gap-2 text-sm font-medium">
-                          {SLOT_LABELS[slot]}
-                          {comingSoon ? (
-                            <span className="rounded-full bg-muted/70 px-2 py-0.5 text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
-                              Coming soon
-                            </span>
-                          ) : null}
+            {visibleSlots.map((slot) => {
+              const comingSoon = COMING_SOON_SLOTS.has(slot);
+              // Cascade: the Sound master switch off renders every row
+              // off and inert; stored per-row values are preserved.
+              const alertsOn =
+                soundControlsVisible &&
+                notificationSettings.slotAlertsEnabled[slot];
+              return (
+                <SettingsOptionRow
+                  aria-disabled={comingSoon || undefined}
+                  className={cn(comingSoon && "pointer-events-none opacity-40")}
+                  key={slot}
+                >
+                  <div className="min-w-0">
+                    <span className="flex items-center gap-2 text-sm font-medium">
+                      {SLOT_LABELS[slot]}
+                      {comingSoon ? (
+                        <span className="rounded-full bg-muted/70 px-2 py-0.5 text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
+                          Coming soon
                         </span>
-                        <p className="text-sm font-normal text-muted-foreground">
-                          {SLOT_DESCRIPTIONS[slot]}
-                        </p>
-                      </div>
-                      <span className="flex items-center gap-3">
-                        {soundControlsVisible ? (
-                          <span
-                            className={cn(
-                              "transition-opacity duration-200",
-                              !alertsOn && "pointer-events-none opacity-40",
-                            )}
-                          >
-                            <SoundPicker
-                              disabled={comingSoon || !alertsOn}
-                              inheritFrom={notificationSettings.singleSound}
-                              onChange={(next) => onSetSoundForSlot(slot, next)}
-                              recommended={RECOMMENDED_SOUND_BY_SLOT[slot]}
-                              value={notificationSettings.sounds[slot]}
-                            />
-                          </span>
-                        ) : null}
-                        <Switch
-                          checked={alertsOn && !comingSoon}
-                          data-testid={`notifications-alerts-enabled-${slot}`}
-                          disabled={comingSoon || !soundControlsVisible}
-                          id={`alerts-enabled-${slot}-switch`}
-                          onCheckedChange={(checked) => {
-                            onSetSlotAlertsEnabled(slot, checked);
-                          }}
-                        />
-                      </span>
-                    </SettingsOptionRow>
-                  );
-                })}
-              </div>
-            </div>
+                      ) : null}
+                    </span>
+                    <p className="text-sm font-normal text-muted-foreground">
+                      {SLOT_DESCRIPTIONS[slot]}
+                    </p>
+                  </div>
+                  <span className="flex items-center gap-3">
+                    <span
+                      className={cn(
+                        "transition-opacity duration-200",
+                        !alertsOn && "pointer-events-none opacity-40",
+                      )}
+                    >
+                      <SoundPicker
+                        disabled={comingSoon || !alertsOn}
+                        inheritFrom={notificationSettings.singleSound}
+                        onChange={(next) => onSetSoundForSlot(slot, next)}
+                        recommended={RECOMMENDED_SOUND_BY_SLOT[slot]}
+                        value={notificationSettings.sounds[slot]}
+                      />
+                    </span>
+                    <Switch
+                      checked={alertsOn && !comingSoon}
+                      data-testid={`notifications-alerts-enabled-${slot}`}
+                      disabled={comingSoon || !soundControlsVisible}
+                      id={`alerts-enabled-${slot}-switch`}
+                      onCheckedChange={(checked) => {
+                        onSetSlotAlertsEnabled(slot, checked);
+                      }}
+                    />
+                  </span>
+                </SettingsOptionRow>
+              );
+            })}
           </div>
         </SettingsOptionGroup>
+
+        <div className="flex justify-center">
+          <Button
+            data-testid="notifications-toggle-coming-soon"
+            onClick={() => setShowComingSoon((current) => !current)}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            {showComingSoon ? (
+              <>
+                <ChevronUp className="h-3.5 w-3.5" />
+                Show less
+              </>
+            ) : (
+              <>
+                <ChevronDown className="h-3.5 w-3.5" />
+                View all
+              </>
+            )}
+          </Button>
+        </div>
 
         <SettingsOptionGroup>
           <SettingsOptionRow>
