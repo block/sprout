@@ -118,9 +118,9 @@ fn merged_env_strips_reserved_keys_from_agent() {
 #[test]
 fn merged_env_strips_reserved_case_insensitive() {
     // Unix env vars are case-sensitive at the syscall level, but we
-    // refuse close-typo variants too — a lowercase `sprout_private_key`
+    // refuse close-typo variants too — a lowercase `buzz_private_key`
     // is almost certainly a footgun, not a legitimate use.
-    let agent = map(&[("sprout_private_key", "x"), ("Sprout_Auth_Tag", "y")]);
+    let agent = map(&[("buzz_private_key", "x"), ("Buzz_Auth_Tag", "y")]);
     let merged = merged_user_env(&BTreeMap::new(), &agent);
     assert!(merged.is_empty());
 }
@@ -438,7 +438,7 @@ fn is_derived_key_matches_all_known_keys() {
 fn is_derived_key_is_case_insensitive() {
     assert!(is_derived_provider_model_key("goose_model"));
     assert!(is_derived_provider_model_key("Goose_Provider"));
-    assert!(is_derived_provider_model_key("sprout_agent_model"));
+    assert!(is_derived_provider_model_key("buzz_agent_model"));
     assert!(is_derived_provider_model_key("BUZZ_AGENT_PROVIDER"));
 }
 
