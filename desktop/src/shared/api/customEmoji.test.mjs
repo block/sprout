@@ -3,17 +3,18 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  ownCustomEmojiFromEvents,
   customEmojiFromEvent,
   customEmojiFromTags,
   normalizeShortcode,
   suggestShortcodeFromFilename,
 } from "./customEmoji.ts";
 
-function ev(tags) {
+function ev(tags, created_at = 1, pubkey = "relay") {
   return {
-    id: "x",
-    pubkey: "relay",
-    created_at: 1,
+    id: `${pubkey}-${created_at}`,
+    pubkey,
+    created_at,
     kind: 30030,
     tags,
     content: "",
@@ -106,6 +107,41 @@ test("customEmojiFromTags normalizes shortcodes (case-fold)", () => {
   assert.deepEqual(out, [{ shortcode: "shipit", url: "https://relay/s.png" }]);
 });
 
+test("ownCustomEmojiFromEvents merges current and legacy sets by shortcode", () => {
+  const out = ownCustomEmojiFromEvents([
+    ev([
+      ["d", "sprout:custom-emoji"],
+      ["emoji", "lol", "https://relay/lol.png"],
+      ["emoji", "shipit", "https://relay/legacy.png"],
+    ]),
+    ev([
+      ["d", "buzz:custom-emoji"],
+      ["emoji", "shipit", "https://relay/current.png"],
+    ]),
+  ]);
+  assert.deepEqual(out, [
+    { shortcode: "shipit", url: "https://relay/current.png" },
+    { shortcode: "lol", url: "https://relay/lol.png" },
+  ]);
+});
+
+test("ownCustomEmojiFromEvents uses the latest event per d-tag", () => {
+  const out = ownCustomEmojiFromEvents([
+    ev([
+      ["d", "buzz:custom-emoji"],
+      ["emoji", "old", "https://relay/old.png"],
+    ]),
+    ev(
+      [
+        ["d", "buzz:custom-emoji"],
+        ["emoji", "new", "https://relay/new.png"],
+      ],
+      2,
+    ),
+  ]);
+  assert.deepEqual(out, [{ shortcode: "new", url: "https://relay/new.png" }]);
+});
+
 import { reactionEmojiUrl } from "./customEmoji.ts";
 
 const SET = [{ shortcode: "shipit", url: "https://relay/s.png" }];
@@ -125,8 +161,22 @@ import { unionCustomEmoji } from "./customEmoji.ts";
 
 test("unionCustomEmoji merges members and sorts by shortcode", () => {
   const out = unionCustomEmoji([
-    ev([["emoji", "shipit", "https://relay/s.png"]]),
-    ev([["emoji", "ahoy", "https://relay/a.png"]]),
+    ev(
+      [
+        ["d", "buzz:custom-emoji"],
+        ["emoji", "shipit", "https://relay/s.png"],
+      ],
+      1,
+      "alice",
+    ),
+    ev(
+      [
+        ["d", "buzz:custom-emoji"],
+        ["emoji", "ahoy", "https://relay/a.png"],
+      ],
+      1,
+      "bob",
+    ),
   ]);
   assert.deepEqual(out, [
     { shortcode: "ahoy", url: "https://relay/a.png" },
@@ -139,11 +189,64 @@ test("unionCustomEmoji collapses a shortcode to ONE deterministic winner", () =>
   // expose exactly one (lexicographically-smallest URL), since downstream
   // identity is shortcode-only and cannot disambiguate two URLs.
   const out = unionCustomEmoji([
-    ev([["emoji", "party_parrot", "https://relay/zebra.gif"]]),
-    ev([["emoji", "party_parrot", "https://relay/alpha.gif"]]),
+    ev(
+      [
+        ["d", "buzz:custom-emoji"],
+        ["emoji", "party_parrot", "https://relay/zebra.gif"],
+      ],
+      1,
+      "alice",
+    ),
+    ev(
+      [
+        ["d", "buzz:custom-emoji"],
+        ["emoji", "party_parrot", "https://relay/alpha.gif"],
+      ],
+      1,
+      "bob",
+    ),
   ]);
   assert.deepEqual(out, [
     { shortcode: "party_parrot", url: "https://relay/alpha.gif" },
+  ]);
+});
+
+test("unionCustomEmoji prefers a member's current set over their legacy set", () => {
+  const out = unionCustomEmoji([
+    ev([
+      ["d", "sprout:custom-emoji"],
+      ["emoji", "lol", "https://relay/lol.png"],
+    ]),
+    ev([
+      ["d", "buzz:custom-emoji"],
+      ["emoji", "shipit", "https://relay/s.png"],
+    ]),
+  ]);
+  assert.deepEqual(out, [{ shortcode: "shipit", url: "https://relay/s.png" }]);
+});
+
+test("unionCustomEmoji keeps another member's legacy set", () => {
+  const out = unionCustomEmoji([
+    ev(
+      [
+        ["d", "buzz:custom-emoji"],
+        ["emoji", "shipit", "https://relay/s.png"],
+      ],
+      1,
+      "alice",
+    ),
+    ev(
+      [
+        ["d", "sprout:custom-emoji"],
+        ["emoji", "lol", "https://relay/lol.png"],
+      ],
+      1,
+      "bob",
+    ),
+  ]);
+  assert.deepEqual(out, [
+    { shortcode: "lol", url: "https://relay/lol.png" },
+    { shortcode: "shipit", url: "https://relay/s.png" },
   ]);
 });
 

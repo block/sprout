@@ -2,14 +2,19 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:buzz/features/custom_emoji/custom_emoji.dart';
 import 'package:buzz/shared/relay/nostr_models.dart';
 
-NostrEvent _event(String pubkey, List<List<String>> emojiTags) {
+NostrEvent _event(
+  String pubkey,
+  List<List<String>> emojiTags, {
+  String dTag = customEmojiSetDTag,
+  int createdAt = 0,
+}) {
   return NostrEvent(
-    id: 'id-$pubkey',
+    id: 'id-$pubkey-$createdAt',
     pubkey: pubkey,
-    createdAt: 0,
+    createdAt: createdAt,
     kind: kindEmojiSet,
     tags: [
-      ['d', customEmojiSetDTag],
+      ['d', dTag],
       ...emojiTags,
     ],
     content: '',
@@ -84,6 +89,35 @@ void main() {
         ['emoji', 'x', 'https://a/x.png'],
       ]);
       expect(unionCustomEmoji([a, b]), unionCustomEmoji([b, a]));
+    });
+
+    test('prefers a member\'s current set over their legacy set', () {
+      final palette = unionCustomEmoji([
+        _event('alice', [
+          ['emoji', 'lol', 'https://a/lol.png'],
+        ], dTag: legacyCustomEmojiSetDTag),
+        _event('alice', [
+          ['emoji', 'meow', 'https://a/meow.png'],
+        ]),
+      ]);
+      expect(palette, [
+        const CustomEmoji(shortcode: 'meow', url: 'https://a/meow.png'),
+      ]);
+    });
+
+    test('keeps another member\'s legacy set', () {
+      final palette = unionCustomEmoji([
+        _event('alice', [
+          ['emoji', 'meow', 'https://a/meow.png'],
+        ]),
+        _event('bob', [
+          ['emoji', 'lol', 'https://a/lol.png'],
+        ], dTag: legacyCustomEmojiSetDTag),
+      ]);
+      expect(palette, [
+        const CustomEmoji(shortcode: 'lol', url: 'https://a/lol.png'),
+        const CustomEmoji(shortcode: 'meow', url: 'https://a/meow.png'),
+      ]);
     });
 
     test('empty input → empty palette', () {

@@ -26,6 +26,7 @@ export const KIND_EMOJI_SET = 30030;
 
 /** d-tag for a member's own custom emoji set. */
 export const CUSTOM_EMOJI_SET_D_TAG = "buzz:custom-emoji";
+export const LEGACY_CUSTOM_EMOJI_SET_D_TAG = "sprout:custom-emoji";
 
 /**
  * Resolve the image URL for a reaction whose content is a custom-emoji
@@ -102,6 +103,71 @@ export function customEmojiFromEvent(event: RelayEvent | null): CustomEmoji[] {
   return customEmojiFromTags(event.tags);
 }
 
+function eventDTag(event: RelayEvent): string | undefined {
+  return event.tags.find((tag) => tag[0] === "d")?.[1];
+}
+
+function selectedCustomEmojiEvents(
+  events: ReadonlyArray<RelayEvent>,
+): RelayEvent[] {
+  const latestByAuthor = new Map<
+    string,
+    { current?: RelayEvent; legacy?: RelayEvent }
+  >();
+  for (const event of events) {
+    const dTag = eventDTag(event);
+    if (
+      dTag !== CUSTOM_EMOJI_SET_D_TAG &&
+      dTag !== LEGACY_CUSTOM_EMOJI_SET_D_TAG
+    ) {
+      continue;
+    }
+    const entry = latestByAuthor.get(event.pubkey) ?? {};
+    const key = dTag === CUSTOM_EMOJI_SET_D_TAG ? "current" : "legacy";
+    if (!entry[key] || event.created_at > entry[key].created_at) {
+      entry[key] = event;
+    }
+    latestByAuthor.set(event.pubkey, entry);
+  }
+  return [...latestByAuthor.values()].flatMap((entry) =>
+    entry.current ? [entry.current] : entry.legacy ? [entry.legacy] : [],
+  );
+}
+
+export function ownCustomEmojiFromEvents(
+  events: ReadonlyArray<RelayEvent>,
+): CustomEmoji[] {
+  const latestByDTag = new Map<string, RelayEvent>();
+  for (const event of events) {
+    const dTag = eventDTag(event);
+    if (
+      dTag !== CUSTOM_EMOJI_SET_D_TAG &&
+      dTag !== LEGACY_CUSTOM_EMOJI_SET_D_TAG
+    ) {
+      continue;
+    }
+    const existing = latestByDTag.get(dTag);
+    if (!existing || event.created_at > existing.created_at) {
+      latestByDTag.set(dTag, event);
+    }
+  }
+
+  const seen = new Set<string>();
+  const emoji: CustomEmoji[] = [];
+  for (const event of [
+    latestByDTag.get(CUSTOM_EMOJI_SET_D_TAG),
+    latestByDTag.get(LEGACY_CUSTOM_EMOJI_SET_D_TAG),
+  ]) {
+    if (!event) continue;
+    for (const entry of customEmojiFromTags(event.tags)) {
+      if (seen.has(entry.shortcode)) continue;
+      seen.add(entry.shortcode);
+      emoji.push(entry);
+    }
+  }
+  return emoji;
+}
+
 /**
  * Union every member's kind:30030 set into the workspace palette, collapsed to
  * one entry per shortcode. When members disagree on a shortcode's URL, the
@@ -114,7 +180,7 @@ export function unionCustomEmoji(
   events: ReadonlyArray<RelayEvent>,
 ): CustomEmoji[] {
   const urlByShortcode = new Map<string, string>();
-  for (const event of events) {
+  for (const event of selectedCustomEmojiEvents(events)) {
     for (const { shortcode, url } of customEmojiFromTags(event.tags)) {
       const existing = urlByShortcode.get(shortcode);
       if (existing === undefined || url < existing) {
@@ -131,7 +197,7 @@ export function unionCustomEmoji(
 export async function fetchWorkspaceEmojiEvents(): Promise<RelayEvent[]> {
   return relayClient.fetchEvents({
     kinds: [KIND_EMOJI_SET],
-    "#d": [CUSTOM_EMOJI_SET_D_TAG],
+    "#d": [CUSTOM_EMOJI_SET_D_TAG, LEGACY_CUSTOM_EMOJI_SET_D_TAG],
     // One 30030 per member; a workspace has far fewer than this. The relay
     // already keeps only the latest per (pubkey, d_tag), so this is the member
     // count, not history depth.
@@ -151,11 +217,11 @@ export async function fetchOwnEmoji(): Promise<CustomEmoji[]> {
   if (!me) return [];
   const events = await relayClient.fetchEvents({
     kinds: [KIND_EMOJI_SET],
-    "#d": [CUSTOM_EMOJI_SET_D_TAG],
+    "#d": [CUSTOM_EMOJI_SET_D_TAG, LEGACY_CUSTOM_EMOJI_SET_D_TAG],
     authors: [me],
-    limit: 1,
+    limit: 2,
   });
-  return customEmojiFromEvent(events[events.length - 1] ?? null);
+  return ownCustomEmojiFromEvents(events);
 }
 
 /** Publish the caller's (replaced) own 30030 set, signed as the caller. */

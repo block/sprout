@@ -2,6 +2,7 @@ import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  LEGACY_CUSTOM_EMOJI_SET_D_TAG,
   KIND_EMOJI_SET,
   CUSTOM_EMOJI_SET_D_TAG,
   fetchOwnEmoji,
@@ -65,7 +66,11 @@ export function useWorkspaceEmojiLiveUpdates(): void {
 
     void relayClient
       .subscribeLive(
-        { kinds: [KIND_EMOJI_SET], "#d": [CUSTOM_EMOJI_SET_D_TAG], limit: 0 },
+        {
+          kinds: [KIND_EMOJI_SET],
+          "#d": [CUSTOM_EMOJI_SET_D_TAG, LEGACY_CUSTOM_EMOJI_SET_D_TAG],
+          limit: 0,
+        },
         () => {
           void queryClient.invalidateQueries({ queryKey: customEmojiQueryKey });
         },

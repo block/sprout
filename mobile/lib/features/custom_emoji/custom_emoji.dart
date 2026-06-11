@@ -30,6 +30,7 @@ const int kindEmojiSet = 30030;
 
 /// d-tag for a member's own custom emoji set.
 const String customEmojiSetDTag = 'buzz:custom-emoji';
+const String legacyCustomEmojiSetDTag = 'sprout:custom-emoji';
 
 final RegExp _shortcodeRe = RegExp(r'^[a-z0-9_-]+$');
 
@@ -67,13 +68,46 @@ List<CustomEmoji> customEmojiFromTags(List<List<String>> tags) {
   return emoji;
 }
 
+String? _eventDTag(NostrEvent event) {
+  for (final tag in event.tags) {
+    if (tag.length >= 2 && tag[0] == 'd') return tag[1];
+  }
+  return null;
+}
+
+Iterable<NostrEvent> _selectedCustomEmojiEvents(Iterable<NostrEvent> events) {
+  final latestByAuthor =
+      <String, ({NostrEvent? current, NostrEvent? legacy})>{};
+  for (final event in events) {
+    final dTag = _eventDTag(event);
+    if (dTag != customEmojiSetDTag && dTag != legacyCustomEmojiSetDTag) {
+      continue;
+    }
+    final existing = latestByAuthor[event.pubkey];
+    final current = existing?.current;
+    final legacy = existing?.legacy;
+    latestByAuthor[event.pubkey] = switch (dTag) {
+      customEmojiSetDTag
+          when current == null || event.createdAt > current.createdAt =>
+        (current: event, legacy: legacy),
+      legacyCustomEmojiSetDTag
+          when legacy == null || event.createdAt > legacy.createdAt =>
+        (current: current, legacy: event),
+      _ => (current: current, legacy: legacy),
+    };
+  }
+  return latestByAuthor.values
+      .map((entry) => entry.current ?? entry.legacy)
+      .nonNulls;
+}
+
 /// Union every member's kind:30030 set into the workspace palette, collapsed to
 /// one entry per shortcode. When members disagree on a shortcode's URL, the
 /// lexicographically-smallest URL wins — deterministic and stable across
 /// reloads. Output is sorted by shortcode.
 List<CustomEmoji> unionCustomEmoji(Iterable<NostrEvent> events) {
   final urlByShortcode = <String, String>{};
-  for (final event in events) {
+  for (final event in _selectedCustomEmojiEvents(events)) {
     for (final e in customEmojiFromTags(event.tags)) {
       final existing = urlByShortcode[e.shortcode];
       if (existing == null || e.url.compareTo(existing) < 0) {

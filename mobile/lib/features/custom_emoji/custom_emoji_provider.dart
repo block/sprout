@@ -27,7 +27,7 @@ class CustomEmojiPaletteNotifier extends AsyncNotifier<List<CustomEmoji>> {
         const NostrFilter(
           kinds: [kindEmojiSet],
           tags: {
-            '#d': [customEmojiSetDTag],
+            '#d': [customEmojiSetDTag, legacyCustomEmojiSetDTag],
           },
           // One 30030 per member; the relay keeps only the latest per
           // (pubkey, d_tag), so this bounds member count, not history.
