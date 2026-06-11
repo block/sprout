@@ -163,15 +163,18 @@ export function MembersSidebar({
   useFeedbackToasts(actionNoticeMessage, actionErrorMessage);
 
   const { openProfilePanel } = useProfilePanel();
+  // UserProfilePanel only renders inside ChannelPane, which forums replace
+  // with ForumView — opening there would close the sheet and show nothing.
+  const isForumChannel = channel?.channelType === "forum";
   const handleOpenProfile = React.useMemo(
     () =>
-      openProfilePanel
+      openProfilePanel && !isForumChannel
         ? (pubkey: string) => {
             onOpenChange(false);
             openProfilePanel(pubkey);
           }
         : undefined,
-    [onOpenChange, openProfilePanel],
+    [isForumChannel, onOpenChange, openProfilePanel],
   );
 
   const [editRespondToAgent, setEditRespondToAgent] =
