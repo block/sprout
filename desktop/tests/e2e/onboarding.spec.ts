@@ -683,38 +683,18 @@ test("failed first profile saves can be skipped for the current session", async 
   await expectHomeView(page);
 });
 
-test("failed saved profile saves can continue without retrying the display name", async ({
+test("existing relay profile with display name auto-completes onboarding", async ({
   page,
 }) => {
+  // A user whose relay profile already has a display name should skip
+  // onboarding entirely — they've already set up their identity previously
+  // (possibly on another machine or app data directory).
   await seedActiveIdentity(page, TEST_IDENTITIES.alice);
-  await installMockBridge(
-    page,
-    {
-      profileUpdateError: "Temporary profile sync failure.",
-    },
-    { skipOnboardingSeed: true },
-  );
+  await installMockBridge(page, undefined, { skipOnboardingSeed: true });
   await page.goto("/");
 
-  await expect(page.getByTestId("onboarding-display-name")).toHaveValue(
-    "alice",
-  );
-  await page.getByTestId("onboarding-display-name").fill("Alice Draft");
-  await page.getByTestId("onboarding-next").click();
-
-  await expect(page.getByText("Temporary profile sync failure.")).toBeVisible();
-  await page.getByTestId("onboarding-next-without-saving").click();
-
-  await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
-  const avatarUrl = "https://example.com/alice-onboarding-avatar.png";
-  await page.getByTestId("onboarding-avatar-url").fill(avatarUrl);
-  await page.getByTestId("onboarding-next").click();
-
-  await expect(page.getByTestId("onboarding-page-theme")).toBeVisible();
-  await expect(await getMockProfile(page)).toMatchObject({
-    avatar_url: avatarUrl,
-    display_name: "alice",
-  });
+  await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
+  await expectHomeView(page);
 });
 
 test("membership denial can import a different invited key", async ({
