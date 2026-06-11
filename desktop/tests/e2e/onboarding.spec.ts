@@ -238,9 +238,8 @@ test("welcome can continue using an existing Nostr key", async ({ page }) => {
   await expect(page.getByTestId("nostr-import-npub-preview")).toBeVisible();
   await page.getByTestId("nostr-import-submit").click();
 
-  await expect(page.getByTestId("onboarding-display-name")).toHaveValue(
-    "alice",
-  );
+  // Alice already has a relay profile with a display name, so onboarding
+  // auto-completes after the identity swap.
   await expect
     .poll(() =>
       page.evaluate(() => {
@@ -252,17 +251,8 @@ test("welcome can continue using an existing Nostr key", async ({ page }) => {
       }),
     )
     .toBe(TEST_IDENTITIES.alice.pubkey);
-  await expect
-    .poll(() =>
-      page.evaluate((storageKey) => {
-        const rawIdentity = window.localStorage.getItem(storageKey);
-        const identity = rawIdentity
-          ? (JSON.parse(rawIdentity) as { pubkey?: string })
-          : null;
-        return identity?.pubkey ?? null;
-      }, E2E_IDENTITY_OVERRIDE_STORAGE_KEY),
-    )
-    .toBe(TEST_IDENTITIES.alice.pubkey);
+  await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
+  await expectHomeView(page);
 });
 
 test("welcome presents custom workspace setup as joining a workspace", async ({
@@ -287,6 +277,7 @@ test("welcome presents custom workspace setup as joining a workspace", async ({
 test("identity fallback text does not count as a real onboarding name", async ({
   page,
 }) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await installMockBridge(page, undefined, { skipOnboardingSeed: true });
   await page.goto("/");
 
@@ -562,20 +553,17 @@ test("first-run onboarding keeps the shell hidden through setup and only marks H
   await expectHomeSeenCount(page, 2);
 });
 
-test("existing relay profile prefills the name step without localStorage completion", async ({
+test("existing relay profile with display name auto-skips onboarding without localStorage", async ({
   page,
 }) => {
+  // A user whose relay profile already has a display name should skip
+  // onboarding even without the localStorage completion flag.
   await seedActiveIdentity(page, TEST_IDENTITIES.alice);
   await installMockBridge(page, undefined, { skipOnboardingSeed: true });
   await page.goto("/");
 
-  await expect(page.getByTestId("onboarding-gate")).toBeVisible();
-  await expectShellHidden(page);
-  await expect(page.getByTestId("onboarding-display-name")).toHaveValue(
-    "alice",
-  );
-  await expect(page.getByTestId("onboarding-next")).toBeEnabled();
-  await expect(page.getByTestId("onboarding-back")).toHaveCount(0);
+  await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
+  await expectHomeView(page);
 });
 
 test("onboarding can import an existing key when the workspace is already set up", async ({
