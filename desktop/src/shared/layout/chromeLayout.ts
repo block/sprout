@@ -47,6 +47,8 @@ export const topChromeBackdrop = {
 export const channelChrome = {
   /** Padding-top that clears the measured channel header chrome. */
   contentPadding: "pt-(--sprout-channel-content-top-padding,5.75rem)",
+  /** Absolute/fixed top offset below the measured channel header chrome. */
+  top: "top-(--sprout-channel-content-top-padding,5.75rem)",
   /** Height matching the measured channel header chrome. */
   headerHeight: "h-(--sprout-channel-content-top-padding,5.75rem)",
   /** Negative margin for overlaid channel chrome that should not affect flow. */

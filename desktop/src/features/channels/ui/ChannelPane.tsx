@@ -27,6 +27,8 @@ import {
 } from "@/features/profile/lib/identity";
 import type { Channel } from "@/shared/api/types";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
+import { channelChrome } from "@/shared/layout/chromeLayout";
+import { cn } from "@/shared/lib/cn";
 
 type ChannelPaneProps = {
   activeChannel: Channel | null;
@@ -345,15 +347,17 @@ export const ChannelPane = React.memo(function ChannelPane({
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           {header}
           {channelFind.isOpen ? (
-            <ChannelFindBar
-              matchCount={channelFind.matchCount}
-              matchIndex={channelFind.activeIndex}
-              onClose={channelFind.close}
-              onNext={channelFind.goToNext}
-              onPrevious={channelFind.goToPrevious}
-              onQueryChange={channelFind.setQuery}
-              query={channelFind.query}
-            />
+            <div className={cn("absolute inset-x-0 z-40", channelChrome.top)}>
+              <ChannelFindBar
+                matchCount={channelFind.matchCount}
+                matchIndex={channelFind.activeIndex}
+                onClose={channelFind.close}
+                onNext={channelFind.goToNext}
+                onPrevious={channelFind.goToPrevious}
+                onQueryChange={channelFind.setQuery}
+                query={channelFind.query}
+              />
+            </div>
           ) : null}
           <MessageTimeline
             agentPubkeys={agentPubkeys}

@@ -207,7 +207,12 @@ function ChannelLoadingBody() {
 
 function ForumLoadingBody() {
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+    <div
+      className={cn(
+        "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+        channelChrome.contentPadding,
+      )}
+    >
       <div className="border-b border-border/60 p-4">
         <Skeleton className="h-10 w-full rounded-xl" />
       </div>
