@@ -178,7 +178,10 @@ test("completed users skip the loading gate while profile is still settling", as
 test("first-run default workspace handoff gives immediate stepper feedback", async ({
   page,
 }) => {
-  await seedActiveIdentity(page, FIRST_RUN_KENNY);
+  // Use a blank-username identity so the profile has no display name and
+  // the auto-skip logic does not fire — we need to stay in onboarding to
+  // verify the stepper UX.
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await installMockBridge(
     page,
     {
@@ -212,7 +215,7 @@ test("first-run default workspace handoff gives immediate stepper feedback", asy
   );
 
   const nameInput = page.getByTestId("onboarding-display-name");
-  await expect(nameInput).toHaveValue("Kenny QA");
+  await expect(nameInput).toHaveValue("");
   await expect(page.getByRole("progressbar")).toHaveAttribute(
     "aria-valuenow",
     "2",
