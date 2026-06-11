@@ -159,14 +159,8 @@ async function expectWelcomePersonaMention(page: Page) {
   const banner = page.getByTestId("welcome-composer-kit-banner");
   const personaMention = page.getByTestId("welcome-composer-persona-mention");
   await expect(personaMention).toBeVisible();
-  await expect(personaMention).toHaveAttribute(
-    "data-persona-options",
-    "Kit,Scout,Solo",
-  );
-  await expect(personaMention).toHaveAttribute(
-    "data-active-persona",
-    /^(Kit|Scout|Solo)$/,
-  );
+  await expect(personaMention).toHaveAttribute("data-persona-options", "Kit");
+  await expect(personaMention).toHaveAttribute("data-active-persona", "Kit");
   await expect(personaMention).toHaveAttribute(
     "data-animation-target",
     "per-character",
