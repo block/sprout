@@ -136,10 +136,11 @@ jobs:
 
       - name: Export digest
         if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           mkdir -p /tmp/digests
-          digest='${{ steps.build.outputs.digest }}'
-          touch "/tmp/digests/${digest#sha256:}"
+          touch "/tmp/digests/${DIGEST#sha256:}"
 
       - name: Upload digest
         if: github.event_name != 'pull_request'
@@ -196,13 +197,16 @@ jobs:
       - name: Create and push manifest list
         id: manifest
         working-directory: /tmp/digests
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          META_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           set -euo pipefail
           # Build -t flags from the metadata-action output.
           tags=()
           while IFS= read -r tag; do
             [ -n "$tag" ] && tags+=("-t" "$tag")
-          done <<< '${{ steps.meta.outputs.tags }}'
+          done <<< "$META_TAGS"
 
           # Build the digest refs from the per-arch artifacts.
           digests=()
@@ -213,12 +217,10 @@ jobs:
           docker buildx imagetools create "${tags[@]}" "${digests[@]}"
 
           # Capture the merged manifest digest for the attestation step.
-          first_tag=$(echo '${{ steps.meta.outputs.tags }}' | head -n1)
+          first_tag=$(echo "$META_TAGS" | head -n1)
           merged_digest=$(docker buildx imagetools inspect "$first_tag" \
             --format '{{json .Manifest}}' | jq -r '.digest')
           echo "digest=${merged_digest}" >> "$GITHUB_OUTPUT"
-        env:
-          IMAGE_NAME: ${{ env.IMAGE_NAME }}
 
       - name: Attest provenance for the merged image
         # Sigstore-signed in-toto attestation, verifiable with:
@@ -230,21 +232,23 @@ jobs:
           push-to-registry: true
 
       - name: Summary
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          MERGED_DIGEST: ${{ steps.manifest.outputs.digest }}
+          META_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           {
             echo "### Published \`${IMAGE_NAME}\`"
             echo
-            echo "**Digest:** \`${{ steps.manifest.outputs.digest }}\`"
+            echo "**Digest:** \`${MERGED_DIGEST}\`"
             echo
             echo "**Tags:**"
             echo '```'
-            echo '${{ steps.meta.outputs.tags }}'
+            echo "${META_TAGS}"
             echo '```'
             echo
             echo "Verify provenance:"
             echo '```'
-            echo "gh attestation verify oci://${IMAGE_NAME}@${{ steps.manifest.outputs.digest }} --owner block"
+            echo "gh attestation verify oci://${IMAGE_NAME}@${MERGED_DIGEST} --owner block"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-        env:
-          IMAGE_NAME: ${{ env.IMAGE_NAME }}
