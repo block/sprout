@@ -10,13 +10,14 @@ import {
   type DesktopNotificationPermissionState,
 } from "./lib/desktop";
 import {
+  DEFAULT_SOUND_OVERRIDES,
   RECOMMENDED_SINGLE_SOUND,
-  RECOMMENDED_SOUND_BY_SLOT,
   SOUND_MODES,
   SOUND_NAMES,
   SOUND_SLOTS,
   type SoundMode,
   type SoundName,
+  type SoundOverrides,
   type SoundSlot,
 } from "./lib/sound";
 import {
@@ -40,7 +41,7 @@ export type NotificationSettings = {
   jobProgressSoundEnabled: boolean;
   soundMode: SoundMode;
   singleSound: SoundName;
-  sounds: Record<SoundSlot, SoundName>;
+  sounds: SoundOverrides;
 };
 
 const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
@@ -53,18 +54,25 @@ const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   jobProgressSoundEnabled: false,
   soundMode: "single",
   singleSound: RECOMMENDED_SINGLE_SOUND,
-  sounds: { ...RECOMMENDED_SOUND_BY_SLOT },
+  sounds: { ...DEFAULT_SOUND_OVERRIDES },
 };
 
 const SOUND_NAME_SET = new Set<SoundName>(SOUND_NAMES);
 
-function sanitizeSoundsMap(value: unknown): Record<SoundSlot, SoundName> {
-  const result = { ...RECOMMENDED_SOUND_BY_SLOT };
+function sanitizeSoundsMap(value: unknown): SoundOverrides {
+  const result = { ...DEFAULT_SOUND_OVERRIDES };
   if (!value || typeof value !== "object") return result;
   const candidate = value as Partial<Record<SoundSlot, unknown>>;
   for (const slot of SOUND_SLOTS) {
     const picked = candidate[slot];
-    if (typeof picked === "string" && SOUND_NAME_SET.has(picked as SoundName)) {
+    if (picked === null) {
+      // Explicitly "Default" — distinct from a missing slot, which keeps
+      // the recommended override.
+      result[slot] = null;
+    } else if (
+      typeof picked === "string" &&
+      SOUND_NAME_SET.has(picked as SoundName)
+    ) {
       result[slot] = picked as SoundName;
     }
   }
@@ -321,7 +329,7 @@ export function useNotificationSettings(pubkey?: string) {
   }, []);
 
   const setSoundForSlot = React.useCallback(
-    (slot: SoundSlot, name: SoundName) => {
+    (slot: SoundSlot, name: SoundName | null) => {
       setSettings((current) => ({
         ...current,
         sounds: { ...current.sounds, [slot]: name },

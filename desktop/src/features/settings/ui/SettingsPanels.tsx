@@ -88,7 +88,7 @@ export type SettingsPanelProps = {
   onSetNotifyWhileViewing: (enabled: boolean) => void;
   onSetSingleSound: (name: SoundName) => void;
   onSetSoundEnabled: (enabled: boolean) => void;
-  onSetSoundForSlot: (slot: SoundSlot, name: SoundName) => void;
+  onSetSoundForSlot: (slot: SoundSlot, name: SoundName | null) => void;
   onSetSoundMode: (mode: SoundMode) => void;
 };
 

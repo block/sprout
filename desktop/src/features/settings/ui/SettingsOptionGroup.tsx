@@ -8,10 +8,7 @@ export function SettingsOptionGroup({
 }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn(
-        "overflow-hidden rounded-2xl bg-muted/20",
-        className,
-      )}
+      className={cn("overflow-hidden rounded-2xl bg-muted/20", className)}
       {...props}
     />
   );

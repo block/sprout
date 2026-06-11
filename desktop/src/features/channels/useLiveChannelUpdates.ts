@@ -36,6 +36,16 @@ export type UseLiveChannelUpdatesOptions = {
    */
   onChannelMessage?: (channelId: string, event: RelayEvent) => void;
   onThreadReplyNotification?: (channelId: string, event: RelayEvent) => void;
+  /**
+   * Fired for replies in threads the user authored, participated in, or
+   * follows (non-DM channels only — the DM path owns those). Follows the DM
+   * active-channel rule: suppressed for the channel being viewed unless
+   * notifyForActiveChannel opts in.
+   */
+  onThreadReplyDesktopNotification?: (
+    channelId: string,
+    event: RelayEvent,
+  ) => void;
   onSelfChannelMessage?: (event: RelayEvent) => void;
   participatedRootIds?: ReadonlySet<string>;
   followedRootIds?: ReadonlySet<string>;
@@ -200,12 +210,18 @@ export function useLiveChannelUpdates(
       })
     ) {
       options.onChannelMessage?.(channelId, event);
-      if (channelId !== activeChannelId) {
-        const ref = getThreadReference(event.tags);
-        const isThreadReply =
-          ref.parentId !== null && !isBroadcastReply(event.tags);
-        if (isThreadReply) {
+      const ref = getThreadReference(event.tags);
+      const isThreadReply =
+        ref.parentId !== null && !isBroadcastReply(event.tags);
+      if (isThreadReply) {
+        if (channelId !== activeChannelId) {
           options.onThreadReplyNotification?.(channelId, event);
+        }
+        if (
+          !dmChannelMap.has(channelId) &&
+          (channelId !== activeChannelId || options.notifyForActiveChannel)
+        ) {
+          options.onThreadReplyDesktopNotification?.(channelId, event);
         }
       }
     }

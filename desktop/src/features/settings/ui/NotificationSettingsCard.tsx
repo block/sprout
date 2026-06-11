@@ -5,12 +5,14 @@ import type {
 import {
   RECOMMENDED_SINGLE_SOUND,
   RECOMMENDED_SOUND_BY_SLOT,
+  SLOT_DESCRIPTIONS,
   SLOT_LABELS,
   SOUND_SLOTS,
   type SoundMode,
   type SoundName,
   type SoundSlot,
 } from "@/features/notifications/lib/sound";
+import { cn } from "@/shared/lib/cn";
 import { Switch } from "@/shared/ui/switch";
 import { SettingsOptionGroup, SettingsOptionRow } from "./SettingsOptionGroup";
 import { SoundPicker } from "./SoundPicker";
@@ -43,7 +45,7 @@ export function NotificationSettingsCard({
   onSetNotifyWhileViewing: (enabled: boolean) => void;
   onSetSingleSound: (name: SoundName) => void;
   onSetSoundEnabled: (enabled: boolean) => void;
-  onSetSoundForSlot: (slot: SoundSlot, name: SoundName) => void;
+  onSetSoundForSlot: (slot: SoundSlot, name: SoundName | null) => void;
   onSetSoundMode: (mode: SoundMode) => void;
 }) {
   const permissionBlocked =
@@ -194,19 +196,30 @@ export function NotificationSettingsCard({
             />
           </SettingsOptionRow>
 
-          {soundControlsVisible && !customSounds ? (
+          {soundControlsVisible ? (
             <SettingsOptionRow>
               <div className="min-w-0">
                 <span className="text-sm font-medium">Sound</span>
                 <p className="text-sm font-normal text-muted-foreground">
-                  Played for every notification.
+                  {customSounds
+                    ? "The default for events without their own sound."
+                    : "Played for every notification."}
                 </p>
               </div>
-              <SoundPicker
-                onChange={onSetSingleSound}
-                recommended={RECOMMENDED_SINGLE_SOUND}
-                value={notificationSettings.singleSound}
-              />
+              <span
+                className={cn(
+                  "transition-opacity duration-200",
+                  customSounds && "opacity-35 hover:opacity-100",
+                )}
+              >
+                <SoundPicker
+                  onChange={(next) =>
+                    onSetSingleSound(next ?? RECOMMENDED_SINGLE_SOUND)
+                  }
+                  recommended={RECOMMENDED_SINGLE_SOUND}
+                  value={notificationSettings.singleSound}
+                />
+              </span>
             </SettingsOptionRow>
           ) : null}
 
@@ -234,45 +247,64 @@ export function NotificationSettingsCard({
             </SettingsOptionRow>
           ) : null}
 
-          {soundControlsVisible && customSounds
-            ? SOUND_SLOTS.map((slot) => {
-                const isJobProgress = slot === "job_progress";
-                const slotDisabled =
-                  isJobProgress &&
-                  !notificationSettings.jobProgressSoundEnabled;
-                return (
-                  <SettingsOptionRow key={slot}>
-                    <div className="min-w-0">
-                      <span className="text-sm font-medium">
-                        {SLOT_LABELS[slot]}
-                      </span>
-                      {isJobProgress ? (
-                        <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                          <Switch
-                            checked={
-                              notificationSettings.jobProgressSoundEnabled
-                            }
-                            id="job-progress-sound-switch"
-                            onCheckedChange={(checked) => {
-                              onSetJobProgressSoundEnabled(checked);
-                            }}
-                          />
-                          <label htmlFor="job-progress-sound-switch">
-                            Play sound on every progress update
-                          </label>
+          {soundControlsVisible ? (
+            <div
+              className={
+                customSounds
+                  ? "grid grid-rows-[1fr] transition-[grid-template-rows] duration-200"
+                  : "grid grid-rows-[0fr] transition-[grid-template-rows] duration-200"
+              }
+            >
+              <div className="min-h-0 overflow-hidden">
+                <div className="mx-4 mb-4 rounded-xl bg-muted/30">
+                  {SOUND_SLOTS.map((slot) => {
+                    const isJobProgress = slot === "job_progress";
+                    const slotDisabled =
+                      isJobProgress &&
+                      !notificationSettings.jobProgressSoundEnabled;
+                    return (
+                      <div
+                        className="flex items-center justify-between gap-4 px-4 py-2.5"
+                        key={slot}
+                      >
+                        <div className="min-w-0">
+                          <span className="text-sm font-medium">
+                            {SLOT_LABELS[slot]}
+                          </span>
+                          <p className="text-xs font-normal text-muted-foreground">
+                            {SLOT_DESCRIPTIONS[slot]}
+                          </p>
+                          {isJobProgress ? (
+                            <div className="mt-1.5 flex items-center gap-2 text-xs text-muted-foreground">
+                              <Switch
+                                checked={
+                                  notificationSettings.jobProgressSoundEnabled
+                                }
+                                id="job-progress-sound-switch"
+                                onCheckedChange={(checked) => {
+                                  onSetJobProgressSoundEnabled(checked);
+                                }}
+                              />
+                              <label htmlFor="job-progress-sound-switch">
+                                Play sound on every progress update
+                              </label>
+                            </div>
+                          ) : null}
                         </div>
-                      ) : null}
-                    </div>
-                    <SoundPicker
-                      disabled={slotDisabled}
-                      onChange={(next) => onSetSoundForSlot(slot, next)}
-                      recommended={RECOMMENDED_SOUND_BY_SLOT[slot]}
-                      value={notificationSettings.sounds[slot]}
-                    />
-                  </SettingsOptionRow>
-                );
-              })
-            : null}
+                        <SoundPicker
+                          disabled={slotDisabled}
+                          inheritFrom={notificationSettings.singleSound}
+                          onChange={(next) => onSetSoundForSlot(slot, next)}
+                          recommended={RECOMMENDED_SOUND_BY_SLOT[slot]}
+                          value={notificationSettings.sounds[slot]}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          ) : null}
         </SettingsOptionGroup>
 
         <SettingsOptionGroup>

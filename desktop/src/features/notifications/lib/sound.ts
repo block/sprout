@@ -26,6 +26,7 @@ export type SoundName = (typeof SOUND_NAMES)[number];
 export const SOUND_SLOTS = [
   "dm",
   "mention",
+  "thread_reply",
   "needs_action",
   "job_accepted",
   "job_progress",
@@ -37,6 +38,7 @@ export type SoundSlot = (typeof SOUND_SLOTS)[number];
 export const SLOT_LABELS: Record<SoundSlot, string> = {
   dm: "Direct messages",
   mention: "@Mentions",
+  thread_reply: "Thread replies",
   needs_action: "Needs action",
   job_accepted: "Agent: job accepted",
   job_progress: "Agent: progress update",
@@ -44,13 +46,25 @@ export const SLOT_LABELS: Record<SoundSlot, string> = {
   job_error: "Agent: job error",
 };
 
+export const SLOT_DESCRIPTIONS: Record<SoundSlot, string> = {
+  dm: "When someone messages you directly.",
+  mention: "When someone tags you in a channel.",
+  thread_reply: "When someone replies in a thread you follow or posted in.",
+  needs_action: "When an approval or reminder is waiting on you.",
+  job_accepted: "When an agent picks up a job.",
+  job_progress: "While an agent works through a job.",
+  job_result: "When an agent finishes a job.",
+  job_error: "When an agent job fails.",
+};
+
 export const RECOMMENDED_SOUND_BY_SLOT: Record<SoundSlot, SoundName> = {
   dm: "unison",
   mention: "ping",
+  thread_reply: "doop",
   needs_action: "doodone",
   job_accepted: "boo",
   job_progress: "dng",
-  job_result: "doop",
+  job_result: "unison",
   job_error: "oh-no",
 };
 
@@ -59,17 +73,32 @@ export type SoundMode = (typeof SOUND_MODES)[number];
 
 export const RECOMMENDED_SINGLE_SOUND: SoundName = "unison";
 
+/** Per-slot overrides; null inherits the default sound. */
+export type SoundOverrides = Record<SoundSlot, SoundName | null>;
+
+export const DEFAULT_SOUND_OVERRIDES: SoundOverrides = {
+  dm: null,
+  mention: null,
+  thread_reply: null,
+  needs_action: "doodone",
+  job_accepted: "boo",
+  job_progress: "dng",
+  job_result: "unison",
+  job_error: "oh-no",
+};
+
 export type SoundPreferences = {
   soundMode: SoundMode;
   singleSound: SoundName;
-  sounds: Record<SoundSlot, SoundName>;
+  sounds: SoundOverrides;
 };
 
 export function resolveSlotSound(
   prefs: SoundPreferences,
   slot: SoundSlot,
 ): SoundName {
-  return prefs.soundMode === "custom" ? prefs.sounds[slot] : prefs.singleSound;
+  const override = prefs.soundMode === "custom" ? prefs.sounds[slot] : null;
+  return override ?? prefs.singleSound;
 }
 
 export function slotForFeedKind(
