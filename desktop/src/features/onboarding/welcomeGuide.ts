@@ -12,7 +12,7 @@ import { normalizePubkey } from "@/shared/lib/pubkey";
 export const WELCOME_GUIDE_AGENT_NAME = "Kit";
 export const WELCOME_GUIDE_PERSONA_ID = "builtin:kit";
 export const WELCOME_GUIDE_INTRO_MARKER = "sprout-welcome-intro.v1";
-const LEGACY_WELCOME_GUIDE_SYSTEM_PROMPT =
+export const LEGACY_WELCOME_GUIDE_SYSTEM_PROMPT =
   "You are Kit, Sprout's friendly welcome guide. Help new users understand the workspace, channels, messages, and agents. Keep introductions concise, practical, and warm.";
 export const WELCOME_GUIDE_INTRO_MESSAGE =
   "Hi, I'm Kit. Welcome to Sprout.\n\nI can help you get oriented, answer questions, and make the first few steps feel less mysterious.\n\nFeel free to ask me what else you can do in Sprout, or just talk through what you want to build.";
@@ -47,6 +47,10 @@ function pickAgentByStatus(agents: ManagedAgent[]) {
   );
 }
 
+export function pickWelcomeGuideAgent(agents: ManagedAgent[]) {
+  return pickAgentByStatus(agents.filter(isWelcomeGuideAgent));
+}
+
 export async function getWelcomeGuideAgentPubkeys() {
   return (await listManagedAgents())
     .filter(isWelcomeGuideAgent)
@@ -67,7 +71,7 @@ async function ensureWelcomeGuidePersonaActive() {
 
 async function ensureWelcomeGuideAgent() {
   const agents = await listManagedAgents();
-  const existing = pickAgentByStatus(agents.filter(isBuiltInWelcomeGuideAgent));
+  const existing = pickWelcomeGuideAgent(agents);
   if (existing) {
     return existing;
   }

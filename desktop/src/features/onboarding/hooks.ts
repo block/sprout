@@ -73,12 +73,16 @@ async function initializeWelcomeChannel(
         allowedMemberPubkeys,
       },
     );
+    let didInitializeWelcomeGuide = false;
     try {
       await ensureWelcomeGuideIntro(welcomeChannel.id);
+      didInitializeWelcomeGuide = true;
     } catch (error) {
       console.warn("Failed to initialize Welcome guide.", error);
     }
-    markWelcomeChannelEnsured(pubkey, workspaceScope);
+    if (didInitializeWelcomeGuide) {
+      markWelcomeChannelEnsured(pubkey, workspaceScope);
+    }
     if (focus) {
       rememberPendingWelcomeChannel(welcomeChannel.id);
     }
