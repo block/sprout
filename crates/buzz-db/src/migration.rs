@@ -11,6 +11,9 @@ use crate::Result;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
+#[cfg(test)]
+static SCHEMA_SQL: &str = include_str!("../../../schema/schema.sql");
+
 const BASELINE_MIGRATION_VERSIONS: &[i64] = &[1, 2];
 
 /// Run all pending Buzz database migrations.
@@ -112,4 +115,130 @@ async fn ensure_migrations_table(pool: &PgPool) -> Result<()> {
     .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::PgPool;
+
+    const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz";
+
+    #[test]
+    fn embedded_migrator_contains_initial_schema_and_d_tag_backfill() {
+        let migrations: Vec<_> = MIGRATOR.iter().collect();
+
+        assert_eq!(migrations.len(), 2);
+        assert_eq!(migrations[0].version, 1);
+        assert_eq!(&*migrations[0].description, "initial schema");
+        assert!(
+            migrations[0].sql.as_str().contains("CREATE TABLE channels"),
+            "initial schema migration should include Buzz core tables"
+        );
+        assert!(
+            migrations[0]
+                .sql
+                .as_str()
+                .contains("CREATE TABLE IF NOT EXISTS relay_members"),
+            "initial schema migration should include relay_members"
+        );
+
+        assert_eq!(migrations[1].version, 2);
+        assert_eq!(&*migrations[1].description, "backfill d tag");
+        assert!(
+            migrations[1].sql.as_str().contains("UPDATE events"),
+            "second migration should backfill existing event rows"
+        );
+    }
+
+    async fn connect_test_pool() -> PgPool {
+        let database_url = std::env::var("BUZZ_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| TEST_DB_URL.to_owned());
+
+        PgPool::connect(&database_url)
+            .await
+            .expect("connect to test DB")
+    }
+
+    async fn reset_public_schema(pool: &PgPool) {
+        sqlx::query("DROP SCHEMA IF EXISTS public CASCADE")
+            .execute(pool)
+            .await
+            .expect("drop public schema");
+        sqlx::query("CREATE SCHEMA IF NOT EXISTS public")
+            .execute(pool)
+            .await
+            .expect("create public schema");
+    }
+
+    async fn applied_versions(pool: &PgPool) -> Vec<i64> {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT version FROM _sqlx_migrations WHERE success ORDER BY version",
+        )
+        .fetch_all(pool)
+        .await
+        .expect("read applied migrations")
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn run_migrations_applies_embedded_versions_on_fresh_database() {
+        let pool = connect_test_pool().await;
+        reset_public_schema(&pool).await;
+
+        run_migrations(&pool).await.expect("run migrations");
+
+        assert_eq!(applied_versions(&pool).await, vec![1, 2]);
+        let events_exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'events')",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("check events table");
+        assert!(events_exists);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn run_migrations_baselines_existing_schema_and_preserves_allowlist_backfill_path() {
+        let pool = connect_test_pool().await;
+        reset_public_schema(&pool).await;
+        sqlx::raw_sql(SCHEMA_SQL)
+            .execute(&pool)
+            .await
+            .expect("load pre-SQLx schema snapshot");
+        sqlx::query(
+            "INSERT INTO pubkey_allowlist (pubkey, added_at) VALUES (decode($1, 'hex'), now())",
+        )
+        .bind("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        .execute(&pool)
+        .await
+        .expect("seed legacy allowlist row");
+
+        run_migrations(&pool).await.expect("baseline migrations");
+
+        assert_eq!(applied_versions(&pool).await, vec![1, 2]);
+        let allowlist_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM pubkey_allowlist")
+            .fetch_one(&pool)
+            .await
+            .expect("count allowlist rows");
+        assert_eq!(
+            allowlist_count, 1,
+            "baseline must not drop legacy allowlist rows before relay startup backfills them"
+        );
+
+        let inserted = crate::relay_members::backfill_from_allowlist(&pool)
+            .await
+            .expect("backfill legacy allowlist rows");
+        assert_eq!(inserted, 1);
+        let relay_member_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM relay_members WHERE pubkey = $1 AND role = 'member'",
+        )
+        .bind("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        .fetch_one(&pool)
+        .await
+        .expect("count backfilled relay member");
+        assert_eq!(relay_member_count, 1);
+    }
 }
