@@ -273,7 +273,7 @@ function AgentSummary({
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
               {activeWorkingChannels.map((name) => (
                 <Badge
-                  className="animate-pulse normal-case tracking-normal"
+                  className="motion-safe:animate-pulse normal-case tracking-normal"
                   key={`working-${name}`}
                   variant="default"
                 >

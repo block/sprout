@@ -47,7 +47,7 @@ export function AgentStatusBadge({
 
   return (
     <Badge
-      className={isWorking ? "animate-pulse" : undefined}
+      className={isWorking ? "motion-safe:animate-pulse" : undefined}
       variant={variant}
     >
       {label}

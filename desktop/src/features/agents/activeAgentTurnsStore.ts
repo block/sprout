@@ -32,10 +32,20 @@ export type ActiveTurnInfo = {
 const activeTurnsByAgent = new Map<string, Map<string, ActiveTurn>>();
 const listeners = new Set<() => void>();
 
+// Cached snapshots for useSyncExternalStore reference stability.
+// Only regenerated when the underlying turn map for an agent actually changes.
+const cachedChannelSets = new Map<string, Set<string>>();
+const cachedDetailedMaps = new Map<string, Map<string, ActiveTurnInfo>>();
+
 // Track which observer events we've already processed (by seq per agent)
 const lastProcessedSeq = new Map<string, number>();
 
 let pruneInterval: ReturnType<typeof setInterval> | null = null;
+
+function invalidateCache(agentKey: string) {
+  cachedChannelSets.delete(agentKey);
+  cachedDetailedMaps.delete(agentKey);
+}
 
 function notifyListeners() {
   for (const listener of listeners) {
@@ -78,6 +88,7 @@ function startTurn(
     startedAt: now,
     lastActivityAt: now,
   });
+  invalidateCache(key);
 }
 
 function recordActivity(agentPubkey: string, turnId: string | null) {
@@ -114,6 +125,7 @@ function endTurn(
   if (agentTurns.size === 0) {
     activeTurnsByAgent.delete(key);
   }
+  invalidateCache(key);
 }
 
 function pruneExpired() {
@@ -123,6 +135,7 @@ function pruneExpired() {
     for (const [turnId, turn] of agentTurns) {
       if (now - turn.lastActivityAt > REMOVE_AFTER_MS) {
         agentTurns.delete(turnId);
+        invalidateCache(agentKey);
         changed = true;
       }
     }
@@ -130,11 +143,18 @@ function pruneExpired() {
       activeTurnsByAgent.delete(agentKey);
     }
   }
-  if (changed) {
+  // Staleness flag is time-derived — invalidate detailed caches so consumers
+  // see updated stale values on next read.
+  const hadDetailedCaches = cachedDetailedMaps.size > 0;
+  cachedDetailedMaps.clear();
+  if (changed || hadDetailedCaches) {
     notifyListeners();
   }
 }
 
+// INVARIANT: events must be sorted by seq (ascending). syncAgentTurnsFromEvents
+// receives sorted arrays from observerRelayStore. Calling with unsorted events
+// will cause silent data loss.
 function processEvent(agentPubkey: string, event: ObserverEvent) {
   const key = normalizePubkey(agentPubkey);
   const lastSeq = lastProcessedSeq.get(key) ?? 0;
@@ -201,6 +221,9 @@ export function getActiveTurnsForAgent(
   const agentTurns = activeTurnsByAgent.get(key);
   if (!agentTurns || agentTurns.size === 0) return EMPTY_MAP;
 
+  const cached = cachedDetailedMaps.get(key);
+  if (cached) return cached;
+
   const now = Date.now();
   const result = new Map<string, ActiveTurnInfo>();
   for (const [turnId, turn] of agentTurns) {
@@ -209,6 +232,7 @@ export function getActiveTurnsForAgent(
       stale: now - turn.lastActivityAt > STALE_AFTER_MS,
     });
   }
+  cachedDetailedMaps.set(key, result);
   return result;
 }
 
@@ -220,7 +244,13 @@ export function getActiveChannelsForAgent(
   const key = normalizePubkey(agentPubkey);
   const agentTurns = activeTurnsByAgent.get(key);
   if (!agentTurns || agentTurns.size === 0) return EMPTY_SET;
-  return new Set([...agentTurns.values()].map((t) => t.channelId));
+
+  const cached = cachedChannelSets.get(key);
+  if (cached) return cached;
+
+  const result = new Set([...agentTurns.values()].map((t) => t.channelId));
+  cachedChannelSets.set(key, result);
+  return result;
 }
 
 const EMPTY_MAP: Map<string, ActiveTurnInfo> = new Map();
@@ -293,5 +323,7 @@ export function useActiveAgentTurnsBridge(
 export function resetActiveAgentTurnsStore() {
   activeTurnsByAgent.clear();
   lastProcessedSeq.clear();
+  cachedChannelSets.clear();
+  cachedDetailedMaps.clear();
   notifyListeners();
 }
