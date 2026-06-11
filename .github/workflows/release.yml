@@ -67,7 +67,7 @@ jobs:
       - name: Generate release config
         run: cd desktop && node scripts/build-release-config.mjs
         env:
-          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY }}
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
           BUZZ_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/buzz-desktop-latest/latest.json
 
       - name: Build sidecars
@@ -118,7 +118,7 @@ jobs:
       - name: Build unsigned Tauri app
         run: cd desktop && pnpm tauri build --verbose --no-sign --config src-tauri/tauri.release.conf.json
         env:
-          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY }}
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
           BUZZ_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/buzz-desktop-latest/latest.json
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -169,28 +169,28 @@ jobs:
           EXTRACT_DIR="${RUNNER_TEMP}/signed-app-extract"
           rm -rf "$EXTRACT_DIR" && mkdir -p "$EXTRACT_DIR"
           ditto -x -k "$SIGNED_APP_ZIP" "$EXTRACT_DIR"
-          rm -rf "${APP_DIR}/Sprout.app"
-          cp -R "${EXTRACT_DIR}/Sprout.app" "${APP_DIR}/Sprout.app"
+          rm -rf "${APP_DIR}/Buzz.app"
+          cp -R "${EXTRACT_DIR}/Buzz.app" "${APP_DIR}/Buzz.app"
 
           # Rebuild the updater archive from the signed .app and re-sign it with the Tauri updater key.
-          rm -f "${APP_DIR}/Sprout.app.tar.gz" "${APP_DIR}/Sprout.app.tar.gz.sig"
-          (cd "$APP_DIR" && tar -czf Sprout.app.tar.gz Sprout.app)
-          TARBALL_ABS="$(pwd)/${APP_DIR}/Sprout.app.tar.gz"
+          rm -f "${APP_DIR}/Buzz.app.tar.gz" "${APP_DIR}/Buzz.app.tar.gz.sig"
+          (cd "$APP_DIR" && tar -czf Buzz.app.tar.gz Buzz.app)
+          TARBALL_ABS="$(pwd)/${APP_DIR}/Buzz.app.tar.gz"
           (cd desktop && pnpm tauri signer sign "$TARBALL_ABS")
 
       - name: Verify code signature
         run: |
           codesign --verify --deep --strict --verbose=2 \
-            desktop/src-tauri/target/release/bundle/macos/Sprout.app
+            desktop/src-tauri/target/release/bundle/macos/Buzz.app
           spctl --assess --type execute --verbose=4 \
-            desktop/src-tauri/target/release/bundle/macos/Sprout.app
+            desktop/src-tauri/target/release/bundle/macos/Buzz.app
 
       - name: Locate build artifacts
         id: artifacts
         run: |
           BUNDLE_DIR="desktop/src-tauri/target/release/bundle"
 
-          # Find the DMG (Tauri names it Sprout_<version>_<arch>.dmg)
+          # Find the DMG (Tauri names it Buzz_<version>_<arch>.dmg)
           DMG=$(find "$BUNDLE_DIR/dmg" -name '*.dmg' -type f | head -1)
           if [[ -z "$DMG" ]]; then
             echo "::error::No DMG found in $BUNDLE_DIR/dmg"
@@ -234,11 +234,11 @@ jobs:
             NOTES=$(awk "/^## v${VERSION}$/,/^## v/" CHANGELOG.md | sed '$d')
           fi
           if [[ -z "$NOTES" ]]; then
-            NOTES="Sprout Desktop v${VERSION}"
+            NOTES="Buzz Desktop v${VERSION}"
           fi
           gh release create "v${VERSION}" \
             --target "$RELEASE_SHA" \
-            --title "Sprout Desktop v${VERSION}" \
+            --title "Buzz Desktop v${VERSION}" \
             --notes "$NOTES" \
             "$DMG_PATH"
 
@@ -246,7 +246,7 @@ jobs:
         run: |
           gh release create buzz-desktop-latest \
             --prerelease \
-            --title "Sprout Desktop Auto-Update" \
+            --title "Buzz Desktop Auto-Update" \
             --notes "Rolling release for the Tauri auto-updater. Do not download manually — use the versioned release instead." \
             2>/dev/null || true
           gh release upload buzz-desktop-latest \
@@ -292,7 +292,7 @@ jobs:
       - name: Generate release config
         run: cd desktop && node scripts/build-release-config.mjs
         env:
-          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY }}
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
           BUZZ_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/buzz-desktop-latest/latest.json
 
       - name: Build sidecars
@@ -303,7 +303,7 @@ jobs:
       - name: Build unsigned Tauri app
         run: cd desktop && pnpm tauri build --verbose --no-sign --target "$TARGET" --config src-tauri/tauri.release.conf.json
         env:
-          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY }}
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
           BUZZ_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/buzz-desktop-latest/latest.json
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -349,12 +349,12 @@ jobs:
           EXTRACT_DIR="${RUNNER_TEMP}/signed-app-extract-x64"
           rm -rf "$EXTRACT_DIR" && mkdir -p "$EXTRACT_DIR"
           ditto -x -k "$SIGNED_APP_ZIP" "$EXTRACT_DIR"
-          rm -rf "${APP_DIR}/Sprout.app"
-          cp -R "${EXTRACT_DIR}/Sprout.app" "${APP_DIR}/Sprout.app"
+          rm -rf "${APP_DIR}/Buzz.app"
+          cp -R "${EXTRACT_DIR}/Buzz.app" "${APP_DIR}/Buzz.app"
 
       - name: Verify code signature
         run: |
-          APP_DIR="desktop/src-tauri/target/${TARGET}/release/bundle/macos/Sprout.app"
+          APP_DIR="desktop/src-tauri/target/${TARGET}/release/bundle/macos/Buzz.app"
           codesign --verify --deep --strict --verbose=2 "$APP_DIR"
           spctl --assess --type execute --verbose=4 "$APP_DIR"
 

@@ -220,7 +220,7 @@ pub fn sync_team_personas(app: &AppHandle) -> Result<(), String> {
     for team in &teams {
         if team.source_dir.as_ref().is_some_and(|d| d.exists()) {
             if let Err(e) = sync_team_from_dir(app, &team.id) {
-                eprintln!("sprout-desktop: sync team {}: {e}", team.id);
+                eprintln!("buzz-desktop: sync team {}: {e}", team.id);
             }
         }
     }
@@ -321,8 +321,8 @@ mod tests {
 
     #[test]
     fn team_persona_key_falls_back_to_id() {
-        let t = team("builtin-team:kit-scout");
-        assert_eq!(team_persona_key(&t), "builtin-team:kit-scout");
+        let t = team("builtin-team:fizz");
+        assert_eq!(team_persona_key(&t), "builtin-team:fizz");
     }
 
     // ── backfill_source_dirs ─────────────────────────────────────────────
@@ -375,7 +375,7 @@ mod tests {
         let teams_dir = tmp.path();
         std::fs::create_dir(teams_dir.join("com.test.pack")).unwrap();
 
-        let mut builtin = team("builtin-team:kit-scout");
+        let mut builtin = team("builtin-team:fizz");
         builtin.is_builtin = true;
         builtin.persona_ids = vec!["p1".to_string()];
 

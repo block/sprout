@@ -22,16 +22,29 @@ Run `buzz --help` or `buzz <group> --help` for full usage.
 
 ## Communication Patterns
 
-- Address agents and humans with plain `@name` — do NOT bold or italicize mention text (formatting prevents alert delivery).
-- Writing `@name` in message content triggers a notification to that person. Only include `@name` when you intend to notify them and need their attention or response. Do not use `@name` in narrative or status updates (e.g., "let me coordinate with @Duncan on this") — save it for the message where you actually need their response.
-- Respond promptly to @mentions.
-- Be direct. State what you did, what you found, or what you need. No preamble.
-- Message content supports GitHub-flavored Markdown. Use fenced code blocks with a language tag (` ```python `, ` ```typescript `, etc.) for syntax-highlighted rendering on desktop and mobile. Omitting the language tag renders monochrome.
-- Reply to the thread root (`buzz messages send --reply-to <thread-root-event-id>`), not the latest message — flat threads stay readable; reply chains bury context 3+ levels deep. One thread = one unit of work: ask sub-questions inline. A real tangent starts a new top-level message.
-- Work in the thread, report milestones at the root. The thread is the messy middle — progress, dead ends, clarifying questions, and routine updates. Use a top-level post for channel-visible milestones: picked up, blocked + need input, change ready / PR up, done, or anything teammates skimming only root-level messages must act on. Thread notifications are easy to miss; a top-level post ensures the requester sees the outcome.
-- New topic → new top-level message. Don't graft an unrelated task onto an existing thread.
-- When you are mentioned in multiple threads, prioritize the most recent one chronologically. If someone steers or redirects you in a newer thread while you are working from an older dispatch, reply in the newer thread to acknowledge — do not bury your response in the original thread where it may go unseen.
-- No push notifications — poll with `buzz messages get --channel <UUID> --since <ts>`. When `since` is set without `before`, results are oldest-first (chronological).
+### Mentions
+
+- Use the person's **exact full display name** after `@` (e.g., `@Will Pfleger`, not `@Will`). Partial names fail silently.
+- Do NOT format mentions with bold, italic, or backticks — it breaks notification delivery.
+- Only `@mention` when you need their attention. Don't mention in narrative (e.g., "coordinating with Duncan" — no `@`).
+
+### Callback Mentions
+
+- When you finish delegated work, you MUST `@mention` the delegator in your completion message. This is the #1 cause of stalled collaboration.
+
+### Threading
+
+- **To a human** (updates, questions, deliverables): Use `--reply-to <thread-root-id>` (from your `[Context]` block) and `@mention` the human. Keeps messages at layer 1 where humans read.
+- **To another agent** (dispatching, collaborating): Thread however you want.
+- **When in doubt**, reply to thread root.
+- **Thread scope:** Respond in the thread where you were tagged. New top-level message from someone = new thread — respond there, not the old one.
+- **New topic → new top-level message.** Don't graft unrelated work onto an existing thread.
+
+### General
+
+- Respond promptly to @mentions. Be direct — no preamble.
+- Use GitHub-flavored Markdown. Fenced code blocks with language tags for syntax highlighting.
+- No push notifications — poll with `buzz messages get --channel <UUID> --since <ts>`.
 
 ## Startup Recovery
 

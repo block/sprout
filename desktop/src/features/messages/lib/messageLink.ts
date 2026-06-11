@@ -5,7 +5,6 @@
  */
 
 const MESSAGE_LINK_SCHEME = "buzz:";
-const LEGACY_MESSAGE_LINK_SCHEME = "sprout:";
 const MESSAGE_LINK_HOST = "message";
 
 export type MessageLinkInput = {
@@ -57,10 +56,8 @@ export function buildMessageLink(input: MessageLinkInput): string {
 }
 
 /**
- * Parse a `buzz://message?…` URL. Legacy `sprout://message?…` links are
- * accepted so already-copied message links keep working during the rename.
- * Returns a discriminated result so callers can render a fallback (e.g. a
- * plain link) without throwing.
+ * Parse a `buzz://message?…` URL. Returns a discriminated result so callers can
+ * render a fallback (e.g. a plain link) without throwing.
  */
 export function parseMessageLink(url: string): MessageLinkParseResult {
   let parsed: URL;
@@ -70,10 +67,7 @@ export function parseMessageLink(url: string): MessageLinkParseResult {
     return { ok: false, reason: "invalid-url" };
   }
 
-  if (
-    parsed.protocol !== MESSAGE_LINK_SCHEME &&
-    parsed.protocol !== LEGACY_MESSAGE_LINK_SCHEME
-  ) {
+  if (parsed.protocol !== MESSAGE_LINK_SCHEME) {
     return { ok: false, reason: "wrong-scheme" };
   }
   // `new URL("buzz://message?…")` puts "message" in `hostname`.
@@ -106,10 +100,5 @@ export function parseMessageLink(url: string): MessageLinkParseResult {
  */
 export function isMessageLink(href: string | undefined | null): boolean {
   if (!href) return false;
-  return (
-    href.startsWith("buzz://message?") ||
-    href === "buzz://message" ||
-    href.startsWith("sprout://message?") ||
-    href === "sprout://message"
-  );
+  return href.startsWith("buzz://message?") || href === "buzz://message";
 }

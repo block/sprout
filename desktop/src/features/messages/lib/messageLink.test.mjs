@@ -93,10 +93,8 @@ test("parseMessageLink rejects malformed URL strings", () => {
   assert.equal(r.ok === false && r.reason, "invalid-url");
 });
 
-test("parseMessageLink accepts legacy sprout://message links", () => {
-  const r = parseMessageLink(
-    `sprout://message?channel=${CHANNEL}&id=${MESSAGE}`,
-  );
+test("parseMessageLink accepts legacy buzz://message links", () => {
+  const r = parseMessageLink(`buzz://message?channel=${CHANNEL}&id=${MESSAGE}`);
   assert.equal(r.ok, true);
   assert.deepEqual(r.ok && r.value, {
     channelId: CHANNEL,
@@ -105,17 +103,17 @@ test("parseMessageLink accepts legacy sprout://message links", () => {
   });
 });
 
-test("isMessageLink matches buzz://message and legacy sprout://message", () => {
+test("isMessageLink matches buzz://message and legacy buzz://message", () => {
   assert.equal(
     isMessageLink(`buzz://message?channel=${CHANNEL}&id=${MESSAGE}`),
     true,
   );
   assert.equal(
-    isMessageLink(`sprout://message?channel=${CHANNEL}&id=${MESSAGE}`),
+    isMessageLink(`buzz://message?channel=${CHANNEL}&id=${MESSAGE}`),
     true,
   );
   assert.equal(isMessageLink("buzz://connect?relay=wss://x"), false);
-  assert.equal(isMessageLink("sprout://connect?relay=wss://x"), false);
+  assert.equal(isMessageLink("buzz://connect?relay=wss://x"), false);
   assert.equal(isMessageLink("https://example.com"), false);
   assert.equal(isMessageLink(undefined), false);
   assert.equal(isMessageLink(""), false);

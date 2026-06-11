@@ -433,7 +433,7 @@ test("rehypeImageGallery: mixed content paragraph is not image-only", () => {
 // schemes (returns `""`) before our `a` component override can see them,
 // which would break copy → paste → click for `buzz://message?…` links
 // end-to-end. We pass a custom `urlTransform` that delegates to the
-// default for `buzz://message` and legacy `sprout://message` hrefs.
+// default for `buzz://message` and legacy `buzz://message` hrefs.
 //
 // This test renders real `<ReactMarkdown>` with the production transform
 // and asserts the link href survives to the rendered DOM. Mirrors the
@@ -489,11 +489,11 @@ test("messageLinkUrlTransform: passes http(s) through unchanged", () => {
   assert.match(html, /href="https:\/\/example\.com\/path"/);
 });
 
-test("messageLinkUrlTransform: preserves legacy sprout://message href", () => {
+test("messageLinkUrlTransform: preserves legacy buzz://message href", () => {
   const html = renderMarkdown(
-    "Click [here](sprout://message?channel=abc&id=xyz)",
+    "Click [here](buzz://message?channel=abc&id=xyz)",
   );
-  assert.match(html, /href="sprout:\/\/message\?channel=abc&(?:amp;)?id=xyz"/);
+  assert.match(html, /href="buzz:\/\/message\?channel=abc&(?:amp;)?id=xyz"/);
 });
 
 test("messageLinkUrlTransform: leaves non-message buzz:// schemes to default", () => {
@@ -537,12 +537,12 @@ test("remarkMessageLinks: bare buzz://message URL is replaced", () => {
   assert.equal(para.children[0].data.hName, "message-link");
 });
 
-test("remarkMessageLinks: legacy bare sprout://message URL is replaced", () => {
-  const tree = runPlugin(paragraph(text("sprout://message?channel=c&id=m")));
+test("remarkMessageLinks: legacy bare buzz://message URL is replaced", () => {
+  const tree = runPlugin(paragraph(text("buzz://message?channel=c&id=m")));
   const para = tree.children[0];
   assert.equal(para.children.length, 1);
   assert.equal(para.children[0].type, "message-link");
-  assert.equal(para.children[0].value, "sprout://message?channel=c&id=m");
+  assert.equal(para.children[0].value, "buzz://message?channel=c&id=m");
 });
 
 test("remarkMessageLinks: mid-sentence URL splits surrounding text", () => {

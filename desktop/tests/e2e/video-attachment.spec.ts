@@ -14,12 +14,11 @@ async function waitForMockLiveSubscription(page: Page, channelName: string) {
         return (
           (
             window as Window & {
-              __SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+              __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
                 channelName: string;
               }) => boolean;
             }
-          ).__SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({ channelName }) ??
-          false
+          ).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({ channelName }) ?? false
         );
       }, channelName);
     })
@@ -31,12 +30,12 @@ function emitMockMessage(page: Page, channelName: string, content: string) {
     ({ channelName, content }) => {
       const emit = (
         window as Window & {
-          __SPROUT_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+          __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
             channelName: string;
             content: string;
           }) => unknown;
         }
-      ).__SPROUT_E2E_EMIT_MOCK_MESSAGE__;
+      ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
       if (!emit) {
         throw new Error("Mock message emitter is unavailable.");
       }

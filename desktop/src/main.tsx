@@ -10,7 +10,7 @@ import { Toaster } from "@/shared/ui/sonner";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 
 type E2eWindow = Window & {
-  __SPROUT_E2E__?: unknown;
+  __BUZZ_E2E__?: unknown;
 };
 
 const E2E_DEFAULT_PUBKEY = "deadbeef".repeat(8);
@@ -29,7 +29,7 @@ function configureDevE2eBridgeFromUrl() {
   }
 
   const e2eWindow = window as E2eWindow;
-  e2eWindow.__SPROUT_E2E__ ??= { mode: "mock" };
+  e2eWindow.__BUZZ_E2E__ ??= { mode: "mock" };
 
   const workspace = {
     addedAt: new Date().toISOString(),
@@ -67,7 +67,7 @@ function renderApp() {
 async function installE2eBridgeIfConfigured() {
   // Keep the large E2E bridge out of the normal startup path and production
   // bundle; only load it when tests explicitly inject an E2E config.
-  if (!(window as E2eWindow).__SPROUT_E2E__) {
+  if (!(window as E2eWindow).__BUZZ_E2E__) {
     return;
   }
 
