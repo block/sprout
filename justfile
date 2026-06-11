@@ -174,11 +174,11 @@ desktop-release-build target="aarch64-apple-darwin":
     set -euo pipefail
     TARGET={{target}}
     mkdir -p desktop/src-tauri/binaries
-    touch "desktop/src-tauri/binaries/sprout-acp-$TARGET"
-    touch "desktop/src-tauri/binaries/sprout-agent-$TARGET"
-    touch "desktop/src-tauri/binaries/sprout-dev-mcp-$TARGET"
+    touch "desktop/src-tauri/binaries/buzz-acp-$TARGET"
+    touch "desktop/src-tauri/binaries/buzz-agent-$TARGET"
+    touch "desktop/src-tauri/binaries/buzz-dev-mcp-$TARGET"
     touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
-    touch "desktop/src-tauri/binaries/sprout-$TARGET"
+    touch "desktop/src-tauri/binaries/buzz-$TARGET"
     pnpm install
     cd {{desktop_dir}} && pnpm tauri build --features mesh-llm --target {{target}}
 
@@ -293,8 +293,8 @@ staging *ARGS: _ensure-sidecar-stubs
     export MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$(./scripts/ensure-mesh-native-runtime.sh)"
     # Replace the 0-byte sidecar stub with the real CLI binary so tauri dev picks it up.
     TARGET=$(rustc -vV | sed -n 's|host: ||p')
-    cp target/release/buzz "desktop/src-tauri/binaries/sprout-${TARGET}"
-    chmod +x "desktop/src-tauri/binaries/sprout-${TARGET}"
+    cp target/release/buzz "desktop/src-tauri/binaries/buzz-${TARGET}"
+    chmod +x "desktop/src-tauri/binaries/buzz-${TARGET}"
     cd {{desktop_dir}}
     source ../scripts/instance-env.sh
     export BUZZ_RELAY_URL="wss://sprout-oss.stage.blox.sqprod.co"
