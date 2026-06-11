@@ -94,7 +94,7 @@ fail_if_local_redis_blocks_compose() {
   fi
   local redis_pids
   redis_pids=$(lsof -nP -iTCP:6379 -sTCP:LISTEN 2>/dev/null | awk 'NR > 1 && $1 == "redis-ser" {print $2}' | sort -u | tr '
-' ' ')
+' ' ' || true)
   if [[ -n "${redis_pids}" ]]; then
     error "Local Redis is already listening on port 6379 (pid(s): ${redis_pids}). Stop it before running setup: brew services stop redis"
     exit 1
