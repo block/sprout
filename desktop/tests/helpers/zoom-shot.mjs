@@ -27,7 +27,7 @@ mkdirSync(resolve(a.outdir), { recursive: true });
 
 const BASE = `http://127.0.0.1:${a.port}`;
 const DEFAULT_MOCK_PUBKEY = "deadbeef".repeat(8);
-const ONBOARDING_PREFIX = "sprout-onboarding-complete.v1:";
+const ONBOARDING_PREFIX = "buzz-onboarding-complete.v1:";
 const TEST_PUBKEYS = [
   DEFAULT_MOCK_PUBKEY,
   "e5ebc6cdb579be112e336cc319b5989b4bb6af11786ea90dbe52b5f08d741b34",
@@ -48,8 +48,8 @@ await page.addInitScript(() => {
     relayUrl: "ws://localhost:3000",
     addedAt: new Date().toISOString(),
   };
-  window.localStorage.setItem("sprout-workspaces", JSON.stringify([ws]));
-  window.localStorage.setItem("sprout-active-workspace-id", id);
+  window.localStorage.setItem("buzz-workspaces", JSON.stringify([ws]));
+  window.localStorage.setItem("buzz-active-workspace-id", id);
 });
 await page.addInitScript(
   ({ prefix, pubkeys }) => {
@@ -77,8 +77,8 @@ await page.addInitScript(() => {
     value: MockNotification,
     writable: true,
   });
-  window.__SPROUT_E2E__ = { mode: "mock" };
-  window.__SPROUT_E2E_APP_BADGE_COUNT__ = 0;
+  window.__BUZZ_E2E__ = { mode: "mock" };
+  window.__BUZZ_E2E_APP_BADGE_COUNT__ = 0;
 });
 
 try {
@@ -102,7 +102,7 @@ try {
     // Send a message via mock so we have something to thread.
     await page.evaluate(
       ({ ch }) => {
-        window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({
+        window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
           channelName: ch,
           content: "Header spacing comparison anchor message",
           pubkey: "deadbeef".repeat(8),
