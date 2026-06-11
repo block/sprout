@@ -67,6 +67,13 @@
     `helm install` / `helm upgrade`, or pods will start against an unmigrated
     schema. Readiness probes only verify DB connectivity, not schema freshness.
 {{- end }}
+{{- if or .Values.secrets.relayPrivateKey .Values.secrets.gitHookHmacSecret }}
+  ⚠ Inline secret values are set in values.yaml
+    ({{ if .Values.secrets.relayPrivateKey }}secrets.relayPrivateKey{{ end }}{{ if and .Values.secrets.relayPrivateKey .Values.secrets.gitHookHmacSecret }}, {{ end }}{{ if .Values.secrets.gitHookHmacSecret }}secrets.gitHookHmacSecret{{ end }}).
+    Inline overrides leak secrets into git history and CI logs. Move them to a
+    Kubernetes Secret and reference it via secrets.existingSecret — see
+    examples/secret-sample.yaml.
+{{- end }}
 {{- if and (gt (.Values.replicaCount | int) 1) (eq .Values.persistence.git.accessMode "ReadWriteOnce") }}
   ⚠ replicaCount > 1 with ReadWriteOnce git PVC will fail at template time
     (this message should never appear — file a bug).
