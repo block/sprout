@@ -599,10 +599,10 @@ test("onboarding can import an existing key when the workspace is already set up
   await expect(page.getByTestId("nostr-import-npub-preview")).toBeVisible();
   await page.getByTestId("nostr-import-submit").click();
 
-  // Identity swap remounts the flow; alice's relay profile prefills the name.
-  await expect(page.getByTestId("onboarding-display-name")).toHaveValue(
-    "alice",
-  );
+  // Identity swap remounts the flow; alice already has a relay profile with
+  // a display name, so onboarding auto-completes and lands in the app.
+  await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
+  await expectHomeView(page);
 });
 
 test("finishing onboarding auto-joins the #general channel for a new member", async ({
@@ -723,6 +723,8 @@ test("membership denial can import a different invited key", async ({
   ).toBeVisible();
   await page.getByTestId("membership-denied-import-key").click();
 
+  // Alice already has a relay profile with a display name, so after the
+  // identity swap the onboarding gate auto-completes.
   await expect
     .poll(() =>
       page.evaluate(
@@ -732,7 +734,6 @@ test("membership denial can import a different invited key", async ({
       ),
     )
     .toEqual(expect.arrayContaining(["plugin:websocket|disconnect"]));
-  await expect(page.getByTestId("onboarding-page-1")).toBeVisible();
   await expect
     .poll(() =>
       page.evaluate((storageKey) => {
@@ -744,7 +745,6 @@ test("membership denial can import a different invited key", async ({
       }, E2E_IDENTITY_OVERRIDE_STORAGE_KEY),
     )
     .toBe(TEST_IDENTITIES.alice.pubkey);
-  await page.getByTestId("onboarding-next").click();
-
-  await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
+  await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
+  await expectHomeView(page);
 });
