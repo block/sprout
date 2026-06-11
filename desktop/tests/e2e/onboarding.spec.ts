@@ -333,10 +333,6 @@ async function getMockChannels(page: Page) {
         command: string,
         payload?: Record<string, unknown>,
       ) => Promise<unknown>;
-      __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
-        command: string,
-        payload?: Record<string, unknown>,
-      ) => Promise<unknown>;
       __TAURI_INTERNALS__?: {
         invoke?: (
           command: string,
@@ -346,7 +342,6 @@ async function getMockChannels(page: Page) {
     };
     const invoke =
       bridgeWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ ??
-      bridgeWindow.__SPROUT_E2E_INVOKE_MOCK_COMMAND__ ??
       bridgeWindow.__TAURI_INTERNALS__?.invoke;
 
     if (!invoke) {
@@ -377,10 +372,6 @@ async function invokeMockCommand<T>(
           command: string,
           payload?: Record<string, unknown>,
         ) => Promise<unknown>;
-        __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
-          command: string,
-          payload?: Record<string, unknown>,
-        ) => Promise<unknown>;
         __TAURI_INTERNALS__?: {
           invoke?: (
             command: string,
@@ -390,7 +381,6 @@ async function invokeMockCommand<T>(
       };
       const invoke =
         bridgeWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ ??
-        bridgeWindow.__SPROUT_E2E_INVOKE_MOCK_COMMAND__ ??
         bridgeWindow.__TAURI_INTERNALS__?.invoke;
 
       if (!invoke) {

@@ -11,7 +11,7 @@ import { normalizePubkey } from "@/shared/lib/pubkey";
 
 export const WELCOME_GUIDE_AGENT_NAME = "Fizz";
 export const WELCOME_GUIDE_PERSONA_ID = "builtin:fizz";
-export const WELCOME_GUIDE_INTRO_MARKER = "sprout-welcome-intro.v1";
+export const WELCOME_GUIDE_INTRO_MARKER = "buzz-welcome-intro.v1";
 const LEGACY_WELCOME_GUIDE_AGENT_NAME = "Kit";
 export const LEGACY_WELCOME_GUIDE_SYSTEM_PROMPT =
   "You are Kit, Sprout's friendly welcome guide. Help new users understand the workspace, channels, messages, and agents. Keep introductions concise, practical, and warm.";
