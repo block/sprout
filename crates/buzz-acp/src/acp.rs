@@ -2103,4 +2103,100 @@ mod tests {
             "should default to false when no agentCapabilities"
         );
     }
+
+    // ── session_new_full systemPrompt serialization ──────────────────────
+
+    #[tokio::test]
+    async fn session_new_full_includes_system_prompt_when_supported() {
+        // Script: respond to initialize (with capability), then echo back
+        // the session/new request params in the response so we can inspect them.
+        let script = r#"
+            read -t 2 _init
+            echo '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{"promptCapabilities":{"systemPrompt":true}}}}'
+            read -t 2 REQ
+            echo '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"ses_test","_receivedRequest":'"$REQ"'}}'
+            sleep 1
+        "#;
+        let mut client = spawn_script(script).await;
+        client
+            .initialize()
+            .await
+            .expect("initialize should succeed");
+        assert!(client.supports_system_prompt);
+
+        let resp = client
+            .session_new_full("/tmp", vec![], Some("Custom system prompt"))
+            .await
+            .expect("session_new_full should succeed");
+
+        assert_eq!(resp.session_id, "ses_test");
+        // The script echoed the full request back in _receivedRequest.
+        // Verify the params contain systemPrompt.
+        let received = &resp.raw["_receivedRequest"];
+        assert_eq!(
+            received["params"]["systemPrompt"].as_str(),
+            Some("Custom system prompt"),
+            "systemPrompt should be included in params when agent supports it"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_new_full_omits_system_prompt_when_not_supported() {
+        // Script: respond to initialize WITHOUT capability, then echo back request.
+        let script = r#"
+            read -t 2 _init
+            echo '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{"promptCapabilities":{"image":false}}}}'
+            read -t 2 REQ
+            echo '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"ses_test","_receivedRequest":'"$REQ"'}}'
+            sleep 1
+        "#;
+        let mut client = spawn_script(script).await;
+        client
+            .initialize()
+            .await
+            .expect("initialize should succeed");
+        assert!(!client.supports_system_prompt);
+
+        let resp = client
+            .session_new_full("/tmp", vec![], Some("Custom system prompt"))
+            .await
+            .expect("session_new_full should succeed");
+
+        assert_eq!(resp.session_id, "ses_test");
+        let received = &resp.raw["_receivedRequest"];
+        assert!(
+            received["params"]["systemPrompt"].is_null(),
+            "systemPrompt should NOT be in params when agent doesn't support it"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_new_full_omits_system_prompt_when_none() {
+        // Even when agent supports it, None means no field sent.
+        let script = r#"
+            read -t 2 _init
+            echo '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{"promptCapabilities":{"systemPrompt":true}}}}'
+            read -t 2 REQ
+            echo '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"ses_test","_receivedRequest":'"$REQ"'}}'
+            sleep 1
+        "#;
+        let mut client = spawn_script(script).await;
+        client
+            .initialize()
+            .await
+            .expect("initialize should succeed");
+        assert!(client.supports_system_prompt);
+
+        let resp = client
+            .session_new_full("/tmp", vec![], None)
+            .await
+            .expect("session_new_full should succeed");
+
+        assert_eq!(resp.session_id, "ses_test");
+        let received = &resp.raw["_receivedRequest"];
+        assert!(
+            received["params"]["systemPrompt"].is_null(),
+            "systemPrompt should NOT be in params when value is None"
+        );
+    }
 }
