@@ -13,6 +13,7 @@ import {
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { useManagedAgentObserverBridge } from "@/features/agents/observerRelayStore";
+import { useActiveAgentTurnsBridge } from "@/features/agents/activeAgentTurnsStore";
 import type {
   Channel,
   CreateManagedAgentResponse,
@@ -64,6 +65,7 @@ export function useManagedAgentActions() {
     [managedAgentsQuery.data],
   );
   useManagedAgentObserverBridge(managedAgents);
+  useActiveAgentTurnsBridge(managedAgents);
 
   const managedPubkeys = React.useMemo(
     () => new Set(managedAgents.map((agent) => agent.pubkey)),
@@ -102,6 +104,14 @@ export function useManagedAgentActions() {
     }
     return map;
   }, [relayAgentsQuery.data, channelsQuery.data, managedAgents]);
+
+  const channelIdToName = React.useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const ch of channelsQuery.data ?? []) {
+      map[ch.id] = ch.name;
+    }
+    return map;
+  }, [channelsQuery.data]);
 
   // Clear log selection if the agent was removed
   React.useEffect(() => {
@@ -323,6 +333,7 @@ export function useManagedAgentActions() {
     // Derived state
     managedAgents,
     managedPubkeys,
+    channelIdToName,
     channelsByPubkey,
     isPending,
     // UI state

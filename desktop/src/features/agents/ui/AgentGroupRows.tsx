@@ -4,6 +4,7 @@ import { ManagedAgentRow } from "./ManagedAgentRow";
 
 export type AgentGroupRowsProps = {
   agents: ManagedAgent[];
+  channelIdToName: Record<string, string>;
   channelsByPubkey: Record<string, string[]>;
   isActionPending: boolean;
   logContent: string | null;
@@ -23,6 +24,7 @@ export type AgentGroupRowsProps = {
 
 export function AgentGroupRows({
   agents,
+  channelIdToName,
   channelsByPubkey,
   isActionPending,
   logContent,
@@ -44,6 +46,7 @@ export function AgentGroupRows({
       {agents.map((agent) => (
         <ManagedAgentRow
           agent={agent}
+          channelIdToName={channelIdToName}
           channelNames={channelsByPubkey[normalizePubkey(agent.pubkey)] ?? []}
           isActionPending={isActionPending}
           isLogSelected={selectedLogAgentPubkey === agent.pubkey}

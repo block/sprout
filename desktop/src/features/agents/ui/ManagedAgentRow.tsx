@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
 import { Badge } from "@/shared/ui/badge";
 import { AgentStatusBadge } from "@/features/agents/ui/AgentStatusBadge";
+import { useActiveAgentTurns } from "@/features/agents/activeAgentTurnsStore";
 import type {
   ManagedAgent,
   PresenceLookup,
@@ -39,6 +40,7 @@ import { truncatePubkey } from "./agentUi";
 
 export function ManagedAgentRow({
   agent,
+  channelIdToName,
   channelNames,
   isActionPending,
   isLogSelected,
@@ -56,6 +58,7 @@ export function ManagedAgentRow({
   onToggleStartOnAppLaunch,
 }: {
   agent: ManagedAgent;
+  channelIdToName: Record<string, string>;
   channelNames: string[];
   isActionPending: boolean;
   isLogSelected: boolean;
@@ -80,6 +83,13 @@ export function ManagedAgentRow({
     ? (personaLabelsById[agent.personaId] ?? null)
     : null;
   const presenceStatus = presenceLookup[agent.pubkey.trim().toLowerCase()];
+  const activeChannelIds = useActiveAgentTurns(agent.pubkey);
+  const activeWorkingChannels = React.useMemo(
+    () =>
+      [...activeChannelIds].map((id) => channelIdToName[id] ?? id).slice(0, 3),
+    [activeChannelIds, channelIdToName],
+  );
+  const isWorking = activeWorkingChannels.length > 0;
   const processDetail =
     agent.pid !== null
       ? `PID ${agent.pid}`
@@ -116,6 +126,7 @@ export function ManagedAgentRow({
           >
             <div className="grid gap-3 lg:grid-cols-[minmax(0,1.8fr)_minmax(120px,0.8fr)_minmax(0,1.1fr)] lg:gap-4">
               <AgentSummary
+                activeWorkingChannels={activeWorkingChannels}
                 agent={agent}
                 channelNames={channelNames}
                 isExpandable
@@ -125,6 +136,7 @@ export function ManagedAgentRow({
               />
               <StatusBlock
                 friendlyError={friendlyError}
+                isWorking={isWorking}
                 presenceLoaded={presenceLoaded}
                 presenceStatus={presenceStatus}
                 processDetail={processDetail}
@@ -137,6 +149,7 @@ export function ManagedAgentRow({
           <div className="min-w-0 flex-1">
             <div className="grid gap-3 lg:grid-cols-[minmax(0,1.8fr)_minmax(120px,0.8fr)_minmax(0,1.1fr)] lg:gap-4">
               <AgentSummary
+                activeWorkingChannels={activeWorkingChannels}
                 agent={agent}
                 channelNames={channelNames}
                 isExpandable={false}
@@ -146,6 +159,7 @@ export function ManagedAgentRow({
               />
               <StatusBlock
                 friendlyError={friendlyError}
+                isWorking={isWorking}
                 presenceLoaded={presenceLoaded}
                 presenceStatus={presenceStatus}
                 processDetail={processDetail}
@@ -191,6 +205,7 @@ export function ManagedAgentRow({
 }
 
 function AgentSummary({
+  activeWorkingChannels,
   agent,
   channelNames,
   isExpandable,
@@ -198,6 +213,7 @@ function AgentSummary({
   personaLabel,
   presenceStatus,
 }: {
+  activeWorkingChannels: string[];
   agent: ManagedAgent;
   channelNames: string[];
   isExpandable: boolean;
@@ -253,6 +269,19 @@ function AgentSummary({
               ))}
             </div>
           ) : null}
+          {activeWorkingChannels.length > 0 ? (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              {activeWorkingChannels.map((name) => (
+                <Badge
+                  className="animate-pulse normal-case tracking-normal"
+                  key={`working-${name}`}
+                  variant="default"
+                >
+                  Working in # {name}
+                </Badge>
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
@@ -261,12 +290,14 @@ function AgentSummary({
 
 function StatusBlock({
   friendlyError,
+  isWorking,
   presenceLoaded,
   presenceStatus,
   processDetail,
   status,
 }: {
   friendlyError: ReturnType<typeof friendlyAgentLastError>;
+  isWorking: boolean;
   presenceLoaded: boolean;
   presenceStatus: PresenceStatus | undefined;
   processDetail: string;
@@ -278,6 +309,7 @@ function StatusBlock({
         Status
       </p>
       <AgentStatusBadge
+        isWorking={isWorking}
         presenceLoaded={presenceLoaded}
         presenceStatus={presenceStatus}
         status={status}
