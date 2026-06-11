@@ -1,10 +1,10 @@
-use nostr::{Event, EventId, Keys};
+use nostr::{Event, EventId, Keys, PublicKey};
 use tauri::{AppHandle, State};
 
 use crate::{
     app_state::AppState,
     events,
-    managed_agents::{find_managed_agent_mut, load_managed_agents},
+    managed_agents::{find_managed_agent_mut, load_managed_agents, ManagedAgentRecord},
     models::{
         FeedItemInfo, FeedMeta, FeedResponse, FeedSections, ForumMessageInfo, ForumPostsResponse,
         ForumThreadReplyInfo, ForumThreadResponse, SearchResponse, SendChannelMessageResponse,
@@ -401,6 +401,39 @@ async fn find_managed_agent_channel_message_by_marker(
     Ok(None)
 }
 
+fn stored_managed_agent_auth_tag(auth_tag: Option<&str>) -> Option<String> {
+    auth_tag
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn legacy_managed_agent_auth_tag(
+    owner_keys: &Keys,
+    agent_pubkey: &PublicKey,
+) -> Result<Option<String>, String> {
+    if owner_keys.public_key() == *agent_pubkey {
+        return Ok(None);
+    }
+
+    buzz_sdk_pkg::nip_oa::compute_auth_tag(owner_keys, agent_pubkey, "")
+        .map(Some)
+        .map_err(|error| format!("failed to compute managed agent auth tag: {error}"))
+}
+
+fn managed_agent_submission_auth_tag(
+    record: &ManagedAgentRecord,
+    state: &AppState,
+    agent_pubkey: &PublicKey,
+) -> Result<Option<String>, String> {
+    if let Some(auth_tag) = stored_managed_agent_auth_tag(record.auth_tag.as_deref()) {
+        return Ok(Some(auth_tag));
+    }
+
+    let owner_keys = state.keys.lock().map_err(|error| error.to_string())?;
+    legacy_managed_agent_auth_tag(&owner_keys, agent_pubkey)
+}
+
 #[tauri::command]
 pub async fn send_managed_agent_channel_message(
     agent_pubkey: String,
@@ -441,6 +474,8 @@ pub async fn send_managed_agent_channel_message(
             record.pubkey
         ));
     }
+    let submission_auth_tag =
+        managed_agent_submission_auth_tag(&record, &state, &keys.public_key())?;
 
     if let Some(marker) = marker.as_deref() {
         if let Some(existing) = find_managed_agent_channel_message_by_marker(
@@ -475,7 +510,8 @@ pub async fn send_managed_agent_channel_message(
         &[],
         &client_tags,
     )?;
-    let result = submit_event_with_keys(builder, &state, &keys, record.auth_tag.as_deref()).await?;
+    let result =
+        submit_event_with_keys(builder, &state, &keys, submission_auth_tag.as_deref()).await?;
 
     Ok(SendChannelMessageResponse {
         event_id: result.event_id,
@@ -484,6 +520,45 @@ pub async fn send_managed_agent_channel_message(
         depth: 0,
         created_at: chrono::Utc::now().timestamp(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stored_managed_agent_auth_tag_trims_blank_values() {
+        assert_eq!(
+            stored_managed_agent_auth_tag(Some("  [\"auth\",\"owner\",\"\",\"sig\"]  ")),
+            Some("[\"auth\",\"owner\",\"\",\"sig\"]".to_string())
+        );
+        assert_eq!(stored_managed_agent_auth_tag(Some("   ")), None);
+        assert_eq!(stored_managed_agent_auth_tag(None), None);
+    }
+
+    #[test]
+    fn legacy_managed_agent_auth_tag_verifies_for_agent_pubkey() {
+        let owner_keys = Keys::generate();
+        let agent_keys = Keys::generate();
+
+        let tag = legacy_managed_agent_auth_tag(&owner_keys, &agent_keys.public_key())
+            .expect("legacy auth tag should compute")
+            .expect("legacy auth tag should be present");
+
+        let owner = buzz_sdk_pkg::nip_oa::verify_auth_tag(&tag, &agent_keys.public_key())
+            .expect("legacy auth tag should verify");
+        assert_eq!(owner, owner_keys.public_key());
+    }
+
+    #[test]
+    fn legacy_managed_agent_auth_tag_skips_self_attestation() {
+        let owner_keys = Keys::generate();
+
+        let tag = legacy_managed_agent_auth_tag(&owner_keys, &owner_keys.public_key())
+            .expect("self-attestation should be skipped");
+
+        assert_eq!(tag, None);
+    }
 }
 
 #[tauri::command]
