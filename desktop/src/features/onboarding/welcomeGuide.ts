@@ -17,6 +17,18 @@ export const LEGACY_WELCOME_GUIDE_SYSTEM_PROMPT =
 export const WELCOME_GUIDE_INTRO_MESSAGE =
   "Hi, I'm Kit. Welcome to Sprout.\n\nI can help you get oriented, answer questions, and make the first few steps feel less mysterious.\n\nFeel free to ask me what else you can do in Sprout, or just talk through what you want to build.";
 
+function normalizeRelayUrl(relayUrl: string | null | undefined) {
+  return relayUrl?.trim().replace(/\/+$/, "") ?? null;
+}
+
+function isAgentScopedToRelay(agent: ManagedAgent, relayUrl?: string | null) {
+  const targetRelayUrl = normalizeRelayUrl(relayUrl);
+  if (!targetRelayUrl) {
+    return true;
+  }
+  return normalizeRelayUrl(agent.relayUrl) === targetRelayUrl;
+}
+
 function isNamedKitAgent(agent: ManagedAgent) {
   return (
     agent.name.trim().toLowerCase() === WELCOME_GUIDE_AGENT_NAME.toLowerCase()
@@ -51,9 +63,24 @@ export function pickWelcomeGuideAgent(agents: ManagedAgent[]) {
   return pickAgentByStatus(agents.filter(isWelcomeGuideAgent));
 }
 
-export async function getWelcomeGuideAgentPubkeys() {
+export function pickWelcomeGuideAgentForRelay(
+  agents: ManagedAgent[],
+  relayUrl?: string | null,
+) {
+  return pickAgentByStatus(
+    agents.filter(
+      (agent) =>
+        isWelcomeGuideAgent(agent) && isAgentScopedToRelay(agent, relayUrl),
+    ),
+  );
+}
+
+export async function getWelcomeGuideAgentPubkeys(relayUrl?: string | null) {
   return (await listManagedAgents())
-    .filter(isWelcomeGuideAgent)
+    .filter(
+      (agent) =>
+        isWelcomeGuideAgent(agent) && isAgentScopedToRelay(agent, relayUrl),
+    )
     .map((agent) => agent.pubkey);
 }
 
@@ -69,9 +96,9 @@ async function ensureWelcomeGuidePersonaActive() {
   }
 }
 
-async function ensureWelcomeGuideAgent() {
+async function ensureWelcomeGuideAgent(relayUrl?: string | null) {
   const agents = await listManagedAgents();
-  const existing = pickWelcomeGuideAgent(agents);
+  const existing = pickWelcomeGuideAgentForRelay(agents, relayUrl);
   if (existing) {
     return existing;
   }
@@ -81,6 +108,7 @@ async function ensureWelcomeGuideAgent() {
   const created = await createManagedAgent({
     name: WELCOME_GUIDE_AGENT_NAME,
     personaId: WELCOME_GUIDE_PERSONA_ID,
+    relayUrl: relayUrl ?? undefined,
     spawnAfterCreate: false,
     startOnAppLaunch: false,
     respondTo: "owner-only",
@@ -114,8 +142,11 @@ async function ensureWelcomeGuideMembership(
   }
 }
 
-export async function ensureWelcomeGuideIntro(channelId: string) {
-  const agent = await ensureWelcomeGuideAgent();
+export async function ensureWelcomeGuideIntro(
+  channelId: string,
+  relayUrl?: string | null,
+) {
+  const agent = await ensureWelcomeGuideAgent(relayUrl);
   await ensureWelcomeGuideMembership(channelId, agent);
   await sendManagedAgentChannelMessage({
     agentPubkey: agent.pubkey,

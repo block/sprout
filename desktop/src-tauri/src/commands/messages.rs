@@ -369,7 +369,7 @@ async fn find_managed_agent_channel_message_by_marker(
     for _ in 0..10 {
         let mut filter = serde_json::json!({
             "authors": [agent_pubkey],
-            "kinds": [sprout_core::kind::KIND_STREAM_MESSAGE],
+            "kinds": [buzz_core_pkg::kind::KIND_STREAM_MESSAGE],
             "#h": [channel_id],
             "limit": 500,
         });

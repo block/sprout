@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   LEGACY_WELCOME_GUIDE_SYSTEM_PROMPT,
   pickWelcomeGuideAgent,
+  pickWelcomeGuideAgentForRelay,
   WELCOME_GUIDE_AGENT_NAME,
   WELCOME_GUIDE_PERSONA_ID,
 } from "./welcomeGuide.ts";
@@ -11,13 +12,15 @@ import {
 const PUB_A = "a".repeat(64);
 const PUB_B = "b".repeat(64);
 const PUB_C = "c".repeat(64);
+const RELAY_A = "ws://localhost:3000";
+const RELAY_B = "ws://localhost:3001";
 
 function makeAgent(overrides = {}) {
   return {
     pubkey: PUB_A,
     name: WELCOME_GUIDE_AGENT_NAME,
     personaId: null,
-    relayUrl: "ws://localhost:3000",
+    relayUrl: RELAY_A,
     acpCommand: "sprout-acp",
     agentCommand: "sprout-agent",
     agentArgs: [],
@@ -87,4 +90,40 @@ test("pickWelcomeGuideAgent ignores non-Kit agents with the legacy prompt", () =
   });
 
   assert.equal(pickWelcomeGuideAgent([nonKit, kit]), kit);
+});
+
+test("pickWelcomeGuideAgentForRelay ignores Kit agents from other workspaces", () => {
+  const otherWorkspaceKit = makeAgent({
+    pubkey: PUB_A,
+    personaId: WELCOME_GUIDE_PERSONA_ID,
+    relayUrl: RELAY_A,
+    status: "running",
+  });
+  const currentWorkspaceKit = makeAgent({
+    pubkey: PUB_B,
+    personaId: WELCOME_GUIDE_PERSONA_ID,
+    relayUrl: RELAY_B,
+    status: "stopped",
+  });
+
+  assert.equal(
+    pickWelcomeGuideAgentForRelay(
+      [otherWorkspaceKit, currentWorkspaceKit],
+      RELAY_B,
+    ),
+    currentWorkspaceKit,
+  );
+});
+
+test("pickWelcomeGuideAgentForRelay returns null when Kit only exists in another workspace", () => {
+  const otherWorkspaceKit = makeAgent({
+    pubkey: PUB_A,
+    personaId: WELCOME_GUIDE_PERSONA_ID,
+    relayUrl: RELAY_A,
+  });
+
+  assert.equal(
+    pickWelcomeGuideAgentForRelay([otherWorkspaceKit], RELAY_B),
+    null,
+  );
 });

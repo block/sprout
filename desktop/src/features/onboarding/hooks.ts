@@ -63,9 +63,9 @@ async function initializeWelcomeChannel(
   },
 ) {
   try {
-    const allowedMemberPubkeys = await getWelcomeGuideAgentPubkeys().catch(
-      () => [],
-    );
+    const allowedMemberPubkeys = await getWelcomeGuideAgentPubkeys(
+      workspaceScope,
+    ).catch(() => []);
     const welcomeChannel = await ensureWelcomeChannel(
       {
         createChannel,
@@ -79,7 +79,7 @@ async function initializeWelcomeChannel(
     );
     let didInitializeWelcomeGuide = false;
     try {
-      await ensureWelcomeGuideIntro(welcomeChannel.id);
+      await ensureWelcomeGuideIntro(welcomeChannel.id, workspaceScope);
       didInitializeWelcomeGuide = true;
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey }),
