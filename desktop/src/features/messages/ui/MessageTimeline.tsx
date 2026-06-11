@@ -4,7 +4,9 @@ import { ArrowDown, Hash } from "lucide-react";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
+import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
+import { channelChrome } from "@/shared/layout/chromeLayout";
 import { Button } from "@/shared/ui/button";
 import { Spinner } from "@/shared/ui/spinner";
 import { TooltipProvider } from "@/shared/ui/tooltip";
@@ -166,16 +168,23 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     sentinelRef: topSentinelRef,
   });
 
-  const showDirectMessageIntro = !isLoading && directMessageIntro !== null;
+  const hasConversationMessage = messages.some(
+    (message) => message.kind !== KIND_SYSTEM_MESSAGE,
+  );
+  const showDirectMessageIntro =
+    !isLoading && directMessageIntro !== null && !hasConversationMessage;
   const showChannelIntro =
-    !isLoading && channelIntro !== null && directMessageIntro === null;
+    !isLoading &&
+    channelIntro !== null &&
+    directMessageIntro === null &&
+    !hasConversationMessage;
   const showIntro = showDirectMessageIntro || showChannelIntro;
   const showGenericEmpty =
     !isLoading &&
     messages.length === 0 &&
     directMessageIntro === null &&
     channelIntro === null;
-  const showMessageList = !isLoading && messages.length > 0;
+  const showMessageList = !isLoading && messages.length > 0 && !showIntro;
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -192,8 +201,9 @@ export const MessageTimeline = React.memo(function MessageTimeline({
         >
           <div
             className={cn(
-              "flex w-full flex-col gap-2 pt-[92px]",
-              !isLoading && "min-h-full",
+              "flex w-full flex-col gap-2",
+              channelChrome.contentPadding,
+              (showIntro || showGenericEmpty) && "min-h-full",
             )}
             ref={contentRef}
           >

@@ -158,33 +158,45 @@ export async function ensureWelcomeChannel(
   return client.createChannel(welcomeChannelInput);
 }
 
-export function welcomeChannelEnsuredStorageKey(pubkey: string) {
-  return `${WELCOME_CHANNEL_ENSURED_STORAGE_KEY}:${pubkey}`;
+export function welcomeChannelEnsuredStorageKey(
+  pubkey: string,
+  workspaceScope: string,
+) {
+  return `${WELCOME_CHANNEL_ENSURED_STORAGE_KEY}:${encodeURIComponent(
+    workspaceScope,
+  )}:${pubkey}`;
 }
 
-export function hasEnsuredWelcomeChannel(pubkey: string | null | undefined) {
-  if (typeof window === "undefined" || !pubkey) {
+export function hasEnsuredWelcomeChannel(
+  pubkey: string | null | undefined,
+  workspaceScope: string | null | undefined,
+) {
+  if (typeof window === "undefined" || !pubkey || !workspaceScope) {
     return false;
   }
 
   try {
     return (
-      window.localStorage.getItem(welcomeChannelEnsuredStorageKey(pubkey)) ===
-      "true"
+      window.localStorage.getItem(
+        welcomeChannelEnsuredStorageKey(pubkey, workspaceScope),
+      ) === "true"
     );
   } catch {
     return false;
   }
 }
 
-export function markWelcomeChannelEnsured(pubkey: string | null | undefined) {
-  if (typeof window === "undefined" || !pubkey) {
+export function markWelcomeChannelEnsured(
+  pubkey: string | null | undefined,
+  workspaceScope: string | null | undefined,
+) {
+  if (typeof window === "undefined" || !pubkey || !workspaceScope) {
     return;
   }
 
   try {
     window.localStorage.setItem(
-      welcomeChannelEnsuredStorageKey(pubkey),
+      welcomeChannelEnsuredStorageKey(pubkey, workspaceScope),
       "true",
     );
   } catch {

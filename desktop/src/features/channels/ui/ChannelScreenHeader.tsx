@@ -1,4 +1,5 @@
 import { LogIn } from "lucide-react";
+import type * as React from "react";
 
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import type { EphemeralChannelDisplay } from "@/features/channels/lib/ephemeralChannel";
@@ -13,10 +14,10 @@ type ChannelScreenHeaderProps = {
   activeChannel: Channel | null;
   activeChannelEphemeralDisplay: EphemeralChannelDisplay | null;
   activeChannelTitle: string;
-  actionsRightInset?: string;
   actionsVariant?: "inline" | "compact";
   activeDmAvatarUrl: string | null;
   activeDmPresenceStatus: PresenceStatus | null;
+  chromeWrapperRef?: React.Ref<HTMLDivElement>;
   currentPubkey?: string;
   isAddBotOpen?: boolean;
   isJoining?: boolean;
@@ -31,10 +32,10 @@ export function ChannelScreenHeader({
   activeChannel,
   activeChannelEphemeralDisplay,
   activeChannelTitle,
-  actionsRightInset,
   actionsVariant = "inline",
   activeDmAvatarUrl,
   activeDmPresenceStatus,
+  chromeWrapperRef,
   currentPubkey,
   isAddBotOpen,
   isJoining = false,
@@ -82,9 +83,9 @@ export function ChannelScreenHeader({
   return (
     <ChatHeader
       belowSystemChrome
+      chromeWrapperRef={chromeWrapperRef}
       density="compact"
       actions={actions}
-      actionsRightInset={actionsRightInset}
       channelType={activeChannel?.channelType}
       description={getChannelDescription(activeChannel)}
       leadingContent={

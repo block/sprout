@@ -10,6 +10,7 @@ mod relay_mesh;
 mod restore;
 mod runtime;
 mod storage;
+mod team_repair;
 mod teams;
 mod types;
 
@@ -24,6 +25,7 @@ pub use relay_mesh::*;
 pub use restore::*;
 pub use runtime::*;
 pub use storage::*;
+pub use team_repair::sync_team_personas;
 pub use teams::*;
 pub use types::*;
 

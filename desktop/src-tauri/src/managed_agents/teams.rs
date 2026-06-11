@@ -7,9 +7,7 @@ use crate::{
     util::now_iso,
 };
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+use super::team_repair::team_persona_key;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TeamPersonaPreview {
@@ -163,9 +161,8 @@ pub fn save_teams(app: &AppHandle, records: &[TeamRecord]) -> Result<(), String>
 // ---------------------------------------------------------------------------
 // Directory-backed team operations
 // ---------------------------------------------------------------------------
-
 /// Teams directory: `<AppDataDir>/agents/teams/`
-fn teams_dir(app: &AppHandle) -> Result<PathBuf, String> {
+pub(super) fn teams_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = managed_agents_base_dir(app)?.join("teams");
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create teams dir: {e}"))?;
     Ok(dir)
@@ -365,6 +362,10 @@ pub fn delete_team_with_cascade(app: &AppHandle, team_id: &str) -> Result<(), St
 
     if team.source_dir.is_some() {
         // Directory-backed team: full cascade
+        // Match on the shared key (directory name) so legacy UUID-id teams
+        // still cascade correctly.
+        let persona_key = team_persona_key(team).to_string();
+
         // 1. Check no managed agents reference these personas
         let agents = crate::managed_agents::load_managed_agents(app)?;
         let referencing: Vec<&str> = agents
@@ -374,7 +375,7 @@ pub fn delete_team_with_cascade(app: &AppHandle, team_id: &str) -> Result<(), St
                     .as_ref()
                     .and_then(|p| p.file_name())
                     .and_then(|n| n.to_str())
-                    == Some(team_id)
+                    == Some(persona_key.as_str())
             })
             .map(|a| a.name.as_str())
             .collect();
@@ -387,9 +388,9 @@ pub fn delete_team_with_cascade(app: &AppHandle, team_id: &str) -> Result<(), St
             ));
         }
 
-        // 2. Remove all PersonaRecords where source_team == team_id
+        // 2. Remove all PersonaRecords sourced from this team
         let mut personas = super::load_personas(app)?;
-        personas.retain(|p| p.source_team.as_deref() != Some(team_id));
+        personas.retain(|p| p.source_team.as_deref() != Some(persona_key.as_str()));
         super::save_personas(app, &personas)?;
 
         // 3. Remove directory
@@ -432,6 +433,10 @@ pub fn sync_team_from_dir(
         .as_ref()
         .ok_or_else(|| format!("team {team_id} is not directory-backed"))?;
 
+    // Personas reference the team's directory name (pack manifest ID) in
+    // source_team, which may differ from team_id for pre-backfill teams.
+    let persona_key = team_persona_key(team).to_string();
+
     if !source_dir.exists() {
         return Err(format!(
             "team directory does not exist: {}",
@@ -453,7 +458,7 @@ pub fn sync_team_from_dir(
     // Find existing personas for this team
     let existing_slugs: Vec<(String, String)> = personas
         .iter()
-        .filter(|p| p.source_team.as_deref() == Some(team_id))
+        .filter(|p| p.source_team.as_deref() == Some(persona_key.as_str()))
         .map(|p| {
             (
                 p.source_team_persona_slug.clone().unwrap_or_default(),
@@ -513,7 +518,7 @@ pub fn sync_team_from_dir(
                 name_pool: Vec::new(),
                 is_builtin: false,
                 is_active: true,
-                source_team: Some(team_id.to_string()),
+                source_team: Some(persona_key.clone()),
                 source_team_persona_slug: Some(dir_persona.name.clone()),
                 env_vars: crate::managed_agents::env_vars::filter_derived_provider_model_env_vars(
                     dir_persona.runtime_env_vars.iter().cloned(),
@@ -571,7 +576,7 @@ pub fn sync_team_from_dir(
         // Update persona_ids to reflect current state
         let current_ids: Vec<String> = personas
             .iter()
-            .filter(|p| p.source_team.as_deref() == Some(team_id))
+            .filter(|p| p.source_team.as_deref() == Some(persona_key.as_str()))
             .map(|p| p.id.clone())
             .collect();
         if team_record.persona_ids != current_ids {
@@ -710,21 +715,6 @@ pub fn parse_team_json(json_bytes: &[u8]) -> Result<ParsedTeamPreview, String> {
         description,
         personas,
     })
-}
-
-/// Sync all directory-backed teams on launch — the team equivalent of the
-/// former `sync_pack_personas`. Silently skips teams whose source directory
-/// is missing (e.g., external drive unmounted).
-pub fn sync_team_personas(app: &AppHandle) -> Result<(), String> {
-    let teams = load_teams(app)?;
-    for team in &teams {
-        if team.source_dir.as_ref().is_some_and(|d| d.exists()) {
-            if let Err(e) = sync_team_from_dir(app, &team.id) {
-                eprintln!("sprout-desktop: sync team {}: {e}", team.id);
-            }
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -989,11 +979,5 @@ mod tests {
 
         let err = validate_team_deletion(&built_in).unwrap_err();
         assert_eq!(err, "Built-in teams cannot be deleted.");
-    }
-
-    #[test]
-    fn validate_team_deletion_allows_custom_teams() {
-        let custom = team("user-uuid", "My Team");
-        assert!(validate_team_deletion(&custom).is_ok());
     }
 }

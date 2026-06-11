@@ -239,6 +239,10 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     // known agent binaries that are still running.
     managed_agents::sweep_system_agent_processes(&managed_agents::current_instance_id(app), &[]);
 
+    // Dead-instance reaping: find agents belonging to Sprout instances
+    // whose desktop process is no longer running and reap them.
+    managed_agents::reap_dead_instance_agents(&managed_agents::current_instance_id(app), &[]);
+
     if changed {
         save_managed_agents(app, &records)?;
     }
@@ -246,7 +250,7 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Parse the query string of a `sprout://message?…` URL into the JSON
+/// Parse the query string of a `buzz://message?…` URL into the JSON
 /// payload emitted on `deep-link-message`. Returns `None` when a required
 /// param (`channel`, `id`) is missing or empty — mirroring the validation
 /// policy of the `connect` arm so the frontend never sees a half-formed
@@ -278,10 +282,10 @@ fn parse_message_deep_link(url: &Url) -> Option<serde_json::Value> {
     }))
 }
 
-/// Handle an incoming `sprout://` deep link URL.
+/// Handle an incoming `buzz://` deep link URL, with `sprout://` accepted as a legacy alias.
 ///
 /// Currently supports:
-/// - `sprout://connect?relay=<ws(s)://...>` — emits `deep-link-connect` to the frontend
+/// - `buzz://connect?relay=<ws(s)://...>` — emits `deep-link-connect` to the frontend
 fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
     let url = match Url::parse(url_str) {
         Ok(u) => u,
@@ -291,8 +295,8 @@ fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
         }
     };
 
-    if url.scheme() != "sprout" {
-        eprintln!("sprout-desktop: ignoring non-sprout deep link: {url_str}");
+    if url.scheme() != "sprout" && url.scheme() != "buzz" {
+        eprintln!("sprout-desktop: ignoring unsupported deep link scheme: {url_str}");
         return;
     }
 
@@ -324,7 +328,7 @@ fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
             let _ = app.emit("deep-link-connect", relay_url);
         }
         Some("message") => {
-            // `sprout://message?channel=<uuid>&id=<eventId>[&thread=<rootId>]`
+            // `buzz://message?channel=<uuid>&id=<eventId>[&thread=<rootId>]`
             //
             // Validation policy mirrors the `connect` arm: parse what we
             // need, refuse to emit anything if a required param is missing
@@ -373,7 +377,7 @@ pub fn run() {
             }
             // Forward any deep link URLs from the duplicate launch.
             for arg in &argv {
-                if arg.starts_with("sprout://") {
+                if arg.starts_with("sprout://") || arg.starts_with("buzz://") {
                     handle_deep_link_url(app, arg);
                 }
             }
@@ -628,6 +632,45 @@ pub fn run() {
                 }
             });
 
+            // Periodic sweep: reap orphaned agents from dead instances every 60s.
+            // Catches agents that escaped both the Justfile trap and boot-time
+            // reaping (e.g. a `just staging` Ctrl+C leak that only gets collected
+            // by a different instance's periodic sweep).
+            let sweep_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                use std::collections::HashSet;
+                use std::time::Duration;
+                use tauri::Manager;
+                let instance_id = managed_agents::current_instance_id(&sweep_handle);
+                let state = sweep_handle.state::<AppState>();
+                // Two-tick grace: only reap same-instance orphans seen on two
+                // consecutive sweeps. Prevents killing a legitimately-starting
+                // agent that spawned between the skip-list snapshot and the scan.
+                let mut prev_orphans: HashSet<u32> = HashSet::new();
+                loop {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    // Collect PIDs of our own live agents to avoid killing them.
+                    let skip_pids: Vec<u32> = state
+                        .managed_agent_processes
+                        .lock()
+                        .map(|runtimes| runtimes.values().map(|rt| rt.child.id()).collect())
+                        .unwrap_or_default();
+                    let prev = prev_orphans.clone();
+                    let inst = instance_id.clone();
+                    // Run the blocking syscall work off the async executor.
+                    let new_orphans = tauri::async_runtime::spawn_blocking(move || {
+                        let orphans = managed_agents::sweep_system_agent_processes_with_grace(
+                            &inst, &skip_pids, &prev,
+                        );
+                        managed_agents::reap_dead_instance_agents(&inst, &skip_pids);
+                        orphans
+                    })
+                    .await
+                    .unwrap_or_default();
+                    prev_orphans = new_orphans;
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -868,6 +911,14 @@ mod tests {
         assert_eq!(payload["channelId"], "abc");
         assert_eq!(payload["messageId"], "xyz");
         assert!(payload["threadRootId"].is_null());
+    }
+
+    #[test]
+    fn parse_message_deep_link_accepts_buzz_scheme() {
+        let url = Url::parse("buzz://message?channel=abc&id=xyz").unwrap();
+        let payload = parse_message_deep_link(&url).expect("required params present");
+        assert_eq!(payload["channelId"], "abc");
+        assert_eq!(payload["messageId"], "xyz");
     }
 
     #[test]

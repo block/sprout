@@ -227,14 +227,28 @@ test("pending Welcome channel is consumed only after it appears in the channel l
   }
 });
 
-test("Welcome ensured marker is scoped to the current identity", () => {
+test("Welcome ensured marker is scoped to the current identity and workspace", () => {
   const { restore } = installWindowSessionStorage();
   try {
-    markWelcomeChannelEnsured("pubkey-a");
+    markWelcomeChannelEnsured("pubkey-a", "wss://workspace-a.example");
 
-    assert.equal(hasEnsuredWelcomeChannel("pubkey-a"), true);
-    assert.equal(hasEnsuredWelcomeChannel("pubkey-b"), false);
-    assert.equal(hasEnsuredWelcomeChannel(null), false);
+    assert.equal(
+      hasEnsuredWelcomeChannel("pubkey-a", "wss://workspace-a.example"),
+      true,
+    );
+    assert.equal(
+      hasEnsuredWelcomeChannel("pubkey-a", "wss://workspace-b.example"),
+      false,
+    );
+    assert.equal(
+      hasEnsuredWelcomeChannel("pubkey-b", "wss://workspace-a.example"),
+      false,
+    );
+    assert.equal(hasEnsuredWelcomeChannel("pubkey-a", null), false);
+    assert.equal(
+      hasEnsuredWelcomeChannel(null, "wss://workspace-a.example"),
+      false,
+    );
   } finally {
     restore();
   }

@@ -19,8 +19,8 @@ fn configured_env_var(name: &str) -> Option<String> {
 }
 
 pub fn relay_ws_url() -> String {
-    configured_env_var("SPROUT_RELAY_URL")
-        .or_else(|| option_env!("SPROUT_DESKTOP_BUILD_RELAY_URL").map(str::to_string))
+    configured_env_var("BUZZ_RELAY_URL")
+        .or_else(|| option_env!("BUZZ_DESKTOP_BUILD_RELAY_URL").map(str::to_string))
         .unwrap_or_else(|| DEFAULT_RELAY_WS_URL.to_string())
 }
 
@@ -64,11 +64,11 @@ pub fn relay_http_base_url(relay_url: &str) -> String {
 }
 
 pub fn relay_api_base_url() -> String {
-    if let Some(base) = configured_env_var("SPROUT_RELAY_HTTP") {
+    if let Some(base) = configured_env_var("BUZZ_RELAY_HTTP") {
         return base.trim_end_matches('/').to_string();
     }
 
-    if let Some(base) = option_env!("SPROUT_DESKTOP_BUILD_RELAY_HTTP") {
+    if let Some(base) = option_env!("BUZZ_DESKTOP_BUILD_RELAY_HTTP") {
         return base.trim().trim_end_matches('/').to_string();
     }
 

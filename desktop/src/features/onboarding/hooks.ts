@@ -14,6 +14,7 @@ import {
   getWelcomeGuideAgentPubkeys,
 } from "@/features/onboarding/welcomeGuide";
 import { useProfileQuery } from "@/features/profile/hooks";
+import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import {
   createChannel,
@@ -50,9 +51,11 @@ async function initializeWelcomeChannel(
   {
     focus,
     pubkey,
+    workspaceScope,
   }: {
     focus: boolean;
     pubkey: string | null;
+    workspaceScope: string | null;
   },
 ) {
   try {
@@ -75,7 +78,7 @@ async function initializeWelcomeChannel(
     } catch (error) {
       console.warn("Failed to initialize Welcome guide.", error);
     }
-    markWelcomeChannelEnsured(pubkey);
+    markWelcomeChannelEnsured(pubkey, workspaceScope);
     if (focus) {
       rememberPendingWelcomeChannel(welcomeChannel.id);
     }
@@ -332,9 +335,11 @@ export function useFirstRunOnboardingGate({
 
 export function useAppOnboardingState(isSharedIdentity: boolean) {
   const queryClient = useQueryClient();
+  const { activeWorkspace } = useWorkspaces();
   const identityQuery = useIdentityQuery();
   const identity = identityQuery.data;
   const currentPubkey = identity?.pubkey ?? null;
+  const welcomeChannelWorkspaceScope = activeWorkspace?.relayUrl ?? null;
   const welcomeChannelInitPromisesRef = React.useRef(
     new Map<string, Promise<void>>(),
   );
@@ -352,12 +357,14 @@ export function useAppOnboardingState(isSharedIdentity: boolean) {
   const gateComplete = onboardingGate.complete;
   const requestWelcomeChannel = React.useCallback(
     (focus: boolean) => {
-      if (!currentPubkey) {
+      if (!currentPubkey || !welcomeChannelWorkspaceScope) {
         return Promise.resolve();
       }
 
-      const currentPromise =
-        welcomeChannelInitPromisesRef.current.get(currentPubkey);
+      const welcomeChannelInitKey = `${welcomeChannelWorkspaceScope}:${currentPubkey}`;
+      const currentPromise = welcomeChannelInitPromisesRef.current.get(
+        welcomeChannelInitKey,
+      );
       if (currentPromise) {
         return currentPromise;
       }
@@ -365,28 +372,35 @@ export function useAppOnboardingState(isSharedIdentity: boolean) {
       const promise = initializeWelcomeChannel(queryClient, {
         focus,
         pubkey: currentPubkey,
+        workspaceScope: welcomeChannelWorkspaceScope,
       });
-      welcomeChannelInitPromisesRef.current.set(currentPubkey, promise);
+      welcomeChannelInitPromisesRef.current.set(welcomeChannelInitKey, promise);
       void promise.finally(() => {
-        welcomeChannelInitPromisesRef.current.delete(currentPubkey);
+        welcomeChannelInitPromisesRef.current.delete(welcomeChannelInitKey);
       });
       return promise;
     },
-    [currentPubkey, queryClient],
+    [currentPubkey, queryClient, welcomeChannelWorkspaceScope],
   );
 
   React.useEffect(() => {
     if (
       onboardingGate.stage !== "ready" ||
       !currentPubkey ||
+      !welcomeChannelWorkspaceScope ||
       !readOnboardingCompletion(currentPubkey) ||
-      hasEnsuredWelcomeChannel(currentPubkey)
+      hasEnsuredWelcomeChannel(currentPubkey, welcomeChannelWorkspaceScope)
     ) {
       return;
     }
 
     void requestWelcomeChannel(false);
-  }, [currentPubkey, onboardingGate.stage, requestWelcomeChannel]);
+  }, [
+    currentPubkey,
+    onboardingGate.stage,
+    requestWelcomeChannel,
+    welcomeChannelWorkspaceScope,
+  ]);
 
   const completeAndShowWelcome = React.useCallback(() => {
     setIsCompletingWelcomeSetup(true);

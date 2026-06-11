@@ -278,7 +278,7 @@ test("a non-member cannot enable relay-mesh — membership is the gate", async (
   expect(seq).not.toContain("create_managed_agent");
 });
 
-test("saved relay-mesh agents require a fresh serve target before manual start", async ({
+test("saved relay-mesh agents restart via the backend serve-target preflight", async ({
   page,
 }) => {
   await gotoApp(page);
@@ -330,18 +330,30 @@ test("saved relay-mesh agents require a fresh serve target before manual start",
     .toContain("stop_managed_agent");
   await expect(row).toContainText("stopped");
 
-  const before = (await commands(page)).length;
+  // With a live serve target for the model, manual restart goes through:
+  // the backend preflight re-resolves the target and the agent starts.
+  await openManagedAgentActions(page, pubkey);
+  await page.getByRole("menuitem", { name: "Spawn" }).click();
+  await expect
+    .poll(async () => await commands(page))
+    .toContain("start_managed_agent");
+  await expect(row).toContainText("running");
+
+  await openManagedAgentActions(page, pubkey);
+  await page.getByRole("menuitem", { name: "Stop" }).click();
+  await expect(row).toContainText("stopped");
+
+  // Without a live serve target, the backend preflight rejects the start
+  // with an actionable error, surfaced as a toast; the agent stays stopped.
+  await setMesh(page, { models: [] });
   await openManagedAgentActions(page, pubkey);
   await page.getByRole("menuitem", { name: "Spawn" }).click();
 
   await expect(
     page
       .locator("[data-sonner-toast]")
-      .filter({ hasText: "Relay-mesh agents need a fresh serve target" }),
+      .filter({ hasText: "no live serve target is available" }),
   ).toBeVisible();
-  expect((await commands(page)).slice(before)).not.toContain(
-    "start_managed_agent",
-  );
   await expect(row).toContainText("stopped");
 
   await expect(
@@ -360,6 +372,6 @@ test("saved relay-mesh agents require a fresh serve target before manual start",
         return err instanceof Error ? err.message : String(err);
       }
     }, pubkey),
-  ).resolves.toContain("selected serve target is not persisted");
+  ).resolves.toContain("no live serve target is available");
   await expect(row).toContainText("stopped");
 });
