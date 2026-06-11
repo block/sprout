@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 
 import type {
   DesktopNotificationPermissionState,
@@ -134,137 +135,145 @@ export function NotificationSettingsCard({
           </SettingsOptionRow>
         </SettingsOptionGroup>
 
-        <SettingsOptionGroup>
-          <SettingsOptionRow>
-            <div className="min-w-0">
-              <label
-                className="text-sm font-medium"
-                htmlFor="notification-sound-switch"
-              >
-                Sound
-              </label>
-              <p className="text-sm font-normal text-muted-foreground">
-                Alert with a sound for the events below.
-              </p>
-            </div>
-            <Switch
-              checked={notificationSettings.desktopEnabled && anyAlertsOn}
-              data-testid="notifications-sound-toggle"
-              disabled={!notificationSettings.desktopEnabled}
-              id="notification-sound-switch"
-              onCheckedChange={(checked) => {
-                onSetAllSlotAlertsEnabled(checked);
-              }}
-            />
-          </SettingsOptionRow>
-        </SettingsOptionGroup>
-
-        <SettingsOptionGroup
-          className={cn(
-            "transition-opacity duration-200",
-            !notificationSettings.desktopEnabled &&
-              "pointer-events-none opacity-40",
-          )}
-        >
-          {visibleSlots.map((slot) => {
-            const comingSoon = COMING_SOON_SLOTS.has(slot);
-            const alertsOn = notificationSettings.slotAlertsEnabled[slot];
-            return (
-              <SettingsOptionRow
-                aria-disabled={comingSoon || undefined}
-                className={cn(comingSoon && "cursor-not-allowed opacity-40")}
-                key={slot}
-              >
-                <div className="min-w-0">
-                  <span className="flex items-center gap-2 text-sm font-medium">
-                    {SLOT_LABELS[slot]}
-                    {comingSoon ? (
-                      <span className="rounded-full bg-muted/70 px-2 py-0.5 text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
-                        Coming soon
-                      </span>
-                    ) : null}
-                  </span>
-                  <p className="text-sm font-normal text-muted-foreground">
-                    {SLOT_DESCRIPTIONS[slot]}
-                  </p>
-                </div>
-                <span className="flex items-center gap-3">
-                  <span
-                    className={cn(
-                      "transition-opacity duration-200",
-                      !alertsOn && "pointer-events-none opacity-40",
-                    )}
-                  >
-                    <SoundPicker
-                      disabled={comingSoon || !alertsOn}
-                      onChange={(next) => onSetSoundForSlot(slot, next)}
-                      recommended={RECOMMENDED_SOUND_BY_SLOT[slot]}
-                      value={notificationSettings.sounds[slot]}
-                    />
-                  </span>
+        <AnimatePresence initial={false} mode="popLayout">
+          {notificationSettings.desktopEnabled ? (
+            <motion.div
+              animate={{ opacity: 1 }}
+              className="flex flex-col gap-4"
+              exit={{ opacity: 0 }}
+              initial={{ opacity: 0 }}
+              key="sound-panels"
+              layout
+            >
+              <SettingsOptionGroup>
+                <SettingsOptionRow>
+                  <div className="min-w-0">
+                    <label
+                      className="text-sm font-medium"
+                      htmlFor="notification-sound-switch"
+                    >
+                      Sound
+                    </label>
+                    <p className="text-sm font-normal text-muted-foreground">
+                      Alert with a sound for the events below.
+                    </p>
+                  </div>
                   <Switch
-                    checked={alertsOn && !comingSoon}
-                    data-testid={`notifications-alerts-enabled-${slot}`}
-                    disabled={
-                      comingSoon || !notificationSettings.desktopEnabled
-                    }
-                    id={`alerts-enabled-${slot}-switch`}
+                    checked={anyAlertsOn}
+                    data-testid="notifications-sound-toggle"
+                    id="notification-sound-switch"
                     onCheckedChange={(checked) => {
-                      onSetSlotAlertsEnabled(slot, checked);
+                      onSetAllSlotAlertsEnabled(checked);
                     }}
                   />
-                </span>
-              </SettingsOptionRow>
-            );
-          })}
-        </SettingsOptionGroup>
+                </SettingsOptionRow>
+              </SettingsOptionGroup>
 
-        <div className="flex justify-center">
-          <Button
-            data-testid="notifications-toggle-coming-soon"
-            onClick={() => setShowComingSoon((current) => !current)}
-            size="sm"
-            type="button"
-            variant="secondary"
-          >
-            {showComingSoon ? (
-              <>
-                <ChevronUp className="h-3.5 w-3.5" />
-                Show less
-              </>
-            ) : (
-              <>
-                <ChevronDown className="h-3.5 w-3.5" />
-                View all
-              </>
-            )}
-          </Button>
-        </div>
+              <SettingsOptionGroup>
+                {visibleSlots.map((slot) => {
+                  const comingSoon = COMING_SOON_SLOTS.has(slot);
+                  const alertsOn = notificationSettings.slotAlertsEnabled[slot];
+                  return (
+                    <SettingsOptionRow
+                      aria-disabled={comingSoon || undefined}
+                      className={cn(
+                        comingSoon && "cursor-not-allowed opacity-40",
+                      )}
+                      key={slot}
+                    >
+                      <div className="min-w-0">
+                        <span className="flex items-center gap-2 text-sm font-medium">
+                          {SLOT_LABELS[slot]}
+                          {comingSoon ? (
+                            <span className="rounded-full bg-muted/70 px-2 py-0.5 text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
+                              Coming soon
+                            </span>
+                          ) : null}
+                        </span>
+                        <p className="text-sm font-normal text-muted-foreground">
+                          {SLOT_DESCRIPTIONS[slot]}
+                        </p>
+                      </div>
+                      <span className="flex items-center gap-3">
+                        <span
+                          className={cn(
+                            "transition-opacity duration-200",
+                            !alertsOn && "pointer-events-none opacity-40",
+                          )}
+                        >
+                          <SoundPicker
+                            disabled={comingSoon || !alertsOn}
+                            onChange={(next) => onSetSoundForSlot(slot, next)}
+                            recommended={RECOMMENDED_SOUND_BY_SLOT[slot]}
+                            value={notificationSettings.sounds[slot]}
+                          />
+                        </span>
+                        <Switch
+                          checked={alertsOn && !comingSoon}
+                          data-testid={`notifications-alerts-enabled-${slot}`}
+                          disabled={comingSoon}
+                          id={`alerts-enabled-${slot}-switch`}
+                          onCheckedChange={(checked) => {
+                            onSetSlotAlertsEnabled(slot, checked);
+                          }}
+                        />
+                      </span>
+                    </SettingsOptionRow>
+                  );
+                })}
+              </SettingsOptionGroup>
 
-        <SettingsOptionGroup>
-          <SettingsOptionRow>
-            <div className="min-w-0">
-              <label
-                className="text-sm font-medium"
-                htmlFor="home-badge-switch"
-              >
-                Home badge
-              </label>
-              <p className="text-sm font-normal text-muted-foreground">
-                Show a Home badge for mentions and needs-action items in the
-                sidebar.
-              </p>
-            </div>
-            <Switch
-              checked={notificationSettings.homeBadgeEnabled}
-              data-testid="notifications-home-badge-toggle"
-              id="home-badge-switch"
-              onCheckedChange={(checked) => {
-                onSetHomeBadgeEnabled(checked);
-              }}
-            />
-          </SettingsOptionRow>
-        </SettingsOptionGroup>
+              <div className="flex justify-center">
+                <Button
+                  data-testid="notifications-toggle-coming-soon"
+                  onClick={() => setShowComingSoon((current) => !current)}
+                  size="sm"
+                  type="button"
+                  variant="secondary"
+                >
+                  {showComingSoon ? (
+                    <>
+                      <ChevronUp className="h-3.5 w-3.5" />
+                      Show less
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown className="h-3.5 w-3.5" />
+                      View all
+                    </>
+                  )}
+                </Button>
+              </div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+
+        <motion.div layout>
+          <SettingsOptionGroup>
+            <SettingsOptionRow>
+              <div className="min-w-0">
+                <label
+                  className="text-sm font-medium"
+                  htmlFor="home-badge-switch"
+                >
+                  Home badge
+                </label>
+                <p className="text-sm font-normal text-muted-foreground">
+                  Show a Home badge for mentions and needs-action items in the
+                  sidebar.
+                </p>
+              </div>
+              <Switch
+                checked={notificationSettings.homeBadgeEnabled}
+                data-testid="notifications-home-badge-toggle"
+                id="home-badge-switch"
+                onCheckedChange={(checked) => {
+                  onSetHomeBadgeEnabled(checked);
+                }}
+              />
+            </SettingsOptionRow>
+          </SettingsOptionGroup>
+        </motion.div>
       </div>
 
       {permissionBlocked && (
