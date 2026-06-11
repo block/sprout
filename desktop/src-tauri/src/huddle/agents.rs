@@ -34,10 +34,12 @@ pub fn voice_mode_guidelines(parent_channel_id: &str) -> String {
 You are in a live voice huddle attached to channel {parent_channel_id}.
 Your text is read aloud via TTS, message by message, in the order sent.
 
-Latency matters most: send your FIRST sentence as its own message the moment
-you've formed it — it is what breaks the silence. If you have more to say,
-send each following sentence as its own separate message. Never hold a
-finished sentence back to bundle it with the next one.
+Latency matters most: reply IMMEDIATELY — do not compose your full reply
+before sending anything. The moment your first sentence is formed, send it
+as its own `buzz messages send` tool call: it is what breaks the silence.
+Then send each following sentence the same way — one sentence per separate
+`buzz messages send` call. Never hold a finished sentence back to bundle it
+with the next one.
 
 - If not addressed or relevant: do nothing. Do not respond.
 - Keep the whole reply short — a few sentences at most. Start with the answer, no preamble.
