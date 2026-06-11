@@ -509,21 +509,18 @@ async fn system_prompt_reaches_llm_system_role() {
     );
     let system_content = system_msg["content"].as_str().unwrap_or("");
 
-    // Canary must appear in the system message (proves systemPrompt was appended).
+    // Canary must appear in the system message (proves systemPrompt was used as base).
     assert!(
         system_content.contains(canary),
         "system message must contain the canary string.\nGot: {system_content}"
     );
 
-    // The agent's default prompt must appear BEFORE the canary (additive ordering).
+    // The agent's default prompt must NOT appear — it is suppressed when
+    // the harness provides a systemPrompt.
     let default_prompt = "You are buzz-agent";
-    let default_pos = system_content
-        .find(default_prompt)
-        .expect("system message must contain the agent's default prompt");
-    let canary_pos = system_content.find(canary).unwrap();
     assert!(
-        default_pos < canary_pos,
-        "default prompt must appear before canary (additive append ordering)"
+        !system_content.contains(default_prompt),
+        "system message must NOT contain the default prompt when systemPrompt is provided.\nGot: {system_content}"
     );
 
     h.shutdown().await;

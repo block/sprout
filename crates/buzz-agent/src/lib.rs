@@ -262,23 +262,23 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
         }
     }
     let effective_system_prompt: Arc<str> = {
-        let mut prompt = if app.cfg.hints_enabled {
-            let hints = hints::build_hints_section(std::path::Path::new(&p.cwd));
-            if hints.is_empty() {
-                app.cfg.system_prompt.clone()
-            } else {
-                format!("{}\n\n{}", app.cfg.system_prompt, hints)
-            }
+        let hints = if app.cfg.hints_enabled {
+            hints::build_hints_section(std::path::Path::new(&p.cwd))
         } else {
-            app.cfg.system_prompt.clone()
+            String::new()
         };
-        // Append client-provided systemPrompt (additive semantics per ACP spec).
-        if let Some(ref client_prompt) = p.system_prompt {
-            if !client_prompt.is_empty() {
-                prompt.push_str("\n\n");
-                prompt.push_str(client_prompt);
-            }
-        }
+        // When the harness provides a systemPrompt (base_prompt + persona), use
+        // it as the primary content and suppress the default. The default is only
+        // a fallback for legacy harnesses that don't send systemPrompt.
+        let base = match p.system_prompt.as_deref() {
+            Some(client_prompt) if !client_prompt.is_empty() => client_prompt.to_owned(),
+            _ => app.cfg.system_prompt.clone(),
+        };
+        let prompt = if hints.is_empty() {
+            base
+        } else {
+            format!("{base}\n\n{hints}")
+        };
         // Reject combined prompts exceeding 512KB.
         if prompt.len() > MAX_SYSTEM_PROMPT_BYTES {
             return reject(
