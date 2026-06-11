@@ -96,14 +96,18 @@ function getAudio(name: SoundName): HTMLAudioElement {
   return audio;
 }
 
-export function playNotificationSound(name: SoundName): void {
+export function playNotificationSound(
+  name: SoundName,
+): HTMLAudioElement | null {
   try {
     const audio = getAudio(name);
     audio.currentTime = 0;
     audio.play().catch(() => {
       // Best-effort — user may not have interacted with the page yet.
     });
+    return audio;
   } catch {
     // Best-effort only.
+    return null;
   }
 }

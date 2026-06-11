@@ -1,4 +1,5 @@
-import { ChevronDown, Play } from "lucide-react";
+import { useRef, useState } from "react";
+import { ChevronDown, Pause, Play } from "lucide-react";
 
 import {
   playNotificationSound,
@@ -62,6 +63,23 @@ export function SoundPicker({
   onChange: (next: SoundName) => void;
 }) {
   const items = sortedSounds(recommended);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  function togglePreview() {
+    if (isPlaying) {
+      audioRef.current?.pause();
+      setIsPlaying(false);
+      return;
+    }
+    const audio = playNotificationSound(value);
+    if (!audio) return;
+    audioRef.current = audio;
+    setIsPlaying(true);
+    const stop = () => setIsPlaying(false);
+    audio.addEventListener("ended", stop, { once: true });
+    audio.addEventListener("pause", stop, { once: true });
+  }
 
   return (
     <span className="inline-flex items-center gap-1.5">
@@ -76,7 +94,7 @@ export function SoundPicker({
           >
             <span className="truncate">{value}</span>
             <span className="flex items-center gap-1.5">
-              <Waveform className="h-4 w-9 opacity-70" name={value} />
+              <Waveform className="h-6 w-15 opacity-70" name={value} />
               <ChevronDown className="h-3 w-3 text-muted-foreground" />
             </span>
           </Button>
@@ -99,7 +117,7 @@ export function SoundPicker({
                         rec.
                       </span>
                     ) : null}
-                    <Waveform className="h-16 w-36 opacity-70" name={name} />
+                    <Waveform className="h-6 w-15 opacity-70" name={name} />
                   </span>
                 </span>
               </DropdownMenuRadioItem>
@@ -108,15 +126,19 @@ export function SoundPicker({
         </DropdownMenuContent>
       </DropdownMenu>
       <Button
-        aria-label={`Preview ${value}`}
+        aria-label={isPlaying ? `Pause ${value}` : `Preview ${value}`}
         className="h-7 w-7 rounded-full border border-border/50 bg-muted/45 p-0 text-foreground shadow-none hover:bg-muted/70"
         disabled={disabled}
-        onClick={() => playNotificationSound(value)}
+        onClick={togglePreview}
         size="sm"
         type="button"
         variant="ghost"
       >
-        <Play className="h-3 w-3" />
+        {isPlaying ? (
+          <Pause className="h-3 w-3" />
+        ) : (
+          <Play className="h-3 w-3" />
+        )}
       </Button>
     </span>
   );

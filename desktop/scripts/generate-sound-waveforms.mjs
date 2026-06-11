@@ -14,14 +14,15 @@ if (!SOUNDS_DIR) {
   process.exit(1);
 }
 
-const BARS = 16;
-const WIDTH = 144;
-const HEIGHT = 64;
-const BAR_WIDTH = 4;
-const MAX_BAR = 58; // tallest bar, leaves vertical breathing room
-const MIN_BAR = 6; // floor so quiet buckets render a short capsule
-const GAMMA = 1.35; // contrast curve: deepens valleys, keeps peaks tall
-const TAIL_FLOOR = 0.04; // windows quieter than this fraction of the loudest window are trimmed
+const BARS = 24;
+const WIDTH = 200;
+const HEIGHT = 80;
+const BAR_WIDTH = 5;
+const MAX_BAR = 76; // tallest bar, leaves vertical breathing room
+const MIN_BAR = 4; // floor so quiet buckets render a short capsule
+const GAMMA = 1.6; // contrast curve: deepens valleys, keeps peaks tall
+const DETAIL_GAIN = 1.8; // unsharp mask on bar levels: amplifies each bar's deviation from its neighborhood so peaks push higher and valleys dip lower
+const TAIL_FLOOR = 0.1; // windows quieter than this fraction of the loudest window are trimmed
 
 const mp3s = readdirSync(SOUNDS_DIR)
   .filter((f) => f.endsWith(".mp3"))
@@ -89,26 +90,44 @@ for (const mp3 of mp3s) {
     Math.min(samples.length, (lastWindow + 1) * WINDOW),
   );
 
-  // Blend bucket peak with RMS energy (peak alone flattens contrast, RMS
-  // alone crushes quiet tails), then a gamma curve to stretch the range.
+  // Sample a narrow window centered in each bar's bucket instead of
+  // max-pooling the whole bucket — max-pooling erases amplitude modulation
+  // (beats, double hits), which is what makes the shapes distinct. Then a
+  // gamma curve to stretch the range.
   const peaks = new Array(BARS).fill(0);
   const bucketSize = Math.max(1, Math.floor(trimmed.length / BARS));
+  const window = Math.max(64, Math.floor(bucketSize / 4));
   for (let i = 0; i < BARS; i++) {
-    const from = i * bucketSize;
-    const to = i === BARS - 1 ? trimmed.length : from + bucketSize;
+    const center = i * bucketSize + Math.floor(bucketSize / 2);
+    const from = Math.max(0, center - Math.floor(window / 2));
+    const to = Math.min(trimmed.length, from + window);
     let peak = 0;
-    let sumSquares = 0;
     for (let j = from; j < to; j++) {
       const a = Math.abs(trimmed[j]);
       if (a > peak) peak = a;
-      sumSquares += trimmed[j] * trimmed[j];
     }
-    const rms = Math.sqrt(sumSquares / Math.max(1, to - from));
-    peaks[i] = 0.5 * peak + 0.5 * rms;
+    peaks[i] = peak;
   }
   const maxLevel = Math.max(...peaks, 1);
   for (let i = 0; i < BARS; i++) {
     peaks[i] = (peaks[i] / maxLevel) ** GAMMA;
+  }
+
+  // Local-contrast pass: push each bar away from the average of its
+  // neighbors, then renormalize so the tallest bar still hits MAX_BAR.
+  const sharpened = peaks.map((p, i) => {
+    let sum = 0;
+    let count = 0;
+    for (let j = Math.max(0, i - 2); j <= Math.min(BARS - 1, i + 2); j++) {
+      sum += peaks[j];
+      count++;
+    }
+    const local = sum / count;
+    return Math.max(0, p + DETAIL_GAIN * (p - local));
+  });
+  const maxSharpened = Math.max(...sharpened, 0.001);
+  for (let i = 0; i < BARS; i++) {
+    peaks[i] = Math.min(1, sharpened[i] / maxSharpened);
   }
 
   const step = WIDTH / BARS;
