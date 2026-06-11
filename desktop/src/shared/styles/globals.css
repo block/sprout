@@ -854,3 +854,94 @@
     }
   }
 }
+
+/* ── Video player volume slider (shared/ui/VideoPlayer) ─────────────────
+   Styled to match the slim white-on-glass media controls: a 4px rounded
+   track whose filled portion is driven by the --video-volume-fill custom
+   property, with a small white thumb. */
+.video-volume-slider {
+  appearance: none;
+  background: transparent;
+}
+
+.video-volume-slider:focus-visible {
+  outline: none;
+}
+
+.video-volume-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    white var(--video-volume-fill, 100%),
+    rgb(255 255 255 / 0.3) var(--video-volume-fill, 100%)
+  );
+}
+
+.video-volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -4px;
+  height: 12px;
+  width: 12px;
+  border-radius: 9999px;
+  background: white;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
+}
+
+.video-volume-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: rgb(255 255 255 / 0.3);
+}
+
+.video-volume-slider::-moz-range-progress {
+  height: 4px;
+  border-radius: 9999px;
+  background: white;
+}
+
+.video-volume-slider::-moz-range-thumb {
+  border: none;
+  height: 12px;
+  width: 12px;
+  border-radius: 9999px;
+  background: white;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
+}
+
+/* ── Video review overlay theme (shared/ui/VideoPlayer) ─────────────────
+   The review dialog uses the shadcn "neutral" dark palette regardless of
+   the app theme. Applied together with `.dark` on the portal root; this
+   block is intentionally unlayered so it overrides the layered theme vars. */
+.video-review-theme {
+  --background: 0 0% 3.9%;
+  --foreground: 0 0% 98%;
+  --card: 0 0% 3.9%;
+  --card-foreground: 0 0% 98%;
+  --popover: 0 0% 3.9%;
+  --popover-foreground: 0 0% 98%;
+  --primary: 0 0% 98%;
+  --primary-foreground: 0 0% 9%;
+  --secondary: 0 0% 14.9%;
+  --secondary-foreground: 0 0% 98%;
+  --muted: 0 0% 14.9%;
+  --muted-foreground: 0 0% 63.9%;
+  --accent: 0 0% 14.9%;
+  --accent-foreground: 0 0% 98%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 0 0% 14.9%;
+  --input: 0 0% 14.9%;
+  --ring: 0 0% 83.1%;
+}
+
+/* Indeterminate sweep for shared/ui/progress.tsx */
+@keyframes progress-indeterminate {
+  from {
+    transform: translateX(-150%);
+  }
+  to {
+    transform: translateX(400%);
+  }
+}

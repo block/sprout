@@ -3,6 +3,7 @@ import { ArrowDown } from "lucide-react";
 
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
+import type { ChannelType } from "@/shared/api/types";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
@@ -17,6 +18,8 @@ import { useTimelineScrollManager } from "./useTimelineScrollManager";
 type MessageTimelineProps = {
   agentPubkeys?: ReadonlySet<string>;
   channelId?: string | null;
+  channelName?: string;
+  channelType?: ChannelType | null;
   messages: TimelineMessage[];
   directMessageIntro?: {
     avatarUrl: string | null;
@@ -44,6 +47,14 @@ type MessageTimelineProps = {
   onEdit?: (message: TimelineMessage) => void;
   onMarkUnread?: (message: TimelineMessage) => void;
   onReply?: (message: TimelineMessage) => void;
+  isSendingVideoReviewComment?: boolean;
+  onSendVideoReviewComment?: (
+    message: TimelineMessage,
+    content: string,
+    mentionPubkeys: string[],
+    mediaTags?: string[][],
+    parentEventId?: string,
+  ) => Promise<void>;
   unfollowThreadById?: (rootId: string) => void;
   onToggleReaction?: (
     message: TimelineMessage,
@@ -82,6 +93,10 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   onEdit,
   onMarkUnread,
   onReply,
+  channelName,
+  channelType,
+  isSendingVideoReviewComment = false,
+  onSendVideoReviewComment,
   onToggleReaction,
   unfollowThreadById,
   scrollContainerRef: externalScrollRef,
@@ -232,6 +247,8 @@ export const MessageTimeline = React.memo(function MessageTimeline({
               <TimelineMessageList
                 agentPubkeys={agentPubkeys}
                 channelId={channelId}
+                channelName={channelName}
+                channelType={channelType}
                 currentPubkey={currentPubkey}
                 followThreadById={followThreadById}
                 highlightedMessageId={highlightedMessageId}
@@ -242,6 +259,8 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                 onEdit={onEdit}
                 onMarkUnread={onMarkUnread}
                 onReply={onReply}
+                isSendingVideoReviewComment={isSendingVideoReviewComment}
+                onSendVideoReviewComment={onSendVideoReviewComment}
                 onToggleReaction={onToggleReaction}
                 personaLookup={personaLookup}
                 profiles={profiles}

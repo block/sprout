@@ -377,6 +377,27 @@ export function ChannelScreen({
         : undefined,
     [activeChannel, handleToggleReaction],
   );
+  const handleSendVideoReviewComment = React.useCallback(
+    async (
+      message: { id: string },
+      content: string,
+      mentionPubkeys: string[],
+      mediaTags?: string[][],
+      parentEventId?: string,
+    ) => {
+      await sendMessageMutation.mutateAsync({
+        content,
+        mediaTags,
+        mentionPubkeys,
+        parentEventId: parentEventId ?? message.id,
+      });
+    },
+    [sendMessageMutation],
+  );
+  const effectiveSendVideoReviewComment =
+    activeChannel && !activeChannel.archivedAt && activeChannel.isMember
+      ? handleSendVideoReviewComment
+      : undefined;
   const handleMarkUnread = React.useCallback(() => {
     if (!activeChannelId) return;
     markChannelUnread(activeChannelId);
@@ -599,6 +620,7 @@ export function ChannelScreen({
                   onOpenThread={handleOpenThreadAndCloseAgentSession}
                   onSelectThreadReplyTarget={handleSelectThreadReplyTarget}
                   onSendMessage={handleSendMessage}
+                  onSendVideoReviewComment={effectiveSendVideoReviewComment}
                   onSendThreadReply={handleSendThreadReply}
                   onThreadScrollTargetResolved={
                     handleThreadScrollTargetResolved

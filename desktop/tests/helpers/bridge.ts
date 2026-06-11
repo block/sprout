@@ -134,6 +134,11 @@ type MockBridgeOptions = {
     size: number;
     type: string;
     uploaded: number;
+    dim?: string;
+    blurhash?: string;
+    thumb?: string;
+    duration?: number;
+    image?: string;
     filename?: string;
   }[];
 };
