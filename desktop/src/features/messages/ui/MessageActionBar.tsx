@@ -1,6 +1,7 @@
 import {
   BellOff,
   BellRing,
+  Clock,
   Copy,
   CornerUpLeft,
   EllipsisVertical,
@@ -66,6 +67,7 @@ function MoreActionsMenu({
   onFollowThread,
   onMarkUnread,
   onOpenChange,
+  onRemindLater,
   onUnfollowThread,
   open,
   isFollowingThread,
@@ -79,6 +81,7 @@ function MoreActionsMenu({
   onFollowThread?: (message: TimelineMessage) => void;
   onMarkUnread?: (message: TimelineMessage) => void;
   onOpenChange: (open: boolean) => void;
+  onRemindLater?: (message: TimelineMessage) => void;
   onUnfollowThread?: (message: TimelineMessage) => void;
   open: boolean;
   isFollowingThread?: boolean;
@@ -181,6 +184,17 @@ function MoreActionsMenu({
             </DropdownMenuItem>
           ) : null}
 
+          {onRemindLater ? (
+            <DropdownMenuItem
+              onClick={() => {
+                onRemindLater(message);
+              }}
+            >
+              <Clock className="h-4 w-4" />
+              Remind me later
+            </DropdownMenuItem>
+          ) : null}
+
           {hasCopyActions && channelId ? (
             <DropdownMenuItem
               data-testid={`copy-message-link-${message.id}`}
@@ -265,6 +279,7 @@ export function MessageActionBar({
   onMarkUnread,
   onReactionBadgeBurstRequest,
   onReactionSelect,
+  onRemindLater,
   onReply,
   onUnfollowThread,
   reactionErrorMessage = null,
@@ -281,6 +296,7 @@ export function MessageActionBar({
   onMarkUnread?: (message: TimelineMessage) => void;
   onReactionBadgeBurstRequest?: (emoji: string) => void;
   onReactionSelect?: (emoji: string) => Promise<void>;
+  onRemindLater?: (message: TimelineMessage) => void;
   onReply?: (message: TimelineMessage) => void;
   onUnfollowThread?: (message: TimelineMessage) => void;
   reactionErrorMessage?: string | null;
@@ -298,6 +314,7 @@ export function MessageActionBar({
     Boolean(onMarkUnread) ||
     Boolean(onFollowThread) ||
     Boolean(onUnfollowThread) ||
+    Boolean(onRemindLater) ||
     !message.pending;
 
   if (!hasReplyAction && !hasReactionAction && !hasMoreMenuActions) {
@@ -418,6 +435,7 @@ export function MessageActionBar({
             onFollowThread={onFollowThread}
             onMarkUnread={onMarkUnread}
             onOpenChange={setIsDropdownOpen}
+            onRemindLater={onRemindLater}
             onUnfollowThread={onUnfollowThread}
             open={isDropdownOpen}
             isFollowingThread={isFollowingThread}

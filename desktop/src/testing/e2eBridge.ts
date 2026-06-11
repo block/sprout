@@ -11,6 +11,7 @@ import {
 } from "@/shared/api/customEmoji";
 import {
   KIND_DM_VISIBILITY,
+  KIND_EVENT_REMINDER,
   KIND_STREAM_MESSAGE_EDIT,
   KIND_SYSTEM_MESSAGE,
   KIND_USER_STATUS,
@@ -594,6 +595,7 @@ declare global {
       createdAt: number;
       slotId: string;
     }) => unknown;
+    __BUZZ_E2E_SEED_MOCK_REMINDERS__?: (reminders: RelayEvent[]) => void;
   }
 }
 
@@ -1452,6 +1454,7 @@ const mockChannels: MockChannel[] = [
 
 const mockMessages = new Map<string, RelayEvent[]>();
 const mockUserStatuses: RelayEvent[] = [];
+const mockReminderEvents: RelayEvent[] = [];
 let mockRelayMembers: RawRelayMember[] = [];
 const mockSockets = new Map<number, MockSocket>();
 let mockWebsocketSendMutexWedged = false;
@@ -5554,6 +5557,16 @@ function sendToMockSocket(args: {
       return;
     }
 
+    if (filter.kinds?.includes(KIND_EVENT_REMINDER)) {
+      const authors = filter.authors?.map((a) => a.toLowerCase());
+      for (const event of mockReminderEvents) {
+        if (authors && !authors.includes(event.pubkey.toLowerCase())) continue;
+        sendWsText(socket.handler, ["EVENT", subId, event]);
+      }
+      sendWsText(socket.handler, ["EOSE", subId]);
+      return;
+    }
+
     const channelId = filter["#h"]?.[0];
     if (!channelId) {
       sendWsText(socket.handler, ["EOSE", subId]);
@@ -5607,6 +5620,22 @@ function sendToMockSocket(args: {
     }
 
     if (event.kind === 30078) {
+      sendWsText(socket.handler, ["OK", event.id, true, ""]);
+      return;
+    }
+
+    if (event.kind === KIND_EVENT_REMINDER) {
+      // Upsert by d-tag (replaceable event)
+      const dTag = event.tags.find((t) => t[0] === "d")?.[1];
+      if (dTag) {
+        const idx = mockReminderEvents.findIndex(
+          (e) =>
+            e.pubkey.toLowerCase() === event.pubkey.toLowerCase() &&
+            e.tags.some((t) => t[0] === "d" && t[1] === dTag),
+        );
+        if (idx >= 0) mockReminderEvents.splice(idx, 1);
+      }
+      mockReminderEvents.push(event);
       sendWsText(socket.handler, ["OK", event.id, true, ""]);
       return;
     }
@@ -5768,6 +5797,12 @@ export function maybeInstallE2eTauriMocks() {
     );
     emitMockLiveEvent(GLOBAL_MOCK_SUBSCRIPTION, event);
     return event;
+  };
+  window.__BUZZ_E2E_SEED_MOCK_REMINDERS__ = (reminders) => {
+    mockReminderEvents.length = 0;
+    for (const r of reminders) {
+      mockReminderEvents.push(r);
+    }
   };
   window.__BUZZ_E2E_SET_STALL_WEBSOCKET_SENDS__ = (stall) => {
     const config = getConfig();

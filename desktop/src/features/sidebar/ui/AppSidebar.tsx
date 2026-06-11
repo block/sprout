@@ -3,6 +3,7 @@ import {
   Activity,
   ArrowDown,
   ArrowUp,
+  Bell,
   Bot,
   FolderGit2,
   Home,
@@ -95,6 +96,7 @@ type AppSidebarProps = {
     | "home"
     | "channel"
     | "agents"
+    | "reminders"
     | "workflows"
     | "pulse"
     | "projects";
@@ -135,6 +137,7 @@ type AppSidebarProps = {
   onSelectAgents: () => void;
   onSelectProjects: () => void;
   onSelectPulse: () => void;
+  onSelectReminders: () => void;
   onSelectWorkflows: () => void;
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
@@ -196,6 +199,7 @@ export function AppSidebar({
   onSelectAgents,
   onSelectProjects,
   onSelectPulse,
+  onSelectReminders,
   onSelectWorkflows,
   onSelectHome,
   onSelectChannel,
@@ -491,6 +495,18 @@ export function AppSidebar({
                 {totalAgentCount}
               </SidebarMenuBadge>
             ) : null}
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              data-testid="open-reminders-view"
+              isActive={selectedView === "reminders"}
+              onClick={onSelectReminders}
+              tooltip="Reminders"
+              type="button"
+            >
+              <Bell className="h-4 w-4" />
+              <span>Reminders</span>
+            </SidebarMenuButton>
           </SidebarMenuItem>
           <FeatureGate feature="workflows">
             <SidebarMenuItem>
