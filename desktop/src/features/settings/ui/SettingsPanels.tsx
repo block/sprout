@@ -85,6 +85,7 @@ export type SettingsPanelProps = {
   onSetJobProgressSoundEnabled: (enabled: boolean) => void;
   onSetMentionNotificationsEnabled: (enabled: boolean) => void;
   onSetNeedsActionNotificationsEnabled: (enabled: boolean) => void;
+  onSetNotifyWhileViewing: (enabled: boolean) => void;
   onSetSingleSound: (name: SoundName) => void;
   onSetSoundEnabled: (enabled: boolean) => void;
   onSetSoundForSlot: (slot: SoundSlot, name: SoundName) => void;
@@ -317,6 +318,7 @@ export function renderSettingsSection(
           onSetNeedsActionNotificationsEnabled={
             props.onSetNeedsActionNotificationsEnabled
           }
+          onSetNotifyWhileViewing={props.onSetNotifyWhileViewing}
           onSetSingleSound={props.onSetSingleSound}
           onSetSoundEnabled={props.onSetSoundEnabled}
           onSetSoundForSlot={props.onSetSoundForSlot}

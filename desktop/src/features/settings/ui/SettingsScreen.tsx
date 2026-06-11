@@ -22,6 +22,7 @@ type SettingsScreenProps = {
   onSetJobProgressSoundEnabled: (enabled: boolean) => void;
   onSetMentionNotificationsEnabled: (enabled: boolean) => void;
   onSetNeedsActionNotificationsEnabled: (enabled: boolean) => void;
+  onSetNotifyWhileViewing: (enabled: boolean) => void;
   onSetSingleSound: (name: SoundName) => void;
   onSetSoundEnabled: (enabled: boolean) => void;
   onSetSoundForSlot: (slot: SoundSlot, name: SoundName) => void;
@@ -43,6 +44,7 @@ export function SettingsScreen({
   onSetJobProgressSoundEnabled,
   onSetMentionNotificationsEnabled,
   onSetNeedsActionNotificationsEnabled,
+  onSetNotifyWhileViewing,
   onSetSingleSound,
   onSetSoundEnabled,
   onSetSoundForSlot,
@@ -66,6 +68,7 @@ export function SettingsScreen({
       onSetNeedsActionNotificationsEnabled={
         onSetNeedsActionNotificationsEnabled
       }
+      onSetNotifyWhileViewing={onSetNotifyWhileViewing}
       onSetSingleSound={onSetSingleSound}
       onSetSoundEnabled={onSetSoundEnabled}
       onSetSoundForSlot={onSetSoundForSlot}

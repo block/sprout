@@ -25,6 +25,7 @@ export function NotificationSettingsCard({
   onSetJobProgressSoundEnabled,
   onSetMentionNotificationsEnabled,
   onSetNeedsActionNotificationsEnabled,
+  onSetNotifyWhileViewing,
   onSetSingleSound,
   onSetSoundEnabled,
   onSetSoundForSlot,
@@ -39,6 +40,7 @@ export function NotificationSettingsCard({
   onSetJobProgressSoundEnabled: (enabled: boolean) => void;
   onSetMentionNotificationsEnabled: (enabled: boolean) => void;
   onSetNeedsActionNotificationsEnabled: (enabled: boolean) => void;
+  onSetNotifyWhileViewing: (enabled: boolean) => void;
   onSetSingleSound: (name: SoundName) => void;
   onSetSoundEnabled: (enabled: boolean) => void;
   onSetSoundForSlot: (slot: SoundSlot, name: SoundName) => void;
@@ -95,6 +97,29 @@ export function NotificationSettingsCard({
               id="desktop-alerts-switch"
               onCheckedChange={(checked) => {
                 void onSetDesktopNotificationsEnabled(checked);
+              }}
+            />
+          </SettingsOptionRow>
+
+          <SettingsOptionRow>
+            <div className="min-w-0">
+              <label
+                className="text-sm font-medium"
+                htmlFor="notify-while-viewing-switch"
+              >
+                Notify while viewing
+              </label>
+              <p className="text-sm font-normal text-muted-foreground">
+                Also alert for direct messages in the conversation you have
+                open.
+              </p>
+            </div>
+            <Switch
+              checked={notificationSettings.notifyWhileViewing}
+              data-testid="notifications-notify-while-viewing-toggle"
+              id="notify-while-viewing-switch"
+              onCheckedChange={(checked) => {
+                onSetNotifyWhileViewing(checked);
               }}
             />
           </SettingsOptionRow>

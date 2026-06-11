@@ -328,6 +328,7 @@ export function AppShell() {
       relayClient,
       currentPubkey: identityQuery.data?.pubkey,
       mutedChannelIds,
+      notifyForActiveChannel: notificationSettings.settings.notifyWhileViewing,
       onChannelMessage: handleChannelNotification,
       onDmMessage: handleDmNotification,
       onLiveMention: refetchHomeFeedOnLiveMention,
@@ -735,6 +736,9 @@ export function AppShell() {
                       }
                       onSetNeedsActionNotificationsEnabled={
                         notificationSettings.setNeedsActionEnabled
+                      }
+                      onSetNotifyWhileViewing={
+                        notificationSettings.setNotifyWhileViewing
                       }
                       onSetSingleSound={notificationSettings.setSingleSound}
                       onSetSoundEnabled={notificationSettings.setSoundEnabled}

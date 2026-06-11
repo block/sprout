@@ -35,6 +35,7 @@ export type NotificationSettings = {
   homeBadgeEnabled: boolean;
   mentions: boolean;
   needsAction: boolean;
+  notifyWhileViewing: boolean;
   soundEnabled: boolean;
   jobProgressSoundEnabled: boolean;
   soundMode: SoundMode;
@@ -47,6 +48,7 @@ const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   homeBadgeEnabled: true,
   mentions: true,
   needsAction: true,
+  notifyWhileViewing: false,
   soundEnabled: true,
   jobProgressSoundEnabled: false,
   soundMode: "single",
@@ -96,6 +98,10 @@ function sanitizeNotificationSettings(value: unknown): NotificationSettings {
       typeof candidate.needsAction === "boolean"
         ? candidate.needsAction
         : DEFAULT_NOTIFICATION_SETTINGS.needsAction,
+    notifyWhileViewing:
+      typeof candidate.notifyWhileViewing === "boolean"
+        ? candidate.notifyWhileViewing
+        : DEFAULT_NOTIFICATION_SETTINGS.notifyWhileViewing,
     soundEnabled:
       typeof candidate.soundEnabled === "boolean"
         ? candidate.soundEnabled
@@ -279,6 +285,13 @@ export function useNotificationSettings(pubkey?: string) {
     }));
   }, []);
 
+  const setNotifyWhileViewing = React.useCallback((enabled: boolean) => {
+    setSettings((current) => ({
+      ...current,
+      notifyWhileViewing: enabled,
+    }));
+  }, []);
+
   const setSoundEnabled = React.useCallback((enabled: boolean) => {
     setSettings((current) => ({
       ...current,
@@ -326,6 +339,7 @@ export function useNotificationSettings(pubkey?: string) {
     setJobProgressSoundEnabled,
     setMentionsEnabled,
     setNeedsActionEnabled,
+    setNotifyWhileViewing,
     setSingleSound,
     setSoundEnabled,
     setSoundForSlot,
