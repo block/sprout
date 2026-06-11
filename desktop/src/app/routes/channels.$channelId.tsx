@@ -4,22 +4,26 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
 
 type ChannelRouteSearch = {
+  agentSession?: string;
   messageId?: string;
+  profile?: string;
+  thread?: string;
   threadRootId?: string;
 };
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
 
 function validateChannelSearch(
   search: Record<string, unknown>,
 ): ChannelRouteSearch {
   return {
-    messageId:
-      typeof search.messageId === "string" && search.messageId.length > 0
-        ? search.messageId
-        : undefined,
-    threadRootId:
-      typeof search.threadRootId === "string" && search.threadRootId.length > 0
-        ? search.threadRootId
-        : undefined,
+    agentSession: nonEmptyString(search.agentSession),
+    messageId: nonEmptyString(search.messageId),
+    profile: nonEmptyString(search.profile),
+    thread: nonEmptyString(search.thread),
+    threadRootId: nonEmptyString(search.threadRootId),
   };
 }
 

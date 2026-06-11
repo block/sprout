@@ -59,6 +59,7 @@ import {
   useChannelActivityTyping,
 } from "./useChannelActivityTyping";
 import { useChannelAgentSessions } from "./useChannelAgentSessions";
+import { useChannelPanelHistoryState } from "./useChannelPanelHistoryState";
 import { useChannelProfilePanel } from "./useChannelProfilePanel";
 import { useChannelRouteTarget } from "./useChannelRouteTarget";
 import type { ChannelScreenProps } from "./ChannelScreen.types";
@@ -86,9 +87,14 @@ export function ChannelScreen({
     isNotifiedForThread,
     setTopbarSearchHidden,
   } = useAppShell();
-  const [profilePanelPubkey, setProfilePanelPubkey] = React.useState<
-    string | null
-  >(null);
+  const {
+    openAgentSessionPubkey,
+    openThreadHeadId,
+    profilePanelPubkey,
+    setOpenAgentSessionPubkey,
+    setOpenThreadHeadId,
+    setProfilePanelPubkey,
+  } = useChannelPanelHistoryState();
   const {
     canReset: canResetThreadPanelWidth,
     onResetWidth: handleThreadPanelWidthReset,
@@ -98,9 +104,6 @@ export function ChannelScreen({
   const [isMembersSidebarOpen, setIsMembersSidebarOpen] = React.useState(false);
   const [channelContentRef, channelContentWidthPx] =
     useElementWidth<HTMLDivElement>();
-  const [openThreadHeadId, setOpenThreadHeadId] = React.useState<string | null>(
-    null,
-  );
   const isNotifiedForCurrentThread =
     openThreadHeadId != null ? isNotifiedForThread(openThreadHeadId) : false;
   const [expandedThreadReplyIds, setExpandedThreadReplyIds] = React.useState(
@@ -383,7 +386,6 @@ export function ChannelScreen({
     channelAgentSessionAgents,
     closeAgentSession: handleCloseAgentSession,
     openAgentSession: handleOpenAgentSession,
-    openAgentSessionPubkey,
     openThreadAndCloseAgentSession: handleOpenThreadAndCloseAgentSession,
   } = useChannelAgentSessions({
     activeChannel,
@@ -391,7 +393,9 @@ export function ChannelScreen({
     channelMembers,
     handleOpenThread,
     managedAgents: activeChannelAgentSessionAgents,
+    openAgentSessionPubkey,
     setExpandedThreadReplyIds,
+    setOpenAgentSessionPubkey,
     setOpenThreadHeadId,
     setProfilePanelPubkey,
     setThreadReplyTargetId,
@@ -411,17 +415,17 @@ export function ChannelScreen({
     activeChannel.channelType !== "forum" &&
     (messagesQuery.isPending ||
       (messagesQuery.isFetching && resolvedMessages.length === 0));
+  // Panel identity (thread/profile/agent session) lives in the URL search
+  // params, so channel changes and back/forward traversals carry it per
+  // history entry — only the local ephemeral targets need resetting here.
   const resetComposerTargets = React.useCallback(
     (_channelId: string | null) => {
-      setOpenThreadHeadId(null);
       setExpandedThreadReplyIds(new Set());
       setThreadScrollTargetId(null);
       setThreadReplyTargetId(null);
-      handleCloseAgentSession();
       setEditTargetId(null);
-      setProfilePanelPubkey(null);
     },
-    [handleCloseAgentSession],
+    [],
   );
   const handleThreadScrollTargetResolved = React.useCallback(() => {
     setThreadScrollTargetId(null);
@@ -444,7 +448,12 @@ export function ChannelScreen({
   });
   React.useEffect(() => {
     if (openThreadHeadId && !openThreadHeadMessage) {
-      setOpenThreadHeadId(null);
+      // While the timeline is still loading (e.g. a reload restoring the
+      // thread param from the URL) the head simply hasn't arrived yet.
+      if (isTimelineLoading) {
+        return;
+      }
+      setOpenThreadHeadId(null, { replace: true });
       setExpandedThreadReplyIds(new Set());
       setThreadScrollTargetId(null);
       return;
@@ -464,8 +473,10 @@ export function ChannelScreen({
   }, [
     editTargetId,
     editTargetMessage,
+    isTimelineLoading,
     openThreadHeadId,
     openThreadHeadMessage,
+    setOpenThreadHeadId,
     threadReplyTargetId,
     threadReplyTargetMessage,
   ]);

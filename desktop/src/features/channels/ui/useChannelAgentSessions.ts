@@ -8,6 +8,7 @@ import type {
   RelayAgent,
 } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
+import type { PanelValueSetter } from "./useChannelPanelHistoryState";
 
 export type ChannelAgentSessionAgent = Pick<
   ManagedAgent,
@@ -25,7 +26,9 @@ type UseChannelAgentSessionsOptions = {
   channelMembers?: ChannelMember[];
   handleOpenThread: (message: TimelineMessage) => void;
   managedAgents: ChannelAgentSessionAgent[];
+  openAgentSessionPubkey: string | null;
   setExpandedThreadReplyIds: (value: Set<string>) => void;
+  setOpenAgentSessionPubkey: PanelValueSetter;
   setOpenThreadHeadId: (value: string | null) => void;
   setProfilePanelPubkey: (value: string | null) => void;
   setThreadReplyTargetId: (value: string | null) => void;
@@ -153,16 +156,14 @@ export function useChannelAgentSessions({
   channelMembers,
   handleOpenThread,
   managedAgents,
+  openAgentSessionPubkey,
   setExpandedThreadReplyIds,
+  setOpenAgentSessionPubkey,
   setOpenThreadHeadId,
   setProfilePanelPubkey,
   setThreadReplyTargetId,
   setThreadScrollTargetId,
 }: UseChannelAgentSessionsOptions) {
-  const [openAgentSessionPubkey, setOpenAgentSessionPubkey] = React.useState<
-    string | null
-  >(null);
-
   const channelAgentSessionAgents = React.useMemo(
     () =>
       getChannelAgentSessionAgents({
@@ -176,7 +177,7 @@ export function useChannelAgentSessions({
 
   const closeAgentSession = React.useCallback(() => {
     setOpenAgentSessionPubkey(null);
-  }, []);
+  }, [setOpenAgentSessionPubkey]);
 
   const openAgentSession = React.useCallback(
     (pubkey: string) => {
@@ -189,6 +190,7 @@ export function useChannelAgentSessions({
     },
     [
       setExpandedThreadReplyIds,
+      setOpenAgentSessionPubkey,
       setOpenThreadHeadId,
       setProfilePanelPubkey,
       setThreadReplyTargetId,
@@ -196,9 +198,12 @@ export function useChannelAgentSessions({
     ],
   );
 
-  const selectAgentSession = React.useCallback((pubkey: string) => {
-    setOpenAgentSessionPubkey(pubkey);
-  }, []);
+  const selectAgentSession = React.useCallback(
+    (pubkey: string) => {
+      setOpenAgentSessionPubkey(pubkey);
+    },
+    [setOpenAgentSessionPubkey],
+  );
 
   const openThreadAndCloseAgentSession = React.useCallback(
     (message: TimelineMessage) => {
@@ -206,21 +211,29 @@ export function useChannelAgentSessions({
       setProfilePanelPubkey(null);
       handleOpenThread(message);
     },
-    [handleOpenThread, setProfilePanelPubkey],
+    [handleOpenThread, setOpenAgentSessionPubkey, setProfilePanelPubkey],
   );
 
   React.useEffect(() => {
+    // An empty agent list usually means the queries behind it are still
+    // loading (e.g. a reload restoring the agentSession URL param), so only
+    // auto-close once we have agents to check against.
     if (
       openAgentSessionPubkey &&
+      channelAgentSessionAgents.length > 0 &&
       !channelAgentSessionAgents.some(
         (agent) =>
           normalizePubkey(agent.pubkey) ===
           normalizePubkey(openAgentSessionPubkey),
       )
     ) {
-      setOpenAgentSessionPubkey(null);
+      setOpenAgentSessionPubkey(null, { replace: true });
     }
-  }, [channelAgentSessionAgents, openAgentSessionPubkey]);
+  }, [
+    channelAgentSessionAgents,
+    openAgentSessionPubkey,
+    setOpenAgentSessionPubkey,
+  ]);
 
   return {
     channelAgentSessionAgents,
