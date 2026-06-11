@@ -3,6 +3,7 @@ import { useSidebar } from "@/shared/ui/sidebar";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { cn } from "@/shared/lib/cn";
 import { channelChrome } from "@/shared/layout/chromeLayout";
+import { TopChromeInsetHeader } from "@/shared/layout/TopChromeInsetHeader";
 
 type ViewLoadingFallbackKind =
   | "agents"
@@ -21,25 +22,26 @@ function LoadingHeaderSkeleton() {
   const { state: sidebarState } = useSidebar();
 
   return (
-    <header
-      className={cn(
-        "flex min-h-[44px] min-w-0 cursor-default select-none items-center gap-[10px] bg-background/70 py-[6px] pl-[16px] pr-[8px] shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl transition-[padding] duration-200 ease-linear supports-[backdrop-filter]:bg-background/55 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)] sm:pl-[24px] sm:pr-[12px]",
-        sidebarState === "collapsed" && "md:pl-[160px]",
-      )}
-      data-tauri-drag-region
-    >
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-[6px]">
-          <Skeleton className="h-3.5 w-3.5 rounded-xs" />
-          <Skeleton className="h-4 w-28 max-w-[50vw]" />
+    <TopChromeInsetHeader data-tauri-drag-region>
+      <header
+        className={cn(
+          "flex min-h-[44px] min-w-0 cursor-default select-none items-center gap-[10px] py-[6px] pl-[16px] pr-[8px] transition-[padding] duration-200 ease-linear sm:pl-[24px] sm:pr-[12px]",
+          sidebarState === "collapsed" && "md:pl-[160px]",
+        )}
+      >
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-[6px]">
+            <Skeleton className="h-3.5 w-3.5 rounded-xs" />
+            <Skeleton className="h-4 w-28 max-w-[50vw]" />
+          </div>
+          <Skeleton className="mt-2 h-4 w-full max-w-2xl" />
         </div>
-        <Skeleton className="mt-2 h-4 w-full max-w-2xl" />
-      </div>
-      <div className="hidden shrink-0 items-center gap-2 sm:flex">
-        <Skeleton className="h-6 w-6 rounded-lg" />
-        <Skeleton className="h-6 w-6 rounded-lg" />
-      </div>
-    </header>
+        <div className="hidden shrink-0 items-center gap-2 sm:flex">
+          <Skeleton className="h-6 w-6 rounded-lg" />
+          <Skeleton className="h-6 w-6 rounded-lg" />
+        </div>
+      </header>
+    </TopChromeInsetHeader>
   );
 }
 
@@ -177,14 +179,16 @@ function CardListLoadingBody() {
   );
 }
 
-function ChannelLoadingBody() {
+function ChannelLoadingBody({ hasHeader = false }: { hasHeader?: boolean }) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <div className="flex-1 overflow-y-auto px-4 pt-1 sm:px-6">
         <div
           className={cn(
             "flex w-full flex-col gap-4",
-            channelChrome.contentPadding,
+            // The real channel header overlays content, so reserve its
+            // measured height — unless an in-flow header skeleton is above.
+            hasHeader ? "pt-3" : channelChrome.contentPadding,
           )}
         >
           <MessageRowsSkeleton />
@@ -205,12 +209,12 @@ function ChannelLoadingBody() {
   );
 }
 
-function ForumLoadingBody() {
+function ForumLoadingBody({ hasHeader = false }: { hasHeader?: boolean }) {
   return (
     <div
       className={cn(
         "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
-        channelChrome.contentPadding,
+        !hasHeader && channelChrome.contentPadding,
       )}
     >
       <div className="border-b border-border/60 p-4">
@@ -252,9 +256,13 @@ export function ViewLoadingFallback({
       {kind === "agents" ? <AgentsLoadingBody /> : null}
       {kind === "workflows" ? <CardListLoadingBody /> : null}
       {kind === "projects" ? <CardListLoadingBody /> : null}
-      {kind === "channel" ? <ChannelLoadingBody /> : null}
-      {kind === "forum" ? <ForumLoadingBody /> : null}
-      {kind === "pulse" ? <ChannelLoadingBody /> : null}
+      {kind === "channel" ? (
+        <ChannelLoadingBody hasHeader={includeHeader} />
+      ) : null}
+      {kind === "forum" ? <ForumLoadingBody hasHeader={includeHeader} /> : null}
+      {kind === "pulse" ? (
+        <ChannelLoadingBody hasHeader={includeHeader} />
+      ) : null}
     </div>
   );
 }
