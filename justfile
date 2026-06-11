@@ -534,9 +534,9 @@ release *ARGS:
       CHANGELOG.md
     RELEASE_MSG="chore(release): release version ${VERSION}"
     if [[ "$(git log -1 --format='%s' 2>/dev/null)" == "$RELEASE_MSG" ]]; then
-        git commit --amend --no-edit
+        git commit --amend --no-edit -s
     else
-        git commit -m "$RELEASE_MSG"
+        git commit -s -m "$RELEASE_MSG"
     fi
     # Push and open PR
     git push --force-with-lease -u origin "$BRANCH"
