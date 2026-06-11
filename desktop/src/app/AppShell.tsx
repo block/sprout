@@ -37,7 +37,10 @@ import {
   setDesktopAppBadge,
   type DesktopNotificationTarget,
 } from "@/features/notifications/lib/desktop";
-import { playNotificationSound } from "@/features/notifications/lib/sound";
+import {
+  playNotificationSound,
+  resolveSlotSound,
+} from "@/features/notifications/lib/sound";
 import { PreventSleepProvider } from "@/features/agents/usePreventSleep";
 import {
   usePresenceSession,
@@ -264,7 +267,11 @@ export function AppShell() {
         },
       }).then((didSend) => {
         if (!didSend) return;
-        if (notificationSettings.settings.soundEnabled) playNotificationSound();
+        if (notificationSettings.settings.soundEnabled) {
+          playNotificationSound(
+            resolveSlotSound(notificationSettings.settings, "dm"),
+          );
+        }
         void requestDockBounce();
       });
     },
@@ -720,13 +727,19 @@ export function AppShell() {
                       onSetHomeBadgeEnabled={
                         notificationSettings.setHomeBadgeEnabled
                       }
+                      onSetJobProgressSoundEnabled={
+                        notificationSettings.setJobProgressSoundEnabled
+                      }
                       onSetMentionNotificationsEnabled={
                         notificationSettings.setMentionsEnabled
                       }
                       onSetNeedsActionNotificationsEnabled={
                         notificationSettings.setNeedsActionEnabled
                       }
+                      onSetSingleSound={notificationSettings.setSingleSound}
                       onSetSoundEnabled={notificationSettings.setSoundEnabled}
+                      onSetSoundForSlot={notificationSettings.setSoundForSlot}
+                      onSetSoundMode={notificationSettings.setSoundMode}
                       section={settingsSection}
                     />
                   </React.Suspense>

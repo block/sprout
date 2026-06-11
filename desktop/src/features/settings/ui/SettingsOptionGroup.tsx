@@ -9,7 +9,7 @@ export function SettingsOptionGroup({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-xl border border-border/70 bg-background/70 shadow-xs divide-y divide-border/55",
+        "overflow-hidden rounded-2xl bg-muted/20",
         className,
       )}
       {...props}

@@ -23,6 +23,11 @@ import type {
   DesktopNotificationPermissionState,
   NotificationSettings,
 } from "@/features/notifications/hooks";
+import type {
+  SoundMode,
+  SoundName,
+  SoundSlot,
+} from "@/features/notifications/lib/sound";
 import { RelayMembersSettingsCard } from "@/features/relay-members/ui/RelayMembersSettingsCard";
 import { CustomEmojiSettingsCard } from "@/features/custom-emoji/ui/CustomEmojiSettingsCard";
 import { cn } from "@/shared/lib/cn";
@@ -77,9 +82,13 @@ export type SettingsPanelProps = {
   notificationSettings: NotificationSettings;
   onSetDesktopNotificationsEnabled: (enabled: boolean) => Promise<boolean>;
   onSetHomeBadgeEnabled: (enabled: boolean) => void;
+  onSetJobProgressSoundEnabled: (enabled: boolean) => void;
   onSetMentionNotificationsEnabled: (enabled: boolean) => void;
   onSetNeedsActionNotificationsEnabled: (enabled: boolean) => void;
+  onSetSingleSound: (name: SoundName) => void;
   onSetSoundEnabled: (enabled: boolean) => void;
+  onSetSoundForSlot: (slot: SoundSlot, name: SoundName) => void;
+  onSetSoundMode: (mode: SoundMode) => void;
 };
 
 export const settingsSections: SettingsSectionDescriptor[] = [
@@ -301,13 +310,17 @@ export function renderSettingsSection(
             props.onSetDesktopNotificationsEnabled
           }
           onSetHomeBadgeEnabled={props.onSetHomeBadgeEnabled}
+          onSetJobProgressSoundEnabled={props.onSetJobProgressSoundEnabled}
           onSetMentionNotificationsEnabled={
             props.onSetMentionNotificationsEnabled
           }
           onSetNeedsActionNotificationsEnabled={
             props.onSetNeedsActionNotificationsEnabled
           }
+          onSetSingleSound={props.onSetSingleSound}
           onSetSoundEnabled={props.onSetSoundEnabled}
+          onSetSoundForSlot={props.onSetSoundForSlot}
+          onSetSoundMode={props.onSetSoundMode}
         />
       );
     case "experimental":

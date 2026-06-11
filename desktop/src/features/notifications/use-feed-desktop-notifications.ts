@@ -18,7 +18,11 @@ import {
   requestDesktopNotificationAccess,
   sendDesktopNotification,
 } from "./lib/desktop";
-import { playNotificationSound } from "./lib/sound";
+import {
+  playNotificationSound,
+  resolveSlotSound,
+  slotForFeedKind,
+} from "./lib/sound";
 import type { NotificationSettings } from "./hooks";
 
 const HOME_FEED_SEEN_STORAGE_KEY = "sprout-home-feed-seen.v1";
@@ -118,7 +122,10 @@ export function useFeedDesktopNotifications(
       });
 
       if (didSend && settings.soundEnabled) {
-        playNotificationSound();
+        const slot = slotForFeedKind(item.kind, item.category);
+        if (slot !== "job_progress" || settings.jobProgressSoundEnabled) {
+          playNotificationSound(resolveSlotSound(settings, slot));
+        }
       }
     },
   );

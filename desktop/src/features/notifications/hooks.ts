@@ -10,6 +10,16 @@ import {
   type DesktopNotificationPermissionState,
 } from "./lib/desktop";
 import {
+  RECOMMENDED_SINGLE_SOUND,
+  RECOMMENDED_SOUND_BY_SLOT,
+  SOUND_MODES,
+  SOUND_NAMES,
+  SOUND_SLOTS,
+  type SoundMode,
+  type SoundName,
+  type SoundSlot,
+} from "./lib/sound";
+import {
   readStoredSeenFeedIds,
   useFeedDesktopNotifications,
   writeStoredSeenFeedIds,
@@ -26,6 +36,10 @@ export type NotificationSettings = {
   mentions: boolean;
   needsAction: boolean;
   soundEnabled: boolean;
+  jobProgressSoundEnabled: boolean;
+  soundMode: SoundMode;
+  singleSound: SoundName;
+  sounds: Record<SoundSlot, SoundName>;
 };
 
 const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
@@ -34,7 +48,26 @@ const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   mentions: true,
   needsAction: true,
   soundEnabled: true,
+  jobProgressSoundEnabled: false,
+  soundMode: "single",
+  singleSound: RECOMMENDED_SINGLE_SOUND,
+  sounds: { ...RECOMMENDED_SOUND_BY_SLOT },
 };
+
+const SOUND_NAME_SET = new Set<SoundName>(SOUND_NAMES);
+
+function sanitizeSoundsMap(value: unknown): Record<SoundSlot, SoundName> {
+  const result = { ...RECOMMENDED_SOUND_BY_SLOT };
+  if (!value || typeof value !== "object") return result;
+  const candidate = value as Partial<Record<SoundSlot, unknown>>;
+  for (const slot of SOUND_SLOTS) {
+    const picked = candidate[slot];
+    if (typeof picked === "string" && SOUND_NAME_SET.has(picked as SoundName)) {
+      result[slot] = picked as SoundName;
+    }
+  }
+  return result;
+}
 
 function notificationSettingsStorageKey(pubkey: string) {
   return `${NOTIFICATION_SETTINGS_STORAGE_KEY}:${pubkey}`;
@@ -67,6 +100,19 @@ function sanitizeNotificationSettings(value: unknown): NotificationSettings {
       typeof candidate.soundEnabled === "boolean"
         ? candidate.soundEnabled
         : DEFAULT_NOTIFICATION_SETTINGS.soundEnabled,
+    jobProgressSoundEnabled:
+      typeof candidate.jobProgressSoundEnabled === "boolean"
+        ? candidate.jobProgressSoundEnabled
+        : DEFAULT_NOTIFICATION_SETTINGS.jobProgressSoundEnabled,
+    soundMode: SOUND_MODES.includes(candidate.soundMode as SoundMode)
+      ? (candidate.soundMode as SoundMode)
+      : DEFAULT_NOTIFICATION_SETTINGS.soundMode,
+    singleSound:
+      typeof candidate.singleSound === "string" &&
+      SOUND_NAME_SET.has(candidate.singleSound as SoundName)
+        ? (candidate.singleSound as SoundName)
+        : DEFAULT_NOTIFICATION_SETTINGS.singleSound,
+    sounds: sanitizeSoundsMap(candidate.sounds),
   };
 }
 
@@ -240,15 +286,50 @@ export function useNotificationSettings(pubkey?: string) {
     }));
   }, []);
 
+  const setJobProgressSoundEnabled = React.useCallback((enabled: boolean) => {
+    setSettings((current) => ({
+      ...current,
+      jobProgressSoundEnabled: enabled,
+    }));
+  }, []);
+
+  const setSoundMode = React.useCallback((mode: SoundMode) => {
+    setSettings((current) => ({
+      ...current,
+      soundMode: mode,
+    }));
+  }, []);
+
+  const setSingleSound = React.useCallback((name: SoundName) => {
+    setSettings((current) => ({
+      ...current,
+      singleSound: name,
+    }));
+  }, []);
+
+  const setSoundForSlot = React.useCallback(
+    (slot: SoundSlot, name: SoundName) => {
+      setSettings((current) => ({
+        ...current,
+        sounds: { ...current.sounds, [slot]: name },
+      }));
+    },
+    [],
+  );
+
   return {
     errorMessage,
     isUpdatingDesktopEnabled,
     permission,
     setDesktopEnabled,
     setHomeBadgeEnabled,
+    setJobProgressSoundEnabled,
     setMentionsEnabled,
     setNeedsActionEnabled,
+    setSingleSound,
     setSoundEnabled,
+    setSoundForSlot,
+    setSoundMode,
     settings,
   };
 }
