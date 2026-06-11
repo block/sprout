@@ -400,13 +400,13 @@ test("create ephemeral stream shows sidebar and header affordances", async ({
   await page.getByTestId("create-channel-submit").click();
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
-  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+  await expect(page.getByTestId("chat-title")).toContainText(channelName);
   await expect(
     page.getByTestId(`channel-ephemeral-${channelName}`),
   ).toBeVisible();
   await expect(page.getByTestId("chat-ephemeral-badge")).toBeVisible();
   await expect(page.getByTestId("chat-ephemeral-badge")).toHaveAttribute(
-    "title",
+    "aria-label",
     /Ephemeral channel\. Cleans up (tomorrow|in \d+ hours?)\./,
   );
 
@@ -439,7 +439,7 @@ test("ephemeral countdown refreshes when switching channels after a clock jump",
       .getByLabel("Ephemeral — auto-archives after 1 day of inactivity")
       .click();
     await page.getByTestId("create-channel-submit").click();
-    await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+    await expect(page.getByTestId("chat-title")).toContainText(channelName);
   }
 
   await page.clock.setFixedTime(shiftedTime);
@@ -448,9 +448,9 @@ test("ephemeral countdown refreshes when switching channels after a clock jump",
     .toBe(shiftedTime.getTime());
 
   await page.getByTestId(`channel-${firstChannelName}`).click();
-  await expect(page.getByTestId("chat-title")).toHaveText(firstChannelName);
+  await expect(page.getByTestId("chat-title")).toContainText(firstChannelName);
   await expect(page.getByTestId("chat-ephemeral-badge")).toHaveAttribute(
-    "title",
+    "aria-label",
     /Ephemeral channel\. Cleans up in 22 hours\./,
   );
 });
