@@ -258,7 +258,7 @@ async fn init_session(h: &mut Harness) -> String {
     )
     .await;
     let r = h.recv().await;
-    assert_eq!(r["result"]["protocolVersion"], 1);
+    assert_eq!(r["result"]["protocolVersion"], 2);
     assert_eq!(r["result"]["agentInfo"]["name"], "buzz-agent");
     h.send("session/new", json!({"cwd":"/tmp","mcpServers":[]}))
         .await;
@@ -432,7 +432,7 @@ async fn session_new_rejects_oversized_system_prompt() {
     )
     .await;
     let r = h.recv().await;
-    assert_eq!(r["result"]["protocolVersion"], 1);
+    assert_eq!(r["result"]["protocolVersion"], 2);
 
     // 600KB payload — exceeds the 512KB limit.
     let big_prompt = "x".repeat(600 * 1024);
@@ -470,7 +470,7 @@ async fn system_prompt_reaches_llm_system_role() {
     )
     .await;
     let r = h.recv().await;
-    assert_eq!(r["result"]["protocolVersion"], 1);
+    assert_eq!(r["result"]["protocolVersion"], 2);
 
     // session/new with systemPrompt containing the canary.
     let sn_id = h

@@ -271,7 +271,7 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
         // it as the primary content and suppress the default. The default is only
         // a fallback for legacy harnesses that don't send systemPrompt.
         let base = match p.system_prompt.as_deref() {
-            Some(client_prompt) if !client_prompt.is_empty() => client_prompt.to_owned(),
+            Some(client_prompt) if !client_prompt.trim().is_empty() => client_prompt.to_owned(),
             _ => app.cfg.system_prompt.clone(),
         };
         let prompt = if hints.is_empty() {
@@ -293,7 +293,7 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
             )
             .await;
         }
-        Arc::from(prompt.as_str())
+        Arc::from(prompt)
     };
     let mcp = match McpRegistry::spawn_all(&app.cfg, &p.mcp_servers, &p.cwd).await {
         Ok(m) => Arc::new(m),

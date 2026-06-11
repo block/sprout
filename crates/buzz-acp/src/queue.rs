@@ -1013,18 +1013,28 @@ pub struct FormatPromptArgs<'a> {
     pub channel_info: Option<&'a PromptChannelInfo>,
     pub conversation_context: Option<&'a ConversationContext>,
     pub profile_lookup: Option<&'a PromptProfileLookup>,
+    /// When true, base_prompt and system_prompt are delivered via the system
+    /// role (session/new) and omitted from the user message. When false
+    /// (legacy agents), they are injected as `[Base]` and `[System]` sections.
+    pub has_system_prompt_support: bool,
+    /// Base prompt content for legacy agents (protocol_version < 2).
+    pub base_prompt: Option<&'a str>,
+    /// System prompt content for legacy agents (protocol_version < 2).
+    pub system_prompt: Option<&'a str>,
 }
 
 /// Format a [`FlushBatch`] into a prompt string for the agent.
 ///
 /// Produces a stable prompt with these sections (in order):
-/// 0. `[Agent Memory — core]` — if agent core memory is set
-/// 1. `[Context]` — scope, channel name, and contextual hints for the agent
-/// 2. `[Thread Context]` or `[Conversation Context]` — if fetched
-/// 3. `[Event]` / `[Buzz events]` — the triggering event(s)
+/// 0. `[Base]` — base prompt (only for legacy agents without systemPrompt support)
+/// 1. `[System]` — system prompt (only for legacy agents without systemPrompt support)
+/// 2. `[Agent Memory — core]` — if agent core memory is set
+/// 3. `[Context]` — scope, channel name, and contextual hints for the agent
+/// 4. `[Thread Context]` or `[Conversation Context]` — if fetched
+/// 5. `[Event]` / `[Buzz events]` — the triggering event(s)
 ///
-/// Note: `base_prompt` and `system_prompt` are delivered via the system role
-/// in `session/new` and are NOT included in this user message.
+/// For agents with `protocol_version >= 2`, base_prompt and system_prompt are
+/// delivered via the system role in `session/new` and omitted from this message.
 pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> String {
     // Scope is always derived from the LAST event in the batch — that's the
     // one the agent is responding to. Thread/DM context is supplementary info
@@ -1045,10 +1055,19 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> String 
 
     let mut sections: Vec<String> = Vec::with_capacity(7);
 
-    // NOTE: base_prompt and system_prompt are no longer emitted here — they are
-    // delivered via the system role in session/new (see create_session_and_apply_model).
+    // For legacy agents (protocol_version < 2), inject base_prompt and
+    // system_prompt as user-message sections. Modern agents receive these
+    // via the system role in session/new.
+    if !args.has_system_prompt_support {
+        if let Some(bp) = args.base_prompt {
+            sections.push(format!("[Base]\n{}", bp.trim_end()));
+        }
+        if let Some(sp) = args.system_prompt {
+            sections.push(format!("[System]\n{sp}"));
+        }
+    }
 
-    // 1b. NIP-AE agent core memory (rendered by `engram_fetch::build_core_section`).
+    // NIP-AE agent core memory (rendered by `engram_fetch::build_core_section`).
     // agent_core is always in user messages because it is resolved per-channel
     // after session creation. A future session/update mechanism could move it
     // to the system role.
@@ -1561,6 +1580,101 @@ mod tests {
         let prompt = format_prompt(&batch, &FormatPromptArgs::default());
         assert!(!prompt.contains("[Base]"));
         assert!(!prompt.contains("[System]"));
+        assert!(prompt.starts_with("[Context]"));
+    }
+
+    // ── Test 11d: legacy agents receive [Base]/[System] in user message ───────
+
+    #[test]
+    fn test_format_prompt_legacy_agent_emits_base_and_system() {
+        let ch = Uuid::new_v4();
+        let event = make_event("hello");
+
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+        };
+
+        let core = "[Agent Memory — core]\nremember this";
+        let prompt = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                has_system_prompt_support: false,
+                base_prompt: Some("test base prompt"),
+                system_prompt: Some("test system prompt"),
+                agent_core: Some(core),
+                ..Default::default()
+            },
+        );
+
+        // Both sections must be present
+        assert!(
+            prompt.contains("[Base]\ntest base prompt"),
+            "missing [Base] section"
+        );
+        assert!(
+            prompt.contains("[System]\ntest system prompt"),
+            "missing [System] section"
+        );
+
+        // [Base] and [System] must appear BEFORE [Agent Memory] and [Context]
+        let base_pos = prompt.find("[Base]").unwrap();
+        let system_pos = prompt.find("[System]").unwrap();
+        let core_pos = prompt.find("[Agent Memory").unwrap();
+        let context_pos = prompt.find("[Context]").unwrap();
+
+        assert!(base_pos < system_pos, "[Base] should come before [System]");
+        assert!(
+            system_pos < core_pos,
+            "[System] should come before [Agent Memory]"
+        );
+        assert!(
+            core_pos < context_pos,
+            "[Agent Memory] should come before [Context]"
+        );
+    }
+
+    // ── Test 11e: modern agents suppress [Base]/[System] from user message ────
+
+    #[test]
+    fn test_format_prompt_modern_agent_suppresses_base_and_system() {
+        let ch = Uuid::new_v4();
+        let event = make_event("hello");
+
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+        };
+
+        let prompt = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                has_system_prompt_support: true,
+                base_prompt: Some("test base prompt"),
+                system_prompt: Some("test system prompt"),
+                ..Default::default()
+            },
+        );
+
+        // Neither section should appear — they are delivered via session/new
+        assert!(
+            !prompt.contains("[Base]"),
+            "[Base] should be suppressed for modern agents"
+        );
+        assert!(
+            !prompt.contains("[System]"),
+            "[System] should be suppressed for modern agents"
+        );
         assert!(prompt.starts_with("[Context]"));
     }
 

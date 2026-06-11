@@ -185,7 +185,7 @@ async fn handshake(h: &mut Harness) -> String {
         )
         .await;
     let init = h.recv_for_id(init_id).await;
-    assert_eq!(init["result"]["protocolVersion"], 1);
+    assert_eq!(init["result"]["protocolVersion"], 2);
     assert_eq!(init["result"]["agentInfo"]["name"], "buzz-agent");
     assert_eq!(
         init["result"]["agentCapabilities"]["promptCapabilities"]["image"],
@@ -296,7 +296,7 @@ async fn test_initialize_version_check() {
         )
         .await;
     let resp = h.recv_for_id(id).await;
-    assert_eq!(resp["result"]["protocolVersion"], 1);
+    assert_eq!(resp["result"]["protocolVersion"], 2);
 
     let id2 = h
         .send(
@@ -305,7 +305,7 @@ async fn test_initialize_version_check() {
         )
         .await;
     let ok = h.recv_for_id(id2).await;
-    assert_eq!(ok["result"]["protocolVersion"], 1);
+    assert_eq!(ok["result"]["protocolVersion"], 2);
 
     h.shutdown().await;
 }
@@ -371,7 +371,7 @@ async fn test_malformed_json_rpc() {
         )
         .await;
     let ok = h.recv_for_id(init_id).await;
-    assert_eq!(ok["result"]["protocolVersion"], 1);
+    assert_eq!(ok["result"]["protocolVersion"], 2);
 
     let bad_id = h.send("nonsense/method", json!({})).await;
     let v = h.recv_for_id(bad_id).await;

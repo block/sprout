@@ -695,7 +695,7 @@ fn any_respawn_in_flight(crash_history: &[SlotCircuit]) -> bool {
 /// Result of a background respawn task.
 struct RespawnResult {
     index: usize,
-    result: Result<AcpClient>,
+    result: Result<(AcpClient, u32)>,
 }
 
 /// RAII guard that ensures a `RespawnResult` is sent even if the task panics.
@@ -719,7 +719,7 @@ impl RespawnGuard {
     /// Send the result and disarm the guard. Uses `try_send` (sync) so there
     /// is no await boundary between marking `sent` and actually enqueueing —
     /// cancellation cannot slip between the two.
-    fn send(mut self, result: Result<AcpClient>) {
+    fn send(mut self, result: Result<(AcpClient, u32)>) {
         // Invariant: try_send succeeds because the channel capacity equals the
         // slot count, and respawn_in_flight guarantees at most one outstanding
         // result per slot. If this ever fails, the channel sizing or the
@@ -839,6 +839,8 @@ async fn tokio_main() -> Result<()> {
                 match tokio::time::timeout(Duration::from_secs(60), acp.initialize()).await {
                     Ok(Ok(init_result)) => {
                         tracing::info!(agent = i, "agent initialized: {init_result}");
+                        let protocol_version =
+                            init_result["protocolVersion"].as_u64().unwrap_or(1) as u32;
                         acp.observe(
                             "agent_initialized",
                             serde_json::json!({
@@ -852,6 +854,7 @@ async fn tokio_main() -> Result<()> {
                             state: SessionState::default(),
                             model_capabilities: None,
                             desired_model: config.model.clone(),
+                            protocol_version,
                         }));
                     }
                     Ok(Err(e)) => {
@@ -1279,13 +1282,14 @@ async fn tokio_main() -> Result<()> {
         while let Ok(rr) = respawn_rx.try_recv() {
             crash_history[rr.index].respawn_in_flight = false;
             match rr.result {
-                Ok(acp) => {
+                Ok((acp, protocol_version)) => {
                     let agent = OwnedAgent {
                         index: rr.index,
                         acp,
                         state: SessionState::default(),
                         model_capabilities: None,
                         desired_model: config.model.clone(),
+                        protocol_version,
                     };
                     pool.return_agent(agent);
                     tracing::info!(agent = rr.index, "respawn complete");
@@ -1832,7 +1836,7 @@ async fn tokio_main() -> Result<()> {
     // Drain any respawn results that completed before the abort. Explicitly
     // shut down returned agents instead of relying on AcpClient::Drop.
     while let Ok(rr) = respawn_rx.try_recv() {
-        if let Ok(mut acp) = rr.result {
+        if let Ok((mut acp, _)) = rr.result {
             acp.shutdown().await;
             tracing::debug!(agent = rr.index, "reaped respawned agent on shutdown");
         }
@@ -2465,7 +2469,7 @@ async fn spawn_and_init(
     extra_env: &[(String, String)],
     agent_index: usize,
     observer: Option<observer::ObserverHandle>,
-) -> Result<AcpClient> {
+) -> Result<(AcpClient, u32)> {
     let mut acp = AcpClient::spawn(command, args, extra_env)
         .await
         .map_err(|e| anyhow::anyhow!("failed to spawn agent: {e}"))?;
@@ -2474,6 +2478,7 @@ async fn spawn_and_init(
     match acp.initialize().await {
         Ok(init_result) => {
             tracing::info!("agent initialized: {init_result}");
+            let protocol_version = init_result["protocolVersion"].as_u64().unwrap_or(1) as u32;
             acp.observe(
                 "agent_initialized",
                 serde_json::json!({
@@ -2481,7 +2486,7 @@ async fn spawn_and_init(
                     "initializeResult": init_result,
                 }),
             );
-            Ok(acp)
+            Ok((acp, protocol_version))
         }
         Err(e) => {
             // Explicitly shut down the spawned child to prevent zombie/leak.

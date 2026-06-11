@@ -128,6 +128,9 @@ pub struct OwnedAgent {
     pub model_capabilities: Option<AgentModelCapabilities>,
     /// Desired model ID (from `Config.model`). Applied after every `session_new_full()`.
     pub desired_model: Option<String>,
+    /// Protocol version reported by the agent in its initialize response.
+    /// Agents declaring >= 2 support `systemPrompt` in session/new.
+    pub protocol_version: u32,
 }
 
 /// Pool of agents with take-and-return ownership semantics.
@@ -401,15 +404,18 @@ async fn create_session_and_apply_model(
     ctx: &PromptContext,
 ) -> Result<String, AcpError> {
     // Combine base_prompt + system_prompt into a single systemPrompt value
-    // for the session/new request. Agents that support the field will use it
-    // for the system role; others ignore unknown fields per JSON-RPC.
-    let combined_system_prompt: Option<String> =
+    // for the session/new request. Only sent when the agent declares protocol
+    // version >= 2 (supports systemPrompt); legacy agents ignore it.
+    let combined_system_prompt: Option<String> = if agent.protocol_version >= 2 {
         match (ctx.base_prompt, ctx.system_prompt.as_deref()) {
             (Some(bp), Some(sp)) => Some(format!("{}\n\n{sp}", bp.trim_end())),
             (Some(bp), None) => Some(bp.trim_end().to_string()),
             (None, Some(sp)) => Some(sp.to_string()),
             (None, None) => None,
-        };
+        }
+    } else {
+        None
+    };
 
     let resp = agent
         .acp
@@ -826,8 +832,9 @@ pub async fn run_prompt_task(
                 target: "pool::session",
                 "sending initial_message to session {session_id} for channel {cid}"
             );
-            // base_prompt is delivered via system role in session/new — no need
-            // to prepend it to the user message.
+            // For agents with systemPrompt support (protocol_version >= 2),
+            // base_prompt is delivered via the system role in session/new.
+            // Legacy agents receive it via [Base] in the user message instead.
             let init_msg = initial_msg.to_string();
             let init_result = agent
                 .acp
@@ -984,7 +991,9 @@ pub async fn run_prompt_task(
                 channel_info: channel_info.as_ref(),
                 conversation_context: conversation_context.as_ref(),
                 profile_lookup: profile_lookup.as_ref(),
-                ..Default::default()
+                has_system_prompt_support: agent.protocol_version >= 2,
+                base_prompt: ctx.base_prompt,
+                system_prompt: ctx.system_prompt.as_deref(),
             },
         )
     } else {
