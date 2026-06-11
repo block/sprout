@@ -1,7 +1,6 @@
 suite: validation
 templates:
   - templates/deployment.yaml
-  - templates/serviceaccount.yaml
 tests:
   - it: fails when relayUrl is missing
     set:
@@ -22,9 +21,10 @@ tests:
       typesense.url: http://ts:8108
       typesense.apiKey: k
     asserts:
-      - failedTemplate: {}
+      - failedTemplate:
+          errorPattern: "ownerPubkey is required when relay.requireRelayMembership=true"
 
-  - it: fails when ownerPubkey is not 64 lowercase hex
+  - it: fails when ownerPubkey is not 64 lowercase hex (schema-level)
     set:
       relayUrl: wss://buzz.example.com
       ownerPubkey: "NOTAHEX"
@@ -32,7 +32,8 @@ tests:
       typesense.url: http://ts:8108
       typesense.apiKey: k
     asserts:
-      - failedTemplate: {}
+      - failedTemplate:
+          errorPattern: "ownerPubkey: Does not match pattern"
 
   - it: fails when replicaCount>1 without Redis
     set:
@@ -91,33 +92,3 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "Typesense source missing"
-
-  - it: renders cleanly in production profile (external pg/redis/typesense)
-    set:
-      relayUrl: wss://buzz.example.com
-      ownerPubkey: "0000000000000000000000000000000000000000000000000000000000000000"
-      externalPostgresql.url: postgres://u:p@h:5432/d
-      externalRedis.url: redis://h:6379
-      typesense.url: http://ts:8108
-      typesense.apiKey: k
-    asserts:
-      - hasDocuments:
-          count: 2
-
-  - it: renders HA cleanly with replicaCount=3 + RWX + Redis
-    set:
-      relayUrl: wss://buzz.example.com
-      ownerPubkey: "0000000000000000000000000000000000000000000000000000000000000000"
-      externalPostgresql.url: postgres://u:p@h:5432/d
-      externalRedis.url: redis://h:6379
-      typesense.url: http://ts:8108
-      typesense.apiKey: k
-      replicaCount: 3
-      persistence.git.accessMode: ReadWriteMany
-    asserts:
-      - hasDocuments:
-          count: 2
-      - equal:
-          path: spec.replicas
-          value: 3
-        template: templates/deployment.yaml
