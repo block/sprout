@@ -1,16 +1,17 @@
-use nostr::EventId;
-use tauri::State;
+use nostr::{Event, EventId, Keys};
+use tauri::{AppHandle, State};
 
 use crate::{
     app_state::AppState,
     events,
+    managed_agents::{find_managed_agent_mut, load_managed_agents},
     models::{
         FeedItemInfo, FeedMeta, FeedResponse, FeedSections, ForumMessageInfo, ForumPostsResponse,
         ForumThreadReplyInfo, ForumThreadResponse, SearchResponse, SendChannelMessageResponse,
         ThreadSummary,
     },
     nostr_convert,
-    relay::{query_relay, submit_event},
+    relay::{query_relay, submit_event, submit_event_with_keys},
 };
 
 // ── Reads (pure-nostr) ──────────────────────────────────────────────────────
@@ -346,6 +347,141 @@ pub async fn send_channel_message(
         root_event_id: resolved_root,
         parent_event_id,
         depth,
+        created_at: chrono::Utc::now().timestamp(),
+    })
+}
+
+fn event_has_client_marker(event: &Event, marker: &str) -> bool {
+    event.tags.iter().any(|tag| {
+        let parts = tag.as_slice();
+        parts.len() >= 2 && parts[0] == "client" && parts[1] == marker
+    })
+}
+
+async fn find_managed_agent_channel_message_by_marker(
+    state: &AppState,
+    agent_pubkey: &str,
+    channel_id: &str,
+    marker: &str,
+) -> Result<Option<Event>, String> {
+    let mut until: Option<u64> = None;
+
+    for _ in 0..10 {
+        let mut filter = serde_json::json!({
+            "authors": [agent_pubkey],
+            "kinds": [sprout_core::kind::KIND_STREAM_MESSAGE],
+            "#h": [channel_id],
+            "limit": 500,
+        });
+        if let Some(until) = until {
+            filter["until"] = serde_json::json!(until);
+        }
+
+        let events = query_relay(state, &[filter]).await?;
+        if let Some(existing) = events
+            .iter()
+            .find(|event| event_has_client_marker(event, marker))
+        {
+            return Ok(Some(existing.clone()));
+        }
+
+        if events.len() < 500 {
+            break;
+        }
+        until = events
+            .iter()
+            .map(|event| event.created_at.as_secs())
+            .min()
+            .map(|timestamp| timestamp.saturating_sub(1));
+        if until.is_none() {
+            break;
+        }
+    }
+
+    Ok(None)
+}
+
+#[tauri::command]
+pub async fn send_managed_agent_channel_message(
+    agent_pubkey: String,
+    channel_id: String,
+    content: String,
+    marker: Option<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<SendChannelMessageResponse, String> {
+    let channel_uuid = uuid::Uuid::parse_str(&channel_id)
+        .map_err(|_| format!("invalid channel UUID: {channel_id}"))?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Err("message content is required".into());
+    }
+    let marker = marker
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let requested_pubkey = agent_pubkey.trim().to_ascii_lowercase();
+
+    let record = {
+        let _store_guard = state
+            .managed_agents_store_lock
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let mut records = load_managed_agents(&app)?;
+        find_managed_agent_mut(&mut records, &requested_pubkey)?.clone()
+    };
+
+    let keys = Keys::parse(record.private_key_nsec.trim())
+        .map_err(|error| format!("failed to parse managed agent key: {error}"))?;
+    let key_pubkey = keys.public_key().to_hex();
+    if key_pubkey != record.pubkey.to_ascii_lowercase() {
+        return Err(format!(
+            "managed agent key does not match stored pubkey {}",
+            record.pubkey
+        ));
+    }
+
+    if let Some(marker) = marker.as_deref() {
+        if let Some(existing) = find_managed_agent_channel_message_by_marker(
+            &state,
+            &record.pubkey,
+            &channel_id,
+            marker,
+        )
+        .await?
+        {
+            return Ok(SendChannelMessageResponse {
+                event_id: existing.id.to_hex(),
+                parent_event_id: None,
+                root_event_id: None,
+                depth: 0,
+                created_at: existing.created_at.as_secs() as i64,
+            });
+        }
+    }
+
+    let client_tags = marker
+        .as_deref()
+        .map(|marker| vec![vec!["client".to_string(), marker.to_string()]])
+        .unwrap_or_default();
+    let builder = events::build_message_with_client_tags(
+        channel_uuid,
+        trimmed,
+        None,
+        &[],
+        &[],
+        &[],
+        &[],
+        &client_tags,
+    )?;
+    let result = submit_event_with_keys(builder, &state, &keys, record.auth_tag.as_deref()).await?;
+
+    Ok(SendChannelMessageResponse {
+        event_id: result.event_id,
+        parent_event_id: None,
+        root_event_id: None,
+        depth: 0,
         created_at: chrono::Utc::now().timestamp(),
     })
 }

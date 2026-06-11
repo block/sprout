@@ -1,5 +1,14 @@
 import * as React from "react";
-import { Hash, LogIn } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import {
+  Bot,
+  Check,
+  Hash,
+  LogIn,
+  Plus,
+  Sparkles,
+  UserPlus,
+} from "lucide-react";
 
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { MessageThreadPanel } from "@/features/messages/ui/MessageThreadPanel";
@@ -15,6 +24,7 @@ import {
   BotActivityComposerAction,
   type BotActivityAgent,
 } from "@/features/channels/ui/BotActivityBar";
+import { isEphemeralChannel } from "@/features/channels/lib/ephemeralChannel";
 import type { ChannelAgentSessionAgent } from "@/features/channels/ui/useChannelAgentSessions";
 import { Button } from "@/shared/ui/button";
 import type { useChannelFind } from "@/features/search/useChannelFind";
@@ -24,7 +34,10 @@ import {
   resolveUserLabel,
   type UserProfileLookup,
 } from "@/features/profile/lib/identity";
+import { isWelcomeChannel } from "@/features/onboarding/welcome";
+import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import type { Channel } from "@/shared/api/types";
+import { cn } from "@/shared/lib/cn";
 
 type ChannelPaneProps = {
   activeChannel: Channel | null;
@@ -53,6 +66,8 @@ type ChannelPaneProps = {
   onCancelThreadReply: () => void;
   onCloseAgentSession: () => void;
   onCloseProfilePanel: () => void;
+  onAddAgent?: () => void;
+  onCreateChannel?: () => void;
   onCloseThread: () => void;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
@@ -62,6 +77,7 @@ type ChannelPaneProps = {
   onJoinChannel?: () => Promise<void>;
   onOpenAgentSession: (pubkey: string) => void;
   onOpenDm?: (pubkeys: string[]) => void;
+  onOpenMembers?: () => void;
   onOpenProfilePanel: (pubkey: string) => void;
   onOpenThread: (message: TimelineMessage) => void;
   onResetThreadPanelWidth: () => void;
@@ -108,6 +124,337 @@ type ChannelPaneProps = {
   isFollowingThreadById?: (rootId: string) => boolean;
 };
 
+const WELCOME_PERSONA_NAMES = ["Kit", "Scout", "Solo"] as const;
+const WELCOME_PERSONA_ROTATION_MS = 3200;
+const WELCOME_PERSONA_EASE = [0.22, 1, 0.36, 1] as const;
+const WELCOME_PERSONA_EXIT_EASE = [0.64, 0, 0.78, 0] as const;
+const WELCOME_PERSONA_ENTER_DURATION_SECONDS = 0.648;
+const WELCOME_PERSONA_EXIT_DURATION_SECONDS = 0.432;
+const WELCOME_PERSONA_ENTER_STAGGER_SECONDS = 0.018;
+const WELCOME_PERSONA_EXIT_STAGGER_SECONDS = 0.011;
+const WELCOME_PERSONA_Y_OFFSET_PX = 9;
+const WELCOME_PERSONA_BLUR_PX = 6;
+const WELCOME_COMPOSER_BANNER_CONTENT_EXIT_DURATION_SECONDS = 0.18;
+const WELCOME_COMPOSER_BANNER_CONTENT_Y_OFFSET_PX = 4;
+const WELCOME_COMPOSER_BANNER_SUCCESS_ENTER_DURATION_SECONDS = 0.32;
+const WELCOME_COMPOSER_BANNER_SUCCESS_COPY_DELAY_SECONDS = 0.06;
+const WELCOME_COMPOSER_BANNER_SUCCESS_Y_OFFSET_PX = 6;
+const WELCOME_COMPOSER_BANNER_DISMISS_DURATION_SECONDS = 0.25;
+const WELCOME_COMPOSER_BANNER_DISMISS_BLUR_PX = 3;
+const WELCOME_COMPOSER_BANNER_HIDE_BUFFER_MS = 50;
+const WELCOME_COMPOSER_BANNER_DISMISS_Y_OFFSET_PX = 48;
+const WELCOME_COMPOSER_BANNER_SUCCESS_SETTLE_MS = Math.round(
+  (WELCOME_COMPOSER_BANNER_CONTENT_EXIT_DURATION_SECONDS +
+    WELCOME_COMPOSER_BANNER_SUCCESS_COPY_DELAY_SECONDS +
+    WELCOME_COMPOSER_BANNER_SUCCESS_ENTER_DURATION_SECONDS) *
+    1000,
+);
+
+type WelcomeComposerBannerState =
+  | "prompt"
+  | "complete"
+  | "dismissing"
+  | "hidden";
+
+const welcomePersonaPhraseVariants = {
+  animate: {
+    transition: {
+      staggerChildren: WELCOME_PERSONA_ENTER_STAGGER_SECONDS,
+    },
+  },
+  exit: {
+    transition: {
+      staggerChildren: WELCOME_PERSONA_EXIT_STAGGER_SECONDS,
+    },
+  },
+  initial: {},
+};
+
+const welcomePersonaCharacterVariants = {
+  animate: {
+    filter: "blur(0px)",
+    opacity: 1,
+    transition: {
+      duration: WELCOME_PERSONA_ENTER_DURATION_SECONDS,
+      ease: WELCOME_PERSONA_EASE,
+    },
+    y: 0,
+  },
+  exit: {
+    filter: `blur(${WELCOME_PERSONA_BLUR_PX}px)`,
+    opacity: 0,
+    transition: {
+      duration: WELCOME_PERSONA_EXIT_DURATION_SECONDS,
+      ease: WELCOME_PERSONA_EXIT_EASE,
+    },
+    y: -WELCOME_PERSONA_Y_OFFSET_PX,
+  },
+  initial: {
+    filter: `blur(${WELCOME_PERSONA_BLUR_PX}px)`,
+    opacity: 0,
+    y: WELCOME_PERSONA_Y_OFFSET_PX,
+  },
+};
+
+const welcomeComposerBannerContentVariants = {
+  animate: {
+    opacity: 1,
+    transition: {
+      duration: WELCOME_COMPOSER_BANNER_CONTENT_EXIT_DURATION_SECONDS,
+      ease: WELCOME_PERSONA_EASE,
+    },
+    y: 0,
+  },
+  exit: {
+    opacity: 0,
+    transition: {
+      duration: WELCOME_COMPOSER_BANNER_CONTENT_EXIT_DURATION_SECONDS,
+      ease: WELCOME_PERSONA_EXIT_EASE,
+    },
+    y: -WELCOME_COMPOSER_BANNER_CONTENT_Y_OFFSET_PX,
+  },
+  initial: {
+    opacity: 0,
+    y: WELCOME_COMPOSER_BANNER_CONTENT_Y_OFFSET_PX,
+  },
+};
+
+const welcomeComposerBannerSuccessIconVariants = {
+  animate: {
+    opacity: 1,
+    rotate: 0,
+    scale: 1,
+    transition: {
+      duration: WELCOME_COMPOSER_BANNER_SUCCESS_ENTER_DURATION_SECONDS,
+      ease: WELCOME_PERSONA_EASE,
+    },
+    y: 0,
+  },
+  initial: {
+    opacity: 0,
+    rotate: -8,
+    scale: 0.72,
+    y: WELCOME_COMPOSER_BANNER_SUCCESS_Y_OFFSET_PX,
+  },
+};
+
+const welcomeComposerBannerSuccessCopyVariants = {
+  animate: {
+    opacity: 1,
+    transition: {
+      delay: WELCOME_COMPOSER_BANNER_SUCCESS_COPY_DELAY_SECONDS,
+      duration: WELCOME_COMPOSER_BANNER_SUCCESS_ENTER_DURATION_SECONDS,
+      ease: WELCOME_PERSONA_EASE,
+    },
+    y: 0,
+  },
+  initial: {
+    opacity: 0,
+    y: WELCOME_COMPOSER_BANNER_SUCCESS_Y_OFFSET_PX,
+  },
+};
+
+function getWelcomeMentionCharacters(mention: string) {
+  const characterCounts = new Map<string, number>();
+
+  return [...mention].map((character) => {
+    const occurrence = characterCounts.get(character) ?? 0;
+    characterCounts.set(character, occurrence + 1);
+
+    return {
+      character,
+      key: `${character}-${occurrence}`,
+    };
+  });
+}
+
+function getWelcomePersonaEnterTotalSeconds(characterCount: number) {
+  return (
+    WELCOME_PERSONA_ENTER_DURATION_SECONDS +
+    Math.max(0, characterCount - 1) * WELCOME_PERSONA_ENTER_STAGGER_SECONDS
+  );
+}
+
+function WelcomeComposerPersonaMention() {
+  const shouldReduceMotion = useReducedMotion();
+  const [personaIndex, setPersonaIndex] = React.useState(0);
+  const activePersonaName = WELCOME_PERSONA_NAMES[personaIndex];
+  const activeMention = `@${activePersonaName}`;
+  const activeMentionCharacters = React.useMemo(
+    () => getWelcomeMentionCharacters(activeMention),
+    [activeMention],
+  );
+  const widthAnimationDurationSeconds = getWelcomePersonaEnterTotalSeconds(
+    activeMentionCharacters.length,
+  );
+  const measureRef = React.useRef<HTMLSpanElement>(null);
+  const pendingMentionWidthRef = React.useRef<number | null>(null);
+  const [mentionWidth, setMentionWidth] = React.useState<number | null>(null);
+
+  React.useEffect(() => {
+    if (shouldReduceMotion) {
+      setPersonaIndex(0);
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setPersonaIndex(
+        (currentIndex) => (currentIndex + 1) % WELCOME_PERSONA_NAMES.length,
+      );
+    }, WELCOME_PERSONA_ROTATION_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [shouldReduceMotion]);
+
+  React.useLayoutEffect(() => {
+    if (shouldReduceMotion || activeMention.length === 0) {
+      return;
+    }
+
+    const width = measureRef.current?.getBoundingClientRect().width;
+    if (typeof width === "number" && Number.isFinite(width)) {
+      if (mentionWidth === null) {
+        setMentionWidth(width);
+      } else {
+        pendingMentionWidthRef.current = width;
+      }
+    }
+  }, [activeMention, mentionWidth, shouldReduceMotion]);
+
+  const handlePersonaExitComplete = React.useCallback(() => {
+    const nextWidth = pendingMentionWidthRef.current;
+    if (nextWidth === null) {
+      return;
+    }
+
+    pendingMentionWidthRef.current = null;
+    setMentionWidth(nextWidth);
+  }, []);
+
+  if (shouldReduceMotion) {
+    return (
+      <span
+        className="font-medium text-foreground"
+        data-animation-target="per-character"
+        data-active-persona={activePersonaName}
+        data-persona-options={WELCOME_PERSONA_NAMES.join(",")}
+        data-testid="welcome-composer-persona-mention"
+      >
+        {activeMention}
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className="relative inline-block overflow-visible whitespace-nowrap align-baseline font-medium leading-[inherit] text-foreground motion-safe:transition-[width] motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+      data-animation-target="per-character"
+      data-active-persona={activePersonaName}
+      data-persona-options={WELCOME_PERSONA_NAMES.join(",")}
+      data-testid="welcome-composer-persona-mention"
+      data-width-animation-duration-ms={Math.round(
+        widthAnimationDurationSeconds * 1000,
+      )}
+      style={{
+        transitionDuration: `${widthAnimationDurationSeconds}s`,
+        ...(mentionWidth === null ? {} : { width: mentionWidth }),
+      }}
+    >
+      <span className="sr-only">@Kit, @Scout, or @Solo</span>
+      <span
+        aria-hidden
+        className="pointer-events-none invisible inline-block whitespace-nowrap leading-[inherit]"
+        ref={measureRef}
+      >
+        {activeMention}
+      </span>
+      <AnimatePresence
+        initial={false}
+        mode="wait"
+        onExitComplete={handlePersonaExitComplete}
+      >
+        <motion.span
+          aria-hidden
+          animate="animate"
+          className="absolute inset-x-0 top-0 inline-block whitespace-nowrap leading-[inherit] [transform-style:preserve-3d]"
+          exit="exit"
+          initial="initial"
+          key={activeMention}
+          variants={welcomePersonaPhraseVariants}
+        >
+          {activeMentionCharacters.map(({ character, key }) => (
+            <motion.span
+              className="inline-block whitespace-pre [backface-visibility:hidden] [transform-origin:50%_55%] will-change-[transform,opacity,filter]"
+              data-testid="welcome-composer-persona-character"
+              key={`${activeMention}-${key}`}
+              variants={welcomePersonaCharacterVariants}
+            >
+              {character}
+            </motion.span>
+          ))}
+        </motion.span>
+      </AnimatePresence>
+    </span>
+  );
+}
+
+function getChannelIntroKind(channel: Channel): string {
+  const isPrivate = channel.visibility === "private";
+  const isEphemeral = isEphemeralChannel(channel);
+
+  if (isPrivate && isEphemeral) {
+    return "private ephemeral channel";
+  }
+  if (isPrivate) {
+    return "private channel";
+  }
+  if (isEphemeral) {
+    return "ephemeral channel";
+  }
+  return "regular channel";
+}
+
+function getChannelIntroDescription(channel: Channel): string | null {
+  return (
+    channel.topic?.trim() ||
+    channel.purpose?.trim() ||
+    channel.description.trim() ||
+    null
+  );
+}
+
+function isWelcomeSetupSystemMessage(message: TimelineMessage) {
+  if (message.kind !== KIND_SYSTEM_MESSAGE) {
+    return false;
+  }
+
+  try {
+    const payload = JSON.parse(message.body) as { type?: string };
+    return (
+      payload.type === "channel_created" || payload.type === "member_joined"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function containsWelcomePersonaMention(content: string) {
+  const normalizedContent = content.toLowerCase();
+
+  return WELCOME_PERSONA_NAMES.some((personaName) =>
+    normalizedContent.includes(`@${personaName.toLowerCase()}`),
+  );
+}
+
+function mentionsKnownAgent(
+  mentionPubkeys: string[],
+  knownAgentPubkeys: ReadonlySet<string>,
+) {
+  return mentionPubkeys.some((pubkey) =>
+    knownAgentPubkeys.has(pubkey.toLowerCase()),
+  );
+}
+
 export const ChannelPane = React.memo(function ChannelPane({
   activeChannel,
   agentPubkeys,
@@ -133,6 +480,8 @@ export const ChannelPane = React.memo(function ChannelPane({
   onCancelThreadReply,
   onCloseAgentSession,
   onCloseProfilePanel,
+  onAddAgent,
+  onCreateChannel,
   onCloseThread,
   onDelete,
   onEdit,
@@ -143,6 +492,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   onJoinChannel,
   onOpenAgentSession,
   onOpenDm,
+  onOpenMembers,
   onOpenProfilePanel,
   onOpenThread,
   onResetThreadPanelWidth,
@@ -171,17 +521,61 @@ export const ChannelPane = React.memo(function ChannelPane({
 }: ChannelPaneProps) {
   const timelineScrollRef = React.useRef<HTMLDivElement>(null);
   const composerWrapperRef = React.useRef<HTMLDivElement>(null);
+  const completedWelcomeBannerChannelIdsRef = React.useRef(new Set<string>());
+  const welcomeComposerDismissTimerRef = React.useRef<number | null>(null);
+  const welcomeComposerHideTimerRef = React.useRef<number | null>(null);
+  const [welcomeComposerBannerState, setWelcomeComposerBannerState] =
+    React.useState<WelcomeComposerBannerState>("prompt");
   const isNonMemberView =
     activeChannel !== null &&
     !activeChannel.isMember &&
     activeChannel.visibility === "open" &&
     !activeChannel.archivedAt;
   const hasMainComposerOverlay = !isNonMemberView;
+  const activeChannelId = activeChannel?.id ?? null;
+  const isActiveWelcomeChannel =
+    activeChannel !== null && isWelcomeChannel(activeChannel);
   useComposerHeightPadding(
     timelineScrollRef,
     composerWrapperRef,
     `${isSinglePanelView}:${hasMainComposerOverlay}`,
   );
+
+  const clearWelcomeComposerDismissTimer = React.useCallback(() => {
+    if (welcomeComposerDismissTimerRef.current !== null) {
+      window.clearTimeout(welcomeComposerDismissTimerRef.current);
+      welcomeComposerDismissTimerRef.current = null;
+    }
+
+    if (welcomeComposerHideTimerRef.current !== null) {
+      window.clearTimeout(welcomeComposerHideTimerRef.current);
+      welcomeComposerHideTimerRef.current = null;
+    }
+  }, []);
+
+  React.useEffect(
+    () => () => clearWelcomeComposerDismissTimer(),
+    [clearWelcomeComposerDismissTimer],
+  );
+
+  React.useEffect(() => {
+    clearWelcomeComposerDismissTimer();
+
+    if (
+      activeChannelId &&
+      isActiveWelcomeChannel &&
+      completedWelcomeBannerChannelIdsRef.current.has(activeChannelId)
+    ) {
+      setWelcomeComposerBannerState("hidden");
+      return;
+    }
+
+    setWelcomeComposerBannerState("prompt");
+  }, [
+    activeChannelId,
+    clearWelcomeComposerDismissTimer,
+    isActiveWelcomeChannel,
+  ]);
 
   // Scope the edit target to the correct composer: if the message being edited
   // lives inside the open thread (thread head or a reply), show the editing UI
@@ -208,7 +602,13 @@ export const ChannelPane = React.memo(function ChannelPane({
       if (!onEdit || !currentPubkey) return null;
       let best: TimelineMessage | null = null;
       for (const message of candidates) {
-        if (message.pubkey !== currentPubkey || message.pending) continue;
+        if (
+          message.kind === KIND_SYSTEM_MESSAGE ||
+          message.pubkey !== currentPubkey ||
+          message.pending
+        ) {
+          continue;
+        }
         if (!best || message.createdAt >= best.createdAt) {
           best = message;
         }
@@ -243,6 +643,70 @@ export const ChannelPane = React.memo(function ChannelPane({
     activeChannel.archivedAt !== null ||
     activeChannel.channelType === "forum" ||
     isSending;
+  const knownAgentPubkeys = React.useMemo(() => {
+    const pubkeys = new Set<string>();
+
+    for (const pubkey of agentPubkeys ?? []) {
+      pubkeys.add(pubkey.toLowerCase());
+    }
+    for (const agent of agentSessionAgents) {
+      pubkeys.add(agent.pubkey.toLowerCase());
+    }
+    for (const agent of activityAgents) {
+      pubkeys.add(agent.pubkey.toLowerCase());
+    }
+
+    return pubkeys;
+  }, [activityAgents, agentPubkeys, agentSessionAgents]);
+  const completeWelcomeComposerBanner = React.useCallback(() => {
+    if (!activeChannelId || !isActiveWelcomeChannel) {
+      return;
+    }
+
+    clearWelcomeComposerDismissTimer();
+    completedWelcomeBannerChannelIdsRef.current.add(activeChannelId);
+    setWelcomeComposerBannerState("complete");
+    welcomeComposerDismissTimerRef.current = window.setTimeout(() => {
+      setWelcomeComposerBannerState("dismissing");
+      welcomeComposerDismissTimerRef.current = null;
+      welcomeComposerHideTimerRef.current = window.setTimeout(
+        () => {
+          setWelcomeComposerBannerState("hidden");
+          welcomeComposerHideTimerRef.current = null;
+        },
+        WELCOME_COMPOSER_BANNER_DISMISS_DURATION_SECONDS * 1000 +
+          WELCOME_COMPOSER_BANNER_HIDE_BUFFER_MS,
+      );
+    }, WELCOME_PERSONA_ROTATION_MS + WELCOME_COMPOSER_BANNER_SUCCESS_SETTLE_MS);
+  }, [
+    activeChannelId,
+    clearWelcomeComposerDismissTimer,
+    isActiveWelcomeChannel,
+  ]);
+  const handleSendMessage = React.useCallback(
+    async (
+      content: string,
+      mentionPubkeys: string[],
+      mediaTags?: string[][],
+    ) => {
+      const shouldCompleteWelcomeBanner =
+        isActiveWelcomeChannel &&
+        (containsWelcomePersonaMention(content) ||
+          mentionsKnownAgent(mentionPubkeys, knownAgentPubkeys));
+
+      await onSendMessage(content, mentionPubkeys, mediaTags);
+
+      if (shouldCompleteWelcomeBanner) {
+        completeWelcomeComposerBanner();
+      }
+    },
+    [
+      completeWelcomeComposerBanner,
+      isActiveWelcomeChannel,
+      knownAgentPubkeys,
+      onSendMessage,
+    ],
+  );
   const hasTypingActivity = typingPubkeys.length > 0;
   const composerBotTypingPubkeys = React.useMemo(() => {
     const pubkeys: string[] = [];
@@ -323,6 +787,78 @@ export const ChannelPane = React.memo(function ChannelPane({
     };
   }, [activeChannel, currentPubkey, profiles]);
 
+  const channelIntro = React.useMemo(() => {
+    if (!activeChannel || activeChannel.channelType === "dm") {
+      return null;
+    }
+
+    const actions = [];
+    if (isWelcomeChannel(activeChannel)) {
+      if (onCreateChannel) {
+        actions.push({
+          icon: <Plus aria-hidden className="h-6 w-6" />,
+          label: "Create a channel",
+          onClick: onCreateChannel,
+          testId: "welcome-intro-action-create-channel",
+        });
+      }
+
+      if (onAddAgent) {
+        actions.push({
+          icon: <Bot aria-hidden className="h-6 w-6" />,
+          label: "Create a custom agent",
+          onClick: onAddAgent,
+          testId: "welcome-intro-action-create-agent",
+        });
+      }
+
+      return {
+        actions,
+        channelKindLabel: "private welcome channel",
+        channelName: activeChannel.name,
+        description: null,
+        icon: <Sparkles aria-hidden className="h-7 w-7" />,
+      };
+    }
+
+    if (!activeChannel.archivedAt && activeChannel.isMember) {
+      if (onAddAgent) {
+        actions.push({
+          description: "Add an agent here.",
+          icon: <Bot aria-hidden className="h-6 w-6" />,
+          label: "Create agent",
+          onClick: onAddAgent,
+          testId: "channel-intro-action-create-agent",
+        });
+      }
+
+      if (onOpenMembers) {
+        actions.push({
+          description: "Invite members.",
+          icon: <UserPlus aria-hidden className="h-6 w-6" />,
+          label: "Add people",
+          onClick: onOpenMembers,
+          testId: "channel-intro-action-add-people",
+        });
+      }
+    }
+
+    return {
+      actions,
+      channelKindLabel: getChannelIntroKind(activeChannel),
+      channelName: activeChannel.name,
+      description: getChannelIntroDescription(activeChannel),
+    };
+  }, [activeChannel, onAddAgent, onCreateChannel, onOpenMembers]);
+
+  const visibleMessages = React.useMemo(() => {
+    if (!isWelcomeChannel(activeChannel)) {
+      return messages;
+    }
+
+    return messages.filter((message) => !isWelcomeSetupSystemMessage(message));
+  }, [activeChannel, messages]);
+
   const selectedAgent = React.useMemo(
     () =>
       openAgentSessionPubkey
@@ -350,6 +886,7 @@ export const ChannelPane = React.memo(function ChannelPane({
           <MessageTimeline
             agentPubkeys={agentPubkeys}
             channelId={activeChannel?.id}
+            channelIntro={channelIntro}
             directMessageIntro={directMessageIntro}
             scrollContainerRef={timelineScrollRef}
             currentPubkey={currentPubkey}
@@ -375,7 +912,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                 : "No channel selected"
             }
             isLoading={isTimelineLoading}
-            messages={messages}
+            messages={visibleMessages}
             onDelete={onDelete}
             onEdit={onEdit}
             onMarkUnread={onMarkUnread}
@@ -419,6 +956,123 @@ export const ChannelPane = React.memo(function ChannelPane({
               ref={composerWrapperRef}
             >
               <div className="pointer-events-auto">
+                <AnimatePresence initial={false}>
+                  {isActiveWelcomeChannel &&
+                  welcomeComposerBannerState !== "hidden" ? (
+                    <motion.div
+                      animate={{
+                        height:
+                          welcomeComposerBannerState === "dismissing"
+                            ? 0
+                            : "auto",
+                      }}
+                      className="overflow-visible"
+                      initial={false}
+                      transition={{
+                        duration:
+                          welcomeComposerBannerState === "dismissing"
+                            ? WELCOME_COMPOSER_BANNER_DISMISS_DURATION_SECONDS
+                            : WELCOME_PERSONA_ENTER_DURATION_SECONDS,
+                        ease: WELCOME_PERSONA_EASE,
+                      }}
+                    >
+                      <motion.div
+                        animate={{
+                          filter:
+                            welcomeComposerBannerState === "dismissing"
+                              ? `blur(${WELCOME_COMPOSER_BANNER_DISMISS_BLUR_PX}px)`
+                              : "blur(0px)",
+                          opacity: 1,
+                          y:
+                            welcomeComposerBannerState === "dismissing"
+                              ? WELCOME_COMPOSER_BANNER_DISMISS_Y_OFFSET_PX
+                              : 0,
+                        }}
+                        className={cn(
+                          "relative z-0 mx-4 -mb-3 flex transform-gpu items-center gap-2 rounded-t-2xl border border-b-0 px-4 pb-5 pt-2.5 text-sm leading-5 backdrop-blur-sm transition-colors will-change-[filter,transform] sm:mx-6",
+                          welcomeComposerBannerState !== "prompt"
+                            ? "border-emerald-500/30 bg-emerald-500/15 text-foreground"
+                            : "border-border/60 bg-muted/55 text-muted-foreground",
+                        )}
+                        data-state={welcomeComposerBannerState}
+                        data-testid="welcome-composer-kit-banner"
+                        data-tone={
+                          welcomeComposerBannerState !== "prompt"
+                            ? "success"
+                            : "neutral"
+                        }
+                        initial={false}
+                        transition={{
+                          duration:
+                            welcomeComposerBannerState === "dismissing"
+                              ? WELCOME_COMPOSER_BANNER_DISMISS_DURATION_SECONDS
+                              : WELCOME_PERSONA_ENTER_DURATION_SECONDS,
+                          ease: WELCOME_PERSONA_EASE,
+                        }}
+                      >
+                        <AnimatePresence initial={false} mode="wait">
+                          {welcomeComposerBannerState !== "prompt" ? (
+                            <motion.span
+                              animate="animate"
+                              className="flex h-4 w-4 shrink-0 items-center justify-center text-foreground"
+                              data-animation-target="success-icon"
+                              initial="initial"
+                              key="complete-icon"
+                              variants={
+                                welcomeComposerBannerSuccessIconVariants
+                              }
+                            >
+                              <Check
+                                aria-hidden
+                                className="h-4 w-4"
+                                data-testid="welcome-composer-complete-icon"
+                              />
+                            </motion.span>
+                          ) : (
+                            <motion.span
+                              animate="animate"
+                              className="flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground"
+                              exit="exit"
+                              initial="initial"
+                              key="prompt-icon"
+                              variants={welcomeComposerBannerContentVariants}
+                            >
+                              <Bot aria-hidden className="h-4 w-4" />
+                            </motion.span>
+                          )}
+                        </AnimatePresence>
+                        <AnimatePresence initial={false} mode="wait">
+                          {welcomeComposerBannerState !== "prompt" ? (
+                            <motion.span
+                              animate="animate"
+                              className="min-w-0"
+                              data-animation-target="success-copy"
+                              initial="initial"
+                              key="complete-copy"
+                              variants={
+                                welcomeComposerBannerSuccessCopyVariants
+                              }
+                            >
+                              Nice work.
+                            </motion.span>
+                          ) : (
+                            <motion.span
+                              animate="animate"
+                              className="min-w-0"
+                              exit="exit"
+                              initial="initial"
+                              key="prompt-copy"
+                              variants={welcomeComposerBannerContentVariants}
+                            >
+                              Try mentioning <WelcomeComposerPersonaMention />{" "}
+                              to chat with an agent in this channel.
+                            </motion.span>
+                          )}
+                        </AnimatePresence>
+                      </motion.div>
+                    </motion.div>
+                  ) : null}
+                </AnimatePresence>
                 <MessageComposer
                   channelId={activeChannel?.id ?? null}
                   channelName={activeChannel?.name ?? "channel"}
@@ -429,7 +1083,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                   onCancelEdit={onCancelEdit}
                   onEditLastOwnMessage={handleEditLastOwnMainMessage}
                   onEditSave={onEditSave}
-                  onSend={onSendMessage}
+                  onSend={handleSendMessage}
                   profiles={profiles}
                   placeholder={
                     activeChannel?.archivedAt

@@ -48,6 +48,26 @@ fn normalize_relay_mesh(
     }))
 }
 
+fn trim_to_optional_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn resolve_created_avatar_url(
+    requested_avatar_url: Option<&str>,
+    persona_avatar_url: Option<String>,
+    agent_command: &str,
+) -> Option<String> {
+    requested_avatar_url
+        .and_then(trim_to_optional_string)
+        .or_else(|| persona_avatar_url.as_deref().and_then(trim_to_optional_string))
+        .or_else(|| managed_agent_avatar_url(agent_command))
+}
+
 #[cfg(feature = "mesh-llm")]
 async fn ensure_relay_mesh_for_record(
     app: &AppHandle,
@@ -472,16 +492,21 @@ pub async fn create_managed_agent(
             });
 
         // Resolve the avatar URL once at creation and persist it on the record.
-        // This is the same logic the original publish used (user input, else
-        // command-based fallback) — storing it lets reconciliation compare
-        // against what was actually published instead of re-deriving it.
-        let resolved_avatar_url = input
-            .avatar_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-            .or_else(|| managed_agent_avatar_url(&agent_command));
+        // Explicit input wins, then the persona's own avatar, then the runtime
+        // fallback. Storing it lets reconciliation compare against what was
+        // actually published instead of re-deriving it.
+        let persona_avatar_url = requested_persona_id.as_ref().and_then(|persona_id| {
+            load_personas(&app)
+                .ok()?
+                .into_iter()
+                .find(|persona| persona.id == *persona_id)?
+                .avatar_url
+        });
+        let resolved_avatar_url = resolve_created_avatar_url(
+            input.avatar_url.as_deref(),
+            persona_avatar_url,
+            &agent_command,
+        );
 
         let record = crate::managed_agents::ManagedAgentRecord {
             pubkey: pubkey.clone(),
@@ -1181,6 +1206,37 @@ mod tests {
                 model_ref: "Qwen3".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn created_avatar_prefers_explicit_input() {
+        let resolved = resolve_created_avatar_url(
+            Some(" https://x/input.png "),
+            Some("https://x/persona.png".to_string()),
+            "goose",
+        );
+
+        assert_eq!(resolved.as_deref(), Some("https://x/input.png"));
+    }
+
+    #[test]
+    fn created_avatar_uses_persona_before_command_fallback() {
+        let resolved = resolve_created_avatar_url(
+            None,
+            Some(" https://x/persona.png ".to_string()),
+            "goose",
+        );
+
+        assert_eq!(resolved.as_deref(), Some("https://x/persona.png"));
+    }
+
+    #[test]
+    fn created_avatar_uses_command_fallback_without_input_or_persona() {
+        use crate::managed_agents::managed_agent_avatar_url;
+
+        let resolved = resolve_created_avatar_url(None, None, "goose");
+
+        assert_eq!(resolved, managed_agent_avatar_url("goose"));
     }
 
     fn profile(name: Option<&str>, picture: Option<&str>) -> crate::relay::AgentProfileInfo {

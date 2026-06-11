@@ -15,6 +15,7 @@ import { nsecToNpub, shortenNpub } from "@/shared/lib/nostrUtils";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Spinner } from "@/shared/ui/spinner";
+import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
 import { StepProgress } from "@/shared/ui/step-progress";
 import { useSystemColorScheme } from "@/shared/theme/useSystemColorScheme";
 
@@ -423,6 +424,7 @@ export function WelcomeSetup({
       className="sprout-onboarding-neutral-theme sprout-startup-shell flex items-center justify-center bg-background px-4 py-8 text-foreground"
       data-system-color-scheme={systemColorScheme}
     >
+      <StartupWindowDragRegion />
       <div className="relative flex w-full max-w-[500px] flex-col items-center text-center">
         <StepProgress
           activeSegmentClassName="bg-primary"

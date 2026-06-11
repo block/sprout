@@ -667,6 +667,7 @@ export function AppShell() {
             markAllChannelsRead,
             markChannelRead,
             markChannelUnread,
+            openCreateChannel: handleOpenCreateChannel,
             openChannelManagement: () => {
               setIsChannelManagementOpen(true);
             },

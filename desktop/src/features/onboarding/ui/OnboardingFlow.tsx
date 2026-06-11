@@ -16,10 +16,14 @@ import {
 } from "@/shared/theme/ThemeProvider";
 import { useSystemColorScheme } from "@/shared/theme/useSystemColorScheme";
 import { ONBOARDING_DEFAULT_THEME_NAME } from "@/shared/theme/theme-loader";
+import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
 import { StepProgress } from "@/shared/ui/step-progress";
 import { AvatarStep } from "./AvatarStep";
 import { MembershipDenied } from "./MembershipDenied";
-import type { OnboardingTransitionDirection } from "./OnboardingSlideTransition";
+import {
+  type OnboardingTransitionDirection,
+  OnboardingSlideTransition,
+} from "./OnboardingSlideTransition";
 import { ProfileStep } from "./ProfileStep";
 import { SetupStep } from "./SetupStep";
 import { ThemeStep, preloadThemePreviewVars } from "./ThemeStep";
@@ -364,6 +368,16 @@ export function OnboardingFlow({
         }
       : profileStepState.saveRecovery,
   };
+  const currentStep =
+    currentPage === "profile"
+      ? 2
+      : currentPage === "avatar"
+        ? 3
+        : currentPage === "theme"
+          ? 4
+          : 5;
+  const hideFixedProgressOnCompact =
+    currentPage === "avatar" || currentPage === "theme";
 
   const importDeniedKey = React.useCallback(
     async (nsec: string) => {
@@ -409,6 +423,7 @@ export function OnboardingFlow({
       data-testid="onboarding-gate"
       data-system-color-scheme={systemColorScheme}
     >
+      <StartupWindowDragRegion />
       <div
         className={`relative flex w-full flex-col items-center text-center ${
           currentPage === "theme"
@@ -420,25 +435,23 @@ export function OnboardingFlow({
                 : "max-w-[500px]"
         }`}
       >
-        <StepProgress
-          activeSegmentClassName="bg-primary"
-          className={`fixed bottom-12 left-1/2 z-40 -translate-x-1/2 ${
-            currentPage === "avatar" || currentPage === "theme"
-              ? "max-lg:hidden"
-              : ""
+        <OnboardingSlideTransition
+          className="w-auto"
+          containerClassName={`fixed bottom-12 left-1/2 z-40 w-auto -translate-x-1/2 ${
+            hideFixedProgressOnCompact ? "max-lg:hidden" : ""
           }`}
-          completeSegmentClassName="bg-primary/35"
-          currentStep={
-            currentPage === "profile"
-              ? 2
-              : currentPage === "avatar"
-                ? 3
-                : currentPage === "theme"
-                  ? 4
-                  : 5
-          }
-          inactiveSegmentClassName="bg-muted-foreground/25"
-        />
+          direction={transitionDirection}
+          transitionKey={`progress-${currentStep}-${transitionDirection}-${
+            hideFixedProgressOnCompact ? "compact-hidden" : "visible"
+          }`}
+        >
+          <StepProgress
+            activeSegmentClassName="bg-primary"
+            completeSegmentClassName="bg-primary/35"
+            currentStep={currentStep}
+            inactiveSegmentClassName="bg-muted-foreground/25"
+          />
+        </OnboardingSlideTransition>
 
         {currentPage === "profile" ? (
           <ProfileStep

@@ -18,8 +18,10 @@ type ChannelScreenHeaderProps = {
   activeDmAvatarUrl: string | null;
   activeDmPresenceStatus: PresenceStatus | null;
   currentPubkey?: string;
+  isAddBotOpen?: boolean;
   isJoining?: boolean;
   showHeaderContent?: boolean;
+  onAddBotOpenChange?: (open: boolean) => void;
   onJoinChannel?: () => Promise<void>;
   onManageChannel: () => void;
   onToggleMembers: () => void;
@@ -34,7 +36,9 @@ export function ChannelScreenHeader({
   activeDmAvatarUrl,
   activeDmPresenceStatus,
   currentPubkey,
+  isAddBotOpen,
   isJoining = false,
+  onAddBotOpenChange,
   showHeaderContent = true,
   onJoinChannel,
   onManageChannel,
@@ -62,6 +66,8 @@ export function ChannelScreenHeader({
       <ChannelMembersBar
         channel={activeChannel}
         currentPubkey={currentPubkey}
+        isAddBotOpen={isAddBotOpen}
+        onAddBotOpenChange={onAddBotOpenChange}
         onManageChannel={onManageChannel}
         onToggleMembers={onToggleMembers}
         variant={actionsVariant}
