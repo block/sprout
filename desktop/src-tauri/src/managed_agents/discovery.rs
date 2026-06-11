@@ -288,17 +288,37 @@ fn command_search_dirs() -> Vec<PathBuf> {
     unique
 }
 
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
 fn resolve_workspace_command(command: &str) -> Option<PathBuf> {
     if command_looks_like_path(command) {
         let path = PathBuf::from(command);
-        return path.exists().then_some(path);
+        return is_executable_file(&path).then_some(path);
     }
 
     let file_name = executable_basename(command);
     command_search_dirs()
         .into_iter()
         .map(|dir| dir.join(&file_name))
-        .find(|candidate| candidate.exists())
+        .find(|candidate| is_executable_file(candidate))
 }
 
 fn resolve_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, Option<PathBuf>>>
@@ -351,7 +371,7 @@ fn resolve_command_uncached(command: &str) -> Option<PathBuf> {
     }
 
     for candidate in path_candidates_from_env(command) {
-        if candidate.exists() {
+        if is_executable_file(&candidate) {
             return Some(candidate);
         }
     }
@@ -361,7 +381,7 @@ fn resolve_command_uncached(command: &str) -> Option<PathBuf> {
     }
     for dir in common_binary_paths() {
         let candidate = dir.join(executable_basename(command));
-        if candidate.exists() {
+        if is_executable_file(&candidate) {
             return Some(candidate);
         }
     }
@@ -401,7 +421,7 @@ fn find_via_login_shell(command: &str) -> Option<PathBuf> {
     let stdout = run_in_login_shell(&["-l", "-c", r#"command -v -- "$1""#, "_", command])?;
     let resolved = stdout.lines().rfind(|line| !line.trim().is_empty())?;
     let path = PathBuf::from(resolved.trim());
-    (path.is_absolute() && path.exists()).then_some(path)
+    (path.is_absolute() && is_executable_file(&path)).then_some(path)
 }
 
 /// Return the user's full PATH from a login shell.
@@ -635,6 +655,34 @@ mod tests {
             !marker.exists(),
             "shell lookup must not execute injected commands"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_path_resolution_ignores_non_executable_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir =
+            std::env::temp_dir().join(format!("buzz-discovery-path-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let bin = dir.join("buzz-acp");
+        std::fs::write(&bin, "").expect("write placeholder");
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o644))
+            .expect("chmod placeholder");
+
+        assert!(
+            super::resolve_workspace_command(bin.to_str().expect("utf8 path")).is_none(),
+            "non-executable placeholder must not resolve"
+        );
+
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod executable");
+        assert_eq!(
+            super::resolve_workspace_command(bin.to_str().expect("utf8 path")),
+            Some(bin.clone())
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
