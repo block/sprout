@@ -91,9 +91,11 @@ export function ChannelScreen({
     openAgentSessionPubkey,
     openThreadHeadId,
     profilePanelPubkey,
+    profilePanelView,
     setOpenAgentSessionPubkey,
     setOpenThreadHeadId,
     setProfilePanelPubkey,
+    setProfilePanelView,
   } = useChannelPanelHistoryState();
   const {
     canReset: canResetThreadPanelWidth,
@@ -622,7 +624,9 @@ export function ChannelScreen({
                   onToggleReaction={effectiveToggleReaction}
                   openAgentSessionPubkey={openAgentSessionPubkey}
                   openThreadHeadId={openThreadHeadId}
+                  onProfilePanelViewChange={setProfilePanelView}
                   profilePanelPubkey={profilePanelPubkey}
+                  profilePanelView={profilePanelView}
                   personaLookup={personaLookup}
                   profiles={messageProfiles}
                   targetMessageId={mainTimelineTargetMessageId}

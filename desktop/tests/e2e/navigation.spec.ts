@@ -193,6 +193,43 @@ test("open thread panels survive reload", async ({ page }) => {
   await expect(threadPanel).toBeVisible();
 });
 
+test("home inbox selection survives reload and back restores it", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  const inboxList = page.getByTestId("home-inbox-list");
+  await expect(inboxList).toBeVisible();
+  const items = inboxList.locator('[data-testid^="home-inbox-item-"]');
+  await expect(items.first()).toBeVisible();
+
+  // The wide-viewport default selection stays local-only — the URL records
+  // explicit selections, so background loads never touch the history stack.
+  await expect(page.getByTestId("home-inbox-detail")).toBeVisible();
+  expect(page.url()).not.toContain("item=");
+  const defaultUrl = page.url();
+
+  const secondItem = items.nth(1);
+  const secondTestId = await secondItem.getAttribute("data-testid");
+  const secondItemId = secondTestId?.replace("home-inbox-item-", "");
+  expect(secondItemId).toBeTruthy();
+  await secondItem.click();
+  await expect
+    .poll(() => page.url())
+    .toContain(`item=${encodeURIComponent(secondItemId ?? "")}`);
+
+  await page.reload();
+
+  await expect(inboxList).toBeVisible();
+  await expect(page.getByTestId("home-inbox-detail")).toBeVisible();
+  expect(page.url()).toContain(
+    `item=${encodeURIComponent(secondItemId ?? "")}`,
+  );
+
+  await page.getByTestId("global-back").click();
+  await expect.poll(() => page.url()).toBe(defaultUrl);
+});
+
 test("message deep links survive reload", async ({ page }) => {
   await page.goto(
     `/#/channels/${ENGINEERING_CHANNEL_ID}?messageId=mock-engineering-shipped`,

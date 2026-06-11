@@ -7,12 +7,17 @@ type ChannelRouteSearch = {
   agentSession?: string;
   messageId?: string;
   profile?: string;
+  profileView?: "memories" | "channels";
   thread?: string;
   threadRootId?: string;
 };
 
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function profileViewValue(value: unknown): "memories" | "channels" | undefined {
+  return value === "memories" || value === "channels" ? value : undefined;
 }
 
 function validateChannelSearch(
@@ -22,6 +27,7 @@ function validateChannelSearch(
     agentSession: nonEmptyString(search.agentSession),
     messageId: nonEmptyString(search.messageId),
     profile: nonEmptyString(search.profile),
+    profileView: profileViewValue(search.profileView),
     thread: nonEmptyString(search.thread),
     threadRootId: nonEmptyString(search.threadRootId),
   };

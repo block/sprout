@@ -56,6 +56,10 @@ type UserProfilePanelProps = {
   onOpenDm?: (pubkeys: string[]) => void;
   onResetWidth?: () => void;
   onResizeStart?: (event: React.PointerEvent<HTMLButtonElement>) => void;
+  onViewChange: (
+    view: ProfilePanelView,
+    options?: { replace?: boolean },
+  ) => void;
   pubkey: string;
   /**
    * When true, the panel sits beside a sibling pane managed by a single-panel
@@ -65,10 +69,11 @@ type UserProfilePanelProps = {
    * directly — otherwise `calc(100% - 300px)` would wrongly shrink the panel.
    */
   splitPaneClamp?: boolean;
+  view: ProfilePanelView;
   widthPx: number;
 };
 
-type ProfilePanelView = "summary" | "memories" | "channels";
+export type ProfilePanelView = "summary" | "memories" | "channels";
 
 const VIEW_TITLES: Record<ProfilePanelView, string> = {
   summary: "Profile",
@@ -131,8 +136,10 @@ export function UserProfilePanel({
   onOpenDm,
   onResetWidth,
   onResizeStart,
+  onViewChange,
   pubkey,
   splitPaneClamp = false,
+  view,
   widthPx,
 }: UserProfilePanelProps) {
   const isOverlay = useIsThreadPanelOverlay();
@@ -140,7 +147,6 @@ export function UserProfilePanel({
   const isSplitLayout = layout === "split";
   useEscapeKey(onClose, isOverlay || isSinglePanelView);
 
-  const [view, setView] = React.useState<ProfilePanelView>("summary");
   const [editAgentOpen, setEditAgentOpen] = React.useState(false);
 
   const profileQuery = useUserProfileQuery(pubkey);
@@ -201,11 +207,18 @@ export function UserProfilePanel({
     [pubkeyLower, relayAgent, managedAgent, channelsQuery.data],
   );
 
+  // Defensive: opening a different profile normally resets the sub-view at
+  // the call site, but catch any pubkey change that slipped through.
   const prevPubkeyRef = React.useRef(pubkey);
-  if (prevPubkeyRef.current !== pubkey) {
+  React.useEffect(() => {
+    if (prevPubkeyRef.current === pubkey) {
+      return;
+    }
     prevPubkeyRef.current = pubkey;
-    setView("summary");
-  }
+    if (view !== "summary") {
+      onViewChange("summary", { replace: true });
+    }
+  }, [onViewChange, pubkey, view]);
 
   const handleMessage = React.useCallback(() => {
     onOpenDm?.([pubkey]);
@@ -254,7 +267,7 @@ export function UserProfilePanel({
           aria-label="Back to profile"
           className="shrink-0"
           data-testid="user-profile-panel-back"
-          onClick={() => setView("summary")}
+          onClick={() => onViewChange("summary")}
           size="icon"
           type="button"
           variant="outline"
@@ -312,8 +325,8 @@ export function UserProfilePanel({
           memoryCount={memoryCount}
           ownerDisplayName={ownerDisplayName}
           ownerHandle={ownerHandle}
-          onOpenChannels={() => setView("channels")}
-          onOpenMemories={() => setView("memories")}
+          onOpenChannels={() => onViewChange("channels")}
+          onOpenMemories={() => onViewChange("memories")}
           onOpenDm={onOpenDm}
           presenceLoaded={presenceQuery.isSuccess}
           presenceStatus={presenceStatus}
