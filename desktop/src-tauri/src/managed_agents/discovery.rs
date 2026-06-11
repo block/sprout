@@ -11,7 +11,7 @@ pub(crate) struct KnownAcpRuntime {
     pub commands: &'static [&'static str],
     pub aliases: &'static [&'static str],
     pub avatar_url: &'static str,
-    /// Legacy MCP server binary field. Vestigial — all agents now use sprout CLI
+    /// Legacy MCP server binary field. Vestigial — all agents now use the bundled CLI.
     /// directly. Will be removed when runtime discovery is simplified.
     pub mcp_command: Option<&'static str>,
     /// Whether to enable MCP hook tools (`_Stop`, `_PostCompact`) for this agent.
@@ -29,8 +29,8 @@ pub(crate) struct KnownAcpRuntime {
     /// Human-readable hint about installing the ACP adapter.
     pub adapter_install_hint: &'static str,
     /// Harness-specific skill discovery directory (e.g. `.goose/skills`).
-    /// `Some(dir)` → Sprout creates a symlink at `<nest>/<dir>/sprout-cli`
-    /// pointing to the canonical `.agents/skills/sprout-cli`. `None` → this
+    /// `Some(dir)` → Buzz creates a symlink at `<nest>/<dir>/buzz-cli`
+    /// pointing to the canonical `.agents/skills/buzz-cli`. `None` → this
     /// runtime reads the canonical path directly or has no skill support.
     pub skill_dir: Option<&'static str>,
     /// Whether this runtime handles model switching via ACP protocol natively.
@@ -47,8 +47,8 @@ pub(crate) struct KnownAcpRuntime {
 const GOOSE_AVATAR_URL: &str = "https://goose-docs.ai/img/logo_dark.png";
 const CLAUDE_CODE_AVATAR_URL: &str = "https://anthropic.gallerycdn.vsassets.io/extensions/anthropic/claude-code/2.1.77/1773707456892/Microsoft.VisualStudio.Services.Icons.Default";
 const CODEX_AVATAR_URL: &str = "https://openai.gallerycdn.vsassets.io/extensions/openai/chatgpt/26.5313.41514/1773706730621/Microsoft.VisualStudio.Services.Icons.Default";
-const SPROUT_AGENT_AVATAR_URL: &str =
-    "https://raw.githubusercontent.com/block/sprout/refs/heads/main/crates/sprout-agent/sprout-agent.png";
+const BUZZ_AGENT_AVATAR_URL: &str =
+    "https://raw.githubusercontent.com/block/buzz/refs/heads/main/crates/buzz-agent/buzz-agent.png";
 
 fn common_binary_paths() -> &'static [PathBuf] {
     use std::sync::OnceLock;
@@ -137,17 +137,17 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         default_env: &[],
     },
     KnownAcpRuntime {
-        id: "sprout-agent",
-        label: "Sprout Agent",
-        commands: &["sprout-agent"],
+        id: "buzz-agent",
+        label: "Buzz Agent",
+        commands: &["buzz-agent"],
         aliases: &[],
-        avatar_url: SPROUT_AGENT_AVATAR_URL,
-        mcp_command: Some("sprout-dev-mcp"),
+        avatar_url: BUZZ_AGENT_AVATAR_URL,
+        mcp_command: Some("buzz-dev-mcp"),
         mcp_hooks: true,
         underlying_cli: None,
         cli_install_commands: &[],
         adapter_install_commands: &[],
-        install_instructions_url: "https://github.com/block/sprout",
+        install_instructions_url: "https://github.com/block/buzz",
         cli_install_hint: "Ships with the Buzz desktop app.",
         adapter_install_hint: "",
         skill_dir: None,
@@ -232,7 +232,7 @@ fn default_agent_args(command: &str) -> Option<Vec<String>> {
     match normalize_command_identity(command).as_str() {
         "goose" => Some(vec!["acp".to_string()]),
         "codex" | "codex-acp" | "claude-agent-acp" | "claude-code-acp" | "claude-code"
-        | "claudecode" | "sprout-agent" => Some(Vec::new()),
+        | "claudecode" | "buzz-agent" => Some(Vec::new()),
         _ => None,
     }
 }
@@ -543,7 +543,7 @@ mod tests {
 
     use super::{
         classify_runtime, find_via_login_shell, managed_agent_avatar_url, normalize_agent_args,
-        CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL, GOOSE_AVATAR_URL, SPROUT_AGENT_AVATAR_URL,
+        BUZZ_AGENT_AVATAR_URL, CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL, GOOSE_AVATAR_URL,
     };
     use crate::managed_agents::AcpAvailabilityStatus;
 
@@ -596,25 +596,25 @@ mod tests {
     }
 
     #[test]
-    fn resolves_sprout_agent_avatar() {
+    fn resolves_buzz_agent_avatar() {
         assert_eq!(
-            managed_agent_avatar_url("sprout-agent"),
-            Some(SPROUT_AGENT_AVATAR_URL.to_string())
+            managed_agent_avatar_url("buzz-agent"),
+            Some(BUZZ_AGENT_AVATAR_URL.to_string())
         );
         assert_eq!(
-            managed_agent_avatar_url("/usr/local/bin/sprout-agent"),
-            Some(SPROUT_AGENT_AVATAR_URL.to_string())
+            managed_agent_avatar_url("/usr/local/bin/buzz-agent"),
+            Some(BUZZ_AGENT_AVATAR_URL.to_string())
         );
     }
 
     #[test]
-    fn normalizes_sprout_agent_args_to_empty() {
+    fn normalizes_buzz_agent_args_to_empty() {
         assert_eq!(
-            normalize_agent_args("sprout-agent", Vec::new()),
+            normalize_agent_args("buzz-agent", Vec::new()),
             Vec::<String>::new()
         );
         assert_eq!(
-            normalize_agent_args("sprout-agent", vec!["acp".into()]),
+            normalize_agent_args("buzz-agent", vec!["acp".into()]),
             Vec::<String>::new()
         );
     }
@@ -622,7 +622,7 @@ mod tests {
     #[test]
     fn login_shell_lookup_treats_command_as_data() {
         let marker =
-            std::env::temp_dir().join(format!("sprout-discovery-marker-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("buzz-discovery-marker-{}", uuid::Uuid::new_v4()));
         let payload = format!("doesnotexist; touch {} #", marker.display());
 
         let resolved = find_via_login_shell(&payload);

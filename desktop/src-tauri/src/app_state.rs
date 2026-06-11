@@ -48,16 +48,16 @@ pub struct AppState {
 pub fn build_app_state() -> AppState {
     // Env var takes precedence (dev/CI). If absent, resolve_persisted_identity()
     // in setup() will replace the ephemeral placeholder with a persisted key.
-    let (keys, source) = match std::env::var("SPROUT_PRIVATE_KEY") {
+    let (keys, source) = match std::env::var("BUZZ_PRIVATE_KEY") {
         Ok(nsec) => match Keys::parse(nsec.trim()) {
             Ok(keys) => (keys, "configured"),
             Err(error) => {
-                eprintln!("buzz-desktop: invalid SPROUT_PRIVATE_KEY: {error}");
+                eprintln!("buzz-desktop: invalid BUZZ_PRIVATE_KEY: {error}");
                 (Keys::generate(), "ephemeral")
             }
         },
         Err(std::env::VarError::NotUnicode(_)) => {
-            eprintln!("buzz-desktop: SPROUT_PRIVATE_KEY contains invalid UTF-8");
+            eprintln!("buzz-desktop: BUZZ_PRIVATE_KEY contains invalid UTF-8");
             (Keys::generate(), "ephemeral")
         }
         Err(std::env::VarError::NotPresent) => (Keys::generate(), "ephemeral"),
@@ -126,7 +126,7 @@ impl AppState {
 
 /// Resolve the user's identity key from the app data directory.
 ///
-/// Priority: `SPROUT_PRIVATE_KEY` env var (already handled in `build_app_state`)
+/// Priority: `BUZZ_PRIVATE_KEY` env var (already handled in `build_app_state`)
 /// → `{app_data_dir}/identity.key` file → generate + save.
 ///
 /// Writes use `atomic-write-file` which handles temp file creation, fsync,
@@ -135,7 +135,7 @@ pub fn resolve_persisted_identity(app: &AppHandle, state: &AppState) -> Result<(
     // Only skip file-based resolution if the env var was present AND parsed
     // successfully. A malformed env var should fall through to the persisted
     // key rather than leaving the app on an ephemeral identity.
-    if let Ok(nsec) = std::env::var("SPROUT_PRIVATE_KEY") {
+    if let Ok(nsec) = std::env::var("BUZZ_PRIVATE_KEY") {
         if Keys::parse(nsec.trim()).is_ok() {
             return Ok(());
         }

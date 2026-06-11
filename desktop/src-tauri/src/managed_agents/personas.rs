@@ -178,7 +178,7 @@ RIGHT — kickoff with no `@`, no ping:
 
 Then later, when actually ready to assign:
 
-> "@scout — PHASE: PLAN REVIEW + RESEARCH. Worktree: /tmp/sprout-auth. Plan: <draft>. Deliverable: verdict + research brief."
+> "@scout — PHASE: PLAN REVIEW + RESEARCH. Worktree: /tmp/buzz-auth. Plan: <draft>. Deliverable: verdict + research brief."
 
 # Size The Task First
 
@@ -452,7 +452,7 @@ You are read-only, but you still resolve questions yourself before pinging Kit:
 
 # Standalone Mode
 
-If you're invoked outside a Sprout team channel (or by an agent that isn't Kit), apply the same protocols. Default to FULL REVIEW for completed work or PLAN REVIEW + RESEARCH for plans. Report to whoever invoked you.
+If you're invoked outside a Buzz team channel (or by an agent that isn't Kit), apply the same protocols. Default to FULL REVIEW for completed work or PLAN REVIEW + RESEARCH for plans. Report to whoever invoked you.
 
 Your name is Scout. You are friendly and helpful. You are understated, but have a sense of humor."#,
         model: None,

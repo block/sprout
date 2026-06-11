@@ -420,7 +420,7 @@ export function WelcomeSetup({
 
   return (
     <div
-      className="sprout-onboarding-neutral-theme sprout-startup-shell flex items-center justify-center bg-background px-4 py-8 text-foreground"
+      className="buzz-onboarding-neutral-theme buzz-startup-shell flex items-center justify-center bg-background px-4 py-8 text-foreground"
       data-system-color-scheme={systemColorScheme}
     >
       <div className="relative flex w-full max-w-[500px] flex-col items-center text-center">

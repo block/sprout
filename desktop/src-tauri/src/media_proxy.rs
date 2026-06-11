@@ -146,9 +146,9 @@ pub async fn spawn_media_proxy(http_client: reqwest::Client, app_handle: tauri::
 /// Proxy media requests through the Rust backend so they traverse the WARP tunnel.
 ///
 /// WKWebView's networking stack bypasses WARP, causing 403s from Cloudflare Access.
-/// This handler routes `sprout-media://localhost/{path}` through reqwest, which
+/// This handler routes `buzz-media://localhost/{path}` through reqwest, which
 /// runs in the Tauri process and goes through WARP.
-pub async fn handle_sprout_media(
+pub async fn handle_buzz_media(
     app: &tauri::AppHandle,
     request: &http::Request<Vec<u8>>,
 ) -> http::Response<Vec<u8>> {

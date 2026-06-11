@@ -4,8 +4,8 @@ import { nsecEncode } from "nostr-tools/nip19";
 
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 
-const E2E_IDENTITY_OVERRIDE_STORAGE_KEY = "sprout:e2e-identity-override.v1";
-const HOME_SEEN_STORAGE_KEY_PREFIX = "sprout-home-feed-seen.v1:";
+const E2E_IDENTITY_OVERRIDE_STORAGE_KEY = "buzz:e2e-identity-override.v1";
+const HOME_SEEN_STORAGE_KEY_PREFIX = "buzz-home-feed-seen.v1:";
 const DEFAULT_MOCK_PUBKEY = "deadbeef".repeat(8);
 const BLANK_TYLER_IDENTITY = {
   ...TEST_IDENTITIES.tyler,
@@ -54,7 +54,7 @@ async function seedOnboardingCompletion(page: Page, pubkey: string) {
       window.localStorage.setItem(storageKey, "true");
     },
     {
-      storageKey: `sprout-onboarding-complete.v1:${pubkey}`,
+      storageKey: `buzz-onboarding-complete.v1:${pubkey}`,
     },
   );
 }
@@ -122,12 +122,12 @@ async function getMockProfile(page: Page) {
   return page.evaluate(async () => {
     const invoke = (
       window as Window & {
-        __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
+        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
           command: string,
           payload?: Record<string, unknown>,
         ) => Promise<unknown>;
       }
-    ).__SPROUT_E2E_INVOKE_MOCK_COMMAND__;
+    ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
     if (!invoke) {
       throw new Error("Mock invoke bridge is unavailable.");
     }
@@ -156,9 +156,7 @@ async function continueToSetupPage(page: Page) {
   await expect(page.getByTestId("onboarding-page-theme")).toBeVisible();
   await page.getByTestId("onboarding-theme-option-github-light").click();
   await expect
-    .poll(() =>
-      page.evaluate(() => window.localStorage.getItem("sprout-theme")),
-    )
+    .poll(() => page.evaluate(() => window.localStorage.getItem("buzz-theme")))
     .toBe("github-light");
   await page.getByTestId("onboarding-next").click();
   await expect(page.getByTestId("onboarding-page-2")).toBeVisible();
@@ -246,7 +244,7 @@ test("welcome can continue using an existing Nostr key", async ({ page }) => {
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const rawWorkspaces = window.localStorage.getItem("sprout-workspaces");
+        const rawWorkspaces = window.localStorage.getItem("buzz-workspaces");
         const workspaces = rawWorkspaces
           ? (JSON.parse(rawWorkspaces) as Array<{ pubkey?: string }>)
           : [];
@@ -363,9 +361,7 @@ test("avatar step accepts an avatar URL before theme selection", async ({
   await expect(page.getByTestId("onboarding-page-theme")).toBeVisible();
   await page.getByTestId("onboarding-theme-option-github-light").click();
   await expect
-    .poll(() =>
-      page.evaluate(() => window.localStorage.getItem("sprout-theme")),
-    )
+    .poll(() => page.evaluate(() => window.localStorage.getItem("buzz-theme")))
     .toBe("github-light");
   await page.getByTestId("onboarding-next").click();
   await expect(page.getByTestId("onboarding-page-2")).toBeVisible();
@@ -387,10 +383,10 @@ test("failed avatar saves can continue without saving the avatar", async ({
     .fill("https://example.com/morty.png");
   await page.evaluate(() => {
     const testWindow = window as Window & {
-      __SPROUT_E2E__?: { mock?: { profileUpdateError?: string } };
+      __BUZZ_E2E__?: { mock?: { profileUpdateError?: string } };
     };
-    if (testWindow.__SPROUT_E2E__?.mock) {
-      testWindow.__SPROUT_E2E__.mock.profileUpdateError =
+    if (testWindow.__BUZZ_E2E__?.mock) {
+      testWindow.__BUZZ_E2E__.mock.profileUpdateError =
         "Temporary avatar sync failure.";
     }
   });
@@ -418,13 +414,11 @@ test("theme step offers skip instead of going back", async ({ page }) => {
     .getByTestId("onboarding-avatar-url")
     .fill("https://example.com/morty.png");
   await expect
-    .poll(() =>
-      page.evaluate(() => window.localStorage.getItem("sprout-theme")),
-    )
+    .poll(() => page.evaluate(() => window.localStorage.getItem("buzz-theme")))
     .toBe("github-light-default");
   await expect
     .poll(() =>
-      page.evaluate(() => window.localStorage.getItem("sprout-accent-color")),
+      page.evaluate(() => window.localStorage.getItem("buzz-accent-color")),
     )
     .toBe("neutral");
   await expect
@@ -436,13 +430,11 @@ test("theme step offers skip instead of going back", async ({ page }) => {
 
   await expect(page.getByTestId("onboarding-page-theme")).toBeVisible();
   await expect
-    .poll(() =>
-      page.evaluate(() => window.localStorage.getItem("sprout-theme")),
-    )
+    .poll(() => page.evaluate(() => window.localStorage.getItem("buzz-theme")))
     .toBe("github-light-default");
   await expect
     .poll(() =>
-      page.evaluate(() => window.localStorage.getItem("sprout-accent-color")),
+      page.evaluate(() => window.localStorage.getItem("buzz-accent-color")),
     )
     .toBe("neutral");
   await expect(
@@ -454,13 +446,13 @@ test("theme step offers skip instead of going back", async ({ page }) => {
   await page.getByTestId("onboarding-accent-color-blue").click();
   await expect
     .poll(() =>
-      page.evaluate(() => window.localStorage.getItem("sprout-accent-color")),
+      page.evaluate(() => window.localStorage.getItem("buzz-accent-color")),
     )
     .toBe("#3b82f6");
   await page.getByTestId("onboarding-accent-color-neutral").click();
   await expect
     .poll(() =>
-      page.evaluate(() => window.localStorage.getItem("sprout-accent-color")),
+      page.evaluate(() => window.localStorage.getItem("buzz-accent-color")),
     )
     .toBe("neutral");
   await expect(page.getByTestId("onboarding-back")).toHaveCount(0);
@@ -728,8 +720,8 @@ test("membership denial can import a different invited key", async ({
     .poll(() =>
       page.evaluate(
         () =>
-          (window as Window & { __SPROUT_E2E_COMMANDS__?: string[] })
-            .__SPROUT_E2E_COMMANDS__ ?? [],
+          (window as Window & { __BUZZ_E2E_COMMANDS__?: string[] })
+            .__BUZZ_E2E_COMMANDS__ ?? [],
       ),
     )
     .toEqual(expect.arrayContaining(["plugin:websocket|disconnect"]));

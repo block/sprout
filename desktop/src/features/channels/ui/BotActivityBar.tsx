@@ -28,7 +28,7 @@ const HEADLINE_ROTATION_MS = 2200;
 
 function getActivityHeadline(item: TranscriptItem): string | null {
   if (item.type === "tool") {
-    return formatToolTitle(item.sproutToolName ?? item.toolName, item.title);
+    return formatToolTitle(item.buzzToolName ?? item.toolName, item.title);
   }
 
   if (item.type === "message") {

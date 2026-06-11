@@ -28,7 +28,7 @@ async function autoJoinDefaultChannel(
   }
 }
 
-const ONBOARDING_COMPLETION_STORAGE_KEY = "sprout-onboarding-complete.v1";
+const ONBOARDING_COMPLETION_STORAGE_KEY = "buzz-onboarding-complete.v1";
 type OnboardingGateStage = "blocking" | "onboarding" | "ready";
 
 type UseFirstRunOnboardingGateOptions = {

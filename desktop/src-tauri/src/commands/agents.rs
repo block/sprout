@@ -20,7 +20,7 @@ use crate::{
 };
 
 /// Read the workspace owner's pubkey hex from app state without holding the
-/// lock for longer than necessary. Used to populate `SPROUT_ACP_AGENT_OWNER`
+/// lock for longer than necessary. Used to populate `BUZZ_ACP_AGENT_OWNER`
 /// as a fallback for legacy agent records that have no NIP-OA `auth_tag`.
 fn workspace_owner_hex(state: &AppState) -> Result<String, String> {
     let keys = state.keys.lock().map_err(|e| e.to_string())?;
@@ -313,7 +313,7 @@ pub async fn create_managed_agent(
     crate::managed_agents::validate_user_env_keys(&input.env_vars)?;
 
     // Validate & normalize the respond-to allowlist BEFORE any side effects.
-    // The harness has its own validator (sprout-acp/src/config.rs) but we want
+    // The harness has its own validator (buzz-acp/src/config.rs) but we want
     // to catch malformed input at the boundary so the agent never tries to
     // start with a list that will crash it on launch.
     let respond_to_allowlist =
@@ -384,12 +384,12 @@ pub async fn create_managed_agent(
     // No tokens are minted. Fail closed: bad auth tag → don't create agent.
     let auth_tag = {
         let owner_keys = state.keys.lock().map_err(|e| e.to_string())?;
-        // Bridge nostr 0.37 → 0.36 (sprout-sdk) via hex round-trip.
+        // Bridge nostr 0.37 → 0.36 (buzz-sdk) via hex round-trip.
         let compat_owner = nostr::Keys::parse(&owner_keys.secret_key().to_secret_hex())
             .map_err(|e| format!("failed to bridge owner keys: {e}"))?;
         let compat_agent = nostr::PublicKey::from_hex(&agent_keys.public_key().to_hex())
             .map_err(|e| format!("failed to bridge agent pubkey: {e}"))?;
-        let tag = sprout_sdk::nip_oa::compute_auth_tag(&compat_owner, &compat_agent, "")
+        let tag = buzz_sdk_pkg::nip_oa::compute_auth_tag(&compat_owner, &compat_agent, "")
             .map_err(|e| format!("failed to compute NIP-OA auth tag: {e}"))?;
         Some(tag)
     };
@@ -1103,7 +1103,7 @@ pub fn discover_backend_providers() -> Vec<BackendProviderInfo> {
 
 #[tauri::command]
 pub async fn probe_backend_provider(binary_path: String) -> Result<serde_json::Value, String> {
-    // Validate that the requested path is actually a discovered sprout-backend-* binary.
+    // Validate that the requested path is actually a discovered buzz-backend-* binary.
     // This prevents arbitrary binary execution via a compromised frontend or IPC.
     let candidates = discover_provider_candidates();
     let path = std::path::PathBuf::from(&binary_path);
@@ -1115,7 +1115,7 @@ pub async fn probe_backend_provider(binary_path: String) -> Result<serde_json::V
         .any(|(_, p)| p.canonicalize().ok().as_ref() == Some(&canonical));
     if !is_known {
         return Err(format!(
-            "binary '{binary_path}' is not a discovered sprout-backend-* provider"
+            "binary '{binary_path}' is not a discovered buzz-backend-* provider"
         ));
     }
     // request_id is for provider-side logging — not validated in the response

@@ -3,7 +3,7 @@
 //! **Worktree sync** (`sync_shared_agent_data`): Per-launch symlink creation
 //! from the current worktree data directory to the canonical dev data
 //! directory (`xyz.block.buzz.app.dev`). Only runs when
-//! `SPROUT_SHARE_IDENTITY=1` and `SPROUT_PRIVATE_KEY` is set. All dev
+//! `BUZZ_SHARE_IDENTITY=1` and `BUZZ_PRIVATE_KEY` is set. All dev
 //! instances share the same physical files — edits in any worktree are
 //! immediately visible to all others.
 //!
@@ -22,7 +22,7 @@ const LEGACY_RELEASE_IDENTIFIER: &str = "xyz.block.sprout.app";
 /// JSON files symlinked from worktree data directories to the canonical
 /// dev data directory. Only data files — never `agent-pids/` or `logs/`.
 /// `identity.key` is deliberately excluded because worktree instances
-/// receive their identity via the `SPROUT_PRIVATE_KEY` env var.
+/// receive their identity via the `BUZZ_PRIVATE_KEY` env var.
 const SHARED_AGENT_FILES: &[&str] = &[
     "agents/managed-agents.json",
     "agents/personas.json",
@@ -83,7 +83,7 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Copy one-time app state from the legacy Sprout app identifier directory to
+/// Copy one-time app state from the legacy app identifier directory to
 /// the current Buzz identifier directory. The Tauri identifier controls the app
 /// data path, so without this copy a product rename would look like a fresh
 /// install and users would lose their persisted identity and agent settings.
@@ -148,28 +148,26 @@ fn patch_json_records(
 /// data directory to the canonical dev data directory.
 ///
 /// Guards:
-/// - `SPROUT_SHARE_IDENTITY` must be `"1"`
-/// - `SPROUT_PRIVATE_KEY` must parse as valid `nostr::Keys`
+/// - `BUZZ_SHARE_IDENTITY` must be `"1"`
+/// - `BUZZ_PRIVATE_KEY` must parse as valid `nostr::Keys`
 /// - The canonical dir must differ from the current dir (skip if we ARE canonical)
 /// - The canonical dir must exist
 pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
     // Guard: only runs when sharing identity with a worktree.
-    let is_shared = std::env::var("SPROUT_SHARE_IDENTITY")
+    let is_shared = std::env::var("BUZZ_SHARE_IDENTITY")
         .map(|v| v == "1")
         .unwrap_or(false);
     if !is_shared {
         return;
     }
 
-    // Guard: SPROUT_PRIVATE_KEY must be a valid nostr key.
-    let has_valid_key = std::env::var("SPROUT_PRIVATE_KEY")
+    // Guard: BUZZ_PRIVATE_KEY must be a valid nostr key.
+    let has_valid_key = std::env::var("BUZZ_PRIVATE_KEY")
         .ok()
         .and_then(|k| k.parse::<nostr::Keys>().ok())
         .is_some();
     if !has_valid_key {
-        eprintln!(
-            "buzz-desktop: shared-agent-sync: SPROUT_PRIVATE_KEY missing or invalid, skipping"
-        );
+        eprintln!("buzz-desktop: shared-agent-sync: BUZZ_PRIVATE_KEY missing or invalid, skipping");
         return;
     }
 
@@ -580,7 +578,7 @@ fn reconcile_mcp_commands_in_file(path: &Path) {
         }
         // Only fix values that are clearly stale (empty or a removed binary).
         // Leave user-customized values untouched.
-        if !current.is_empty() && current != "sprout-mcp-server" {
+        if !current.is_empty() && current != "buzz-mcp-server" {
             return false;
         }
         eprintln!(

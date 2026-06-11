@@ -1,7 +1,7 @@
 import type { Workspace } from "./types";
 
-const WORKSPACES_KEY = "sprout-workspaces";
-const ACTIVE_WORKSPACE_KEY = "sprout-active-workspace-id";
+const WORKSPACES_KEY = "buzz-workspaces";
+const ACTIVE_WORKSPACE_KEY = "buzz-active-workspace-id";
 
 export function loadWorkspaces(): Workspace[] {
   try {
@@ -71,7 +71,7 @@ export function deriveWorkspaceName(relayUrl: string): string {
       return "Local Dev";
     }
     const parts = host.split(".");
-    // Detect staging environments (e.g. sprout-oss.stage.blox.sqprod.co)
+    // Detect staging environments (e.g. buzz-oss.stage.blox.sqprod.co)
     if (parts.some((p) => p === "stage" || p === "staging")) {
       return "Buzz (staging)";
     }

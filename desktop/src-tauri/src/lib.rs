@@ -233,13 +233,13 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     // All tracked PIDs have already been killed above, so pass an empty skip list.
     managed_agents::sweep_orphaned_agent_processes(app, &[]);
 
-    // System-wide sweep: agent workers (goose, sprout-agent, etc.) are spawned
-    // in their own process groups by sprout-acp, so group-kills above only
+    // System-wide sweep: agent workers (goose, buzz-agent, etc.) are spawned
+    // in their own process groups by buzz-acp, so group-kills above only
     // reach the harness, not the workers. Scan all user processes and kill any
     // known agent binaries that are still running.
     managed_agents::sweep_system_agent_processes(&managed_agents::current_instance_id(app), &[]);
 
-    // Dead-instance reaping: find agents belonging to Sprout instances
+    // Dead-instance reaping: find agents belonging to Buzz instances
     // whose desktop process is no longer running and reap them.
     managed_agents::reap_dead_instance_agents(&managed_agents::current_instance_id(app), &[]);
 
@@ -282,7 +282,7 @@ fn parse_message_deep_link(url: &Url) -> Option<serde_json::Value> {
     }))
 }
 
-/// Handle an incoming `buzz://` deep link URL, with `sprout://` accepted as a legacy alias.
+/// Handle an incoming `buzz://` deep link URL.
 ///
 /// Currently supports:
 /// - `buzz://connect?relay=<ws(s)://...>` — emits `deep-link-connect` to the frontend
@@ -295,7 +295,7 @@ fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
         }
     };
 
-    if url.scheme() != "sprout" && url.scheme() != "buzz" {
+    if url.scheme() != "buzz" {
         eprintln!("buzz-desktop: ignoring unsupported deep link scheme: {url_str}");
         return;
     }
@@ -377,7 +377,7 @@ pub fn run() {
             }
             // Forward any deep link URLs from the duplicate launch.
             for arg in &argv {
-                if arg.starts_with("sprout://") || arg.starts_with("buzz://") {
+                if arg.starts_with("buzz://") {
                     handle_deep_link_url(app, arg);
                 }
             }
@@ -494,23 +494,23 @@ pub fn run() {
     // Only register the updater in release builds that were compiled with a
     // real updater configuration. Local unsigned builds omit that config and
     // should still launch for debugging.
-    #[cfg(sprout_updater_enabled)]
+    #[cfg(buzz_updater_enabled)]
     let builder = if cfg!(debug_assertions) {
         builder
     } else {
         builder.plugin(tauri_plugin_updater::Builder::new().build())
     };
 
-    #[cfg(not(sprout_updater_enabled))]
+    #[cfg(not(buzz_updater_enabled))]
     let builder = builder;
 
     let shutdown_started = Arc::new(AtomicBool::new(false));
     let restore_shutdown_started = Arc::clone(&shutdown_started);
     let app = builder
-        .register_asynchronous_uri_scheme_protocol("sprout-media", |ctx, request, responder| {
+        .register_asynchronous_uri_scheme_protocol("buzz-media", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             tauri::async_runtime::spawn(async move {
-                let response = media_proxy::handle_sprout_media(&app, &request).await;
+                let response = media_proxy::handle_buzz_media(&app, &request).await;
                 responder.respond(response);
             });
         })
@@ -520,7 +520,7 @@ pub fn run() {
             let app_handle = app.handle().clone();
             let shutdown_started = Arc::clone(&restore_shutdown_started);
 
-            // Copy legacy Sprout app data into the new Buzz app data directory
+            // Copy legacy app data into the Buzz app data directory
             // before any state is loaded from disk.
             migration::migrate_legacy_app_data_dir(&app_handle);
 
@@ -578,14 +578,14 @@ pub fn run() {
                     .store(port, std::sync::atomic::Ordering::Relaxed);
             });
 
-            // Create the Sprout nest (~/.sprout) before agents are restored,
+            // Create the Buzz nest (~/.buzz) before agents are restored,
             // so default_agent_workdir() resolves to the nest directory.
             // Non-fatal: agents fall back to $HOME if nest creation fails.
             if let Err(error) = ensure_nest() {
                 eprintln!("buzz-desktop: failed to create nest: {error}");
             }
 
-            // Create/update ~/.local/bin/sprout symlink pointing to the
+            // Create/update the local CLI symlink pointing to the
             // bundled CLI binary. Non-fatal: agents find CLI via PATH.
             if let Ok(exe) = std::env::current_exe() {
                 if let Some(parent) = exe.parent() {
@@ -909,7 +909,7 @@ mod tests {
 
     #[test]
     fn parse_message_deep_link_extracts_required_params() {
-        let url = Url::parse("sprout://message?channel=abc&id=xyz").unwrap();
+        let url = Url::parse("buzz://message?channel=abc&id=xyz").unwrap();
         let payload = parse_message_deep_link(&url).expect("required params present");
         assert_eq!(payload["channelId"], "abc");
         assert_eq!(payload["messageId"], "xyz");
@@ -926,33 +926,33 @@ mod tests {
 
     #[test]
     fn parse_message_deep_link_includes_thread_root() {
-        let url = Url::parse("sprout://message?channel=abc&id=xyz&thread=root1").unwrap();
+        let url = Url::parse("buzz://message?channel=abc&id=xyz&thread=root1").unwrap();
         let payload = parse_message_deep_link(&url).expect("required params present");
         assert_eq!(payload["threadRootId"], "root1");
     }
 
     #[test]
     fn parse_message_deep_link_rejects_missing_id() {
-        let url = Url::parse("sprout://message?channel=abc").unwrap();
+        let url = Url::parse("buzz://message?channel=abc").unwrap();
         assert!(parse_message_deep_link(&url).is_none());
     }
 
     #[test]
     fn parse_message_deep_link_rejects_empty_channel() {
         // Regression: `channel=&id=foo` previously produced channelId: "".
-        let url = Url::parse("sprout://message?channel=&id=foo").unwrap();
+        let url = Url::parse("buzz://message?channel=&id=foo").unwrap();
         assert!(parse_message_deep_link(&url).is_none());
     }
 
     #[test]
     fn parse_message_deep_link_rejects_empty_id() {
-        let url = Url::parse("sprout://message?channel=abc&id=").unwrap();
+        let url = Url::parse("buzz://message?channel=abc&id=").unwrap();
         assert!(parse_message_deep_link(&url).is_none());
     }
 
     #[test]
     fn parse_message_deep_link_treats_empty_thread_as_absent() {
-        let url = Url::parse("sprout://message?channel=abc&id=xyz&thread=").unwrap();
+        let url = Url::parse("buzz://message?channel=abc&id=xyz&thread=").unwrap();
         let payload = parse_message_deep_link(&url).expect("required params present");
         assert!(payload["threadRootId"].is_null());
     }

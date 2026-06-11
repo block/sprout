@@ -18,8 +18,8 @@ import {
 import { classifyModelRef, modelRefHintLabel } from "../classifyModelRef";
 import { useMeshNodeStatus } from "../hooks/useMeshNodeStatus";
 
-const MODEL_DRAFT_STORAGE_KEY = "sprout.mesh-compute.share.model.v1";
-const MAX_VRAM_DRAFT_STORAGE_KEY = "sprout.mesh-compute.share.max-vram-gb.v1";
+const MODEL_DRAFT_STORAGE_KEY = "buzz.mesh-compute.share.model.v1";
+const MAX_VRAM_DRAFT_STORAGE_KEY = "buzz.mesh-compute.share.max-vram-gb.v1";
 
 function readDraft(key: string): string {
   try {

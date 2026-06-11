@@ -30,7 +30,7 @@ import {
   useRichTextEditor,
 } from "@/features/messages/lib/useRichTextEditor";
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
-import { getSproutCodeBlockClipboardText } from "@/shared/lib/codeBlockClipboard";
+import { getBuzzCodeBlockClipboardText } from "@/shared/lib/codeBlockClipboard";
 import { cn } from "@/shared/lib/cn";
 import type { ChannelType } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
@@ -628,11 +628,11 @@ export function MessageComposer({
             return true;
           }
 
-          // --- Sprout code-block paste ---
-          // The code block copy button writes a small Sprout marker alongside
+          // --- Buzz code-block paste ---
+          // The code block copy button writes a small Buzz marker alongside
           // plain text. Use it to paste back as a literal code block so Markdown
           // parsing cannot reshape indentation, fence markers, or headings.
-          const codeBlockText = getSproutCodeBlockClipboardText(
+          const codeBlockText = getBuzzCodeBlockClipboardText(
             event.clipboardData,
           );
           if (codeBlockText !== null) {

@@ -111,8 +111,7 @@ pub(super) fn transcode_to_mp4(
     ffmpeg: &std::path::Path,
 ) -> Result<std::path::PathBuf, String> {
     // UUID-based temp path — unique across concurrent uploads.
-    let output =
-        std::env::temp_dir().join(format!("sprout-transcode-{}.mp4", uuid::Uuid::new_v4()));
+    let output = std::env::temp_dir().join(format!("buzz-transcode-{}.mp4", uuid::Uuid::new_v4()));
 
     let result = run_ffmpeg_with_timeout(
         std::process::Command::new(ffmpeg)
@@ -167,7 +166,7 @@ pub(super) fn extract_poster_frame(
     mp4_path: &std::path::Path,
     ffmpeg: &std::path::Path,
 ) -> Result<std::path::PathBuf, String> {
-    let output = std::env::temp_dir().join(format!("sprout-poster-{}.jpg", uuid::Uuid::new_v4()));
+    let output = std::env::temp_dir().join(format!("buzz-poster-{}.jpg", uuid::Uuid::new_v4()));
 
     // Poster extraction is a single-frame decode — 30s is generous.
     let poster_timeout = std::time::Duration::from_secs(30);

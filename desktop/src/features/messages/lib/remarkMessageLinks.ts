@@ -1,7 +1,7 @@
 /**
  * Remark plugin that detects bare `buzz://message?…` URLs in text nodes and
  * replaces each with a custom `message-link` HAST element. Legacy
- * `sprout://message?…` URLs are accepted during the rename. The `markdown.tsx`
+ * `buzz://message?…` URLs are accepted during the rename. The `markdown.tsx`
  * components map renders that as an inline pill (channel name + click-to-open)
  * instead of the raw 100-char URL.
  *
@@ -20,7 +20,7 @@
 // --experimental-strip-types`. `tsconfig.json` enables `allowImportingTsExtensions`.
 import { createRemarkPrefixPlugin } from "../../../shared/lib/createRemarkPrefixPlugin.ts";
 
-const MESSAGE_URL_PATTERN = /(?:buzz|sprout):\/\/message\?[^\s<>"')\]]+/g;
+const MESSAGE_URL_PATTERN = /(?:buzz|buzz):\/\/message\?[^\s<>"')\]]+/g;
 const TRAILING_PUNCTUATION_PATTERN = /[.,;:!?]+$/;
 
 function trimMessageLinkMatch(matchText: string) {

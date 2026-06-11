@@ -308,7 +308,7 @@ fn canonical_dev_data_dir_returns_self_for_canonical_instance() {
     // When the current app data dir IS the canonical dev identifier,
     // canonical_dev_data_dir returns the exact same path — the caller
     // (sync_shared_agent_data) uses this equality to skip the sync.
-    // The env-var guards (SPROUT_SHARE_IDENTITY, SPROUT_PRIVATE_KEY)
+    // The env-var guards (BUZZ_SHARE_IDENTITY, BUZZ_PRIVATE_KEY)
     // require a live Tauri AppHandle and are covered by integration
     // testing only.
     let current = PathBuf::from("/Users/me/Library/Application Support/xyz.block.buzz.app.dev");
@@ -499,7 +499,7 @@ fn team_dir_reconcile_skips_records_without_team_dir() {
         &canonical,
         &serde_json::json!([{
             "name": "Test Agent",
-            "agent_command": "sprout-agent"
+            "agent_command": "buzz-agent"
         }]),
     );
 
@@ -763,14 +763,14 @@ fn rename_provider_to_runtime_preserves_existing_runtime_over_provider() {
 }
 
 #[test]
-fn reconcile_mcp_commands_clears_stale_sprout_mcp_server() {
+fn reconcile_mcp_commands_clears_stale_buzz_mcp_server() {
     let dir = tempfile::tempdir().unwrap();
     write_agents_json(
         dir.path(),
         &serde_json::json!([{
             "name": "Solo",
             "agent_command": "goose",
-            "mcp_command": "sprout-mcp-server"
+            "mcp_command": "buzz-mcp-server"
         }]),
     );
     reconcile_mcp_commands_in_file(&dir.path().join("agents/managed-agents.json"));
@@ -779,19 +779,19 @@ fn reconcile_mcp_commands_clears_stale_sprout_mcp_server() {
 }
 
 #[test]
-fn reconcile_mcp_commands_sets_canonical_for_sprout_agent() {
+fn reconcile_mcp_commands_sets_canonical_for_buzz_agent() {
     let dir = tempfile::tempdir().unwrap();
     write_agents_json(
         dir.path(),
         &serde_json::json!([{
             "name": "Stilgar",
-            "agent_command": "sprout-agent",
-            "mcp_command": "sprout-mcp-server"
+            "agent_command": "buzz-agent",
+            "mcp_command": "buzz-mcp-server"
         }]),
     );
     reconcile_mcp_commands_in_file(&dir.path().join("agents/managed-agents.json"));
     let records = read_agents_json(dir.path());
-    assert_eq!(records[0]["mcp_command"], "sprout-dev-mcp");
+    assert_eq!(records[0]["mcp_command"], "buzz-dev-mcp");
 }
 
 #[test]
@@ -815,7 +815,7 @@ fn reconcile_mcp_commands_leaves_unknown_runtime_untouched() {
     let json = serde_json::json!([{
         "name": "Custom",
         "agent_command": "my-custom-agent",
-        "mcp_command": "sprout-mcp-server"
+        "mcp_command": "buzz-mcp-server"
     }]);
     write_agents_json(dir.path(), &json);
     let path = dir.path().join("agents/managed-agents.json");
@@ -832,7 +832,7 @@ fn reconcile_mcp_commands_is_idempotent() {
         &serde_json::json!([{
             "name": "Solo",
             "agent_command": "goose",
-            "mcp_command": "sprout-mcp-server"
+            "mcp_command": "buzz-mcp-server"
         }]),
     );
     let path = dir.path().join("agents/managed-agents.json");
@@ -848,10 +848,10 @@ fn reconcile_mcp_commands_handles_mixed_agents() {
     write_agents_json(
         dir.path(),
         &serde_json::json!([
-            {"name": "Stale Goose", "agent_command": "goose", "mcp_command": "sprout-mcp-server"},
+            {"name": "Stale Goose", "agent_command": "goose", "mcp_command": "buzz-mcp-server"},
             {"name": "Clean Goose", "agent_command": "goose", "mcp_command": ""},
             {"name": "Custom Agent", "agent_command": "goose", "mcp_command": "my-custom-mcp"},
-            {"name": "Stale Buzz", "agent_command": "sprout-agent", "mcp_command": "sprout-mcp-server"}
+            {"name": "Stale Buzz", "agent_command": "buzz-agent", "mcp_command": "buzz-mcp-server"}
         ]),
     );
     reconcile_mcp_commands_in_file(&dir.path().join("agents/managed-agents.json"));
@@ -859,7 +859,7 @@ fn reconcile_mcp_commands_handles_mixed_agents() {
     assert_eq!(records[0]["mcp_command"], "");
     assert_eq!(records[1]["mcp_command"], "");
     assert_eq!(records[2]["mcp_command"], "my-custom-mcp");
-    assert_eq!(records[3]["mcp_command"], "sprout-dev-mcp");
+    assert_eq!(records[3]["mcp_command"], "buzz-dev-mcp");
 }
 
 #[test]
@@ -867,7 +867,7 @@ fn reconcile_mcp_commands_skips_record_without_agent_command() {
     let dir = tempfile::tempdir().unwrap();
     let json = serde_json::json!([{
         "name": "No Command",
-        "mcp_command": "sprout-mcp-server"
+        "mcp_command": "buzz-mcp-server"
     }]);
     write_agents_json(dir.path(), &json);
     let path = dir.path().join("agents/managed-agents.json");

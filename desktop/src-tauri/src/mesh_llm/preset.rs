@@ -33,14 +33,14 @@ pub fn agent_preset(request: MeshAgentPresetRequest) -> Result<MeshAgentPreset, 
     if model.is_empty() {
         return Err("modelId is required".to_string());
     }
-    // Run on sprout-agent, not the global default (goose). Source command +
+    // Run on buzz-agent, not the global default (goose). Source command +
     // MCP from the catalog so this can't drift from the provider definition.
-    let sprout_agent = crate::managed_agents::known_acp_runtime_exact(MESH_AGENT_PROVIDER_ID);
-    let agent_command = sprout_agent
+    let buzz_agent = crate::managed_agents::known_acp_runtime_exact(MESH_AGENT_PROVIDER_ID);
+    let agent_command = buzz_agent
         .and_then(|p| p.commands.first().copied())
         .unwrap_or(MESH_AGENT_PROVIDER_ID)
         .to_string();
-    let mcp_command = sprout_agent
+    let mcp_command = buzz_agent
         .and_then(|p| p.mcp_command)
         .unwrap_or(MESH_AGENT_MCP_COMMAND)
         .to_string();

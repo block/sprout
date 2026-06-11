@@ -429,8 +429,8 @@ export function ProfileSettingsCard({
                       >
                         <span
                           className={cn(
-                            "sprout-avatar-emoji-glyph flex h-full w-full items-center justify-center text-[6rem] leading-[100px]",
-                            avatarSquishKey > 0 && "sprout-avatar-squish",
+                            "buzz-avatar-emoji-glyph flex h-full w-full items-center justify-center text-[6rem] leading-[100px]",
+                            avatarSquishKey > 0 && "buzz-avatar-squish",
                           )}
                           data-testid="profile-avatar-preview-emoji"
                           key={avatarSquishKey}

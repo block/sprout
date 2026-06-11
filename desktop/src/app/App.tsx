@@ -19,7 +19,7 @@ import type { Workspace } from "@/features/workspaces/types";
 import { useWorkspaceInit } from "@/features/workspaces/useWorkspaceInit";
 import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
 import { WelcomeSetup } from "@/features/workspaces/ui/WelcomeSetup";
-import { createSproutQueryClient } from "@/shared/api/queryClient";
+import { createBuzzQueryClient } from "@/shared/api/queryClient";
 import { isSharedIdentity as isSharedIdentityCmd } from "@/shared/api/tauri";
 import { listenForDeepLinks } from "@/shared/deep-link";
 import { useSystemColorScheme } from "@/shared/theme/useSystemColorScheme";
@@ -31,7 +31,7 @@ const LOADING_TEXT = "Setting up your workspace...";
 function AppLoadingGate() {
   return (
     <div
-      className="sprout-setup-loading-shell flex min-h-dvh flex-col items-center justify-center overflow-hidden px-6 py-10"
+      className="buzz-setup-loading-shell flex min-h-dvh flex-col items-center justify-center overflow-hidden px-6 py-10"
       data-testid="app-loading-gate"
       role="status"
     >
@@ -40,7 +40,7 @@ function AppLoadingGate() {
         className="mt-6 text-center text-3xl font-semibold tracking-tight text-foreground"
       >
         <span className="sr-only">{LOADING_TEXT}</span>
-        <span aria-hidden="true" className="sprout-setup-loading-text">
+        <span aria-hidden="true" className="buzz-setup-loading-text">
           {LOADING_TEXT}
         </span>
       </h1>
@@ -53,7 +53,7 @@ function OnboardingLoadingGate() {
 
   return (
     <div
-      className="sprout-onboarding-neutral-theme sprout-startup-shell flex items-center justify-center bg-background px-4 py-8 text-foreground"
+      className="buzz-onboarding-neutral-theme buzz-startup-shell flex items-center justify-center bg-background px-4 py-8 text-foreground"
       data-system-color-scheme={systemColorScheme}
     >
       <div className="relative flex w-full max-w-[500px] flex-col items-center text-center">
@@ -120,7 +120,7 @@ function OnboardingLoadingGate() {
 }
 
 function WorkspaceQueryProvider({ children }: { children: ReactNode }) {
-  const [queryClient] = useState(createSproutQueryClient);
+  const [queryClient] = useState(createBuzzQueryClient);
 
   return (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>

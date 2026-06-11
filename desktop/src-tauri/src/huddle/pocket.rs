@@ -23,7 +23,7 @@
 //!   in <https://huggingface.co/kyutai/tts-voices>. CC-BY-4.0, base recording
 //!   from the VCTK corpus, enhanced by ai-coustics.
 //!
-//! Sprout ships these files unmodified; see the on-disk `MODEL_LICENSE.txt`
+//! Buzz ships these files unmodified; see the on-disk `MODEL_LICENSE.txt`
 //! sidecar written by `huddle::models` during install for the canonical
 //! CC-BY-4.0 §3(a)(1) attribution block.
 //!

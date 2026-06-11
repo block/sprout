@@ -66,36 +66,36 @@ fn identifier_empty_returns_false() {
 #[test]
 fn marker_entry_is_namespaced_by_instance_id() {
     // The spawn stamp and the sweep matcher must produce identical bytes;
-    // both go through sprout_marker_entry, so this pins the on-the-wire
+    // both go through buzz_marker_entry, so this pins the on-the-wire
     // format and guards against a dev build (`...app.dev`) matching a
     // release build's (`...app`) agents.
     assert_eq!(
-        super::sprout_marker_entry("xyz.block.buzz.app"),
+        super::buzz_marker_entry("xyz.block.buzz.app"),
         b"BUZZ_MANAGED_AGENT=xyz.block.buzz.app".to_vec()
     );
     assert_ne!(
-        super::sprout_marker_entry("xyz.block.buzz.app"),
-        super::sprout_marker_entry("xyz.block.buzz.app.dev")
+        super::buzz_marker_entry("xyz.block.buzz.app"),
+        super::buzz_marker_entry("xyz.block.buzz.app.dev")
     );
 }
 
 #[test]
-fn sprout_agent_has_mcp_hooks() {
-    let p = known_acp_runtime("sprout-agent").expect("should resolve");
+fn buzz_agent_has_mcp_hooks() {
+    let p = known_acp_runtime("buzz-agent").expect("should resolve");
     assert!(p.mcp_hooks);
-    assert_eq!(p.mcp_command, Some("sprout-dev-mcp"));
+    assert_eq!(p.mcp_command, Some("buzz-dev-mcp"));
 }
 
 #[test]
 fn databricks_defaults_empty_in_oss_build() {
-    // OSS (and normal test) builds set neither SPROUT_BUILD_DATABRICKS_*,
+    // OSS (and normal test) builds set neither BUZZ_BUILD_DATABRICKS_*,
     // so nothing is baked in and no DATABRICKS_* is injected on spawn.
     assert!(super::build_databricks_defaults().is_empty());
 }
 
 #[test]
-fn sprout_agent_resolved_via_path() {
-    assert!(known_acp_runtime("/usr/local/bin/sprout-agent").is_some_and(|p| p.mcp_hooks));
+fn buzz_agent_resolved_via_path() {
+    assert!(known_acp_runtime("/usr/local/bin/buzz-agent").is_some_and(|p| p.mcp_hooks));
 }
 
 #[test]
@@ -130,7 +130,7 @@ fn fixture(
         auth_tag,
         relay_url: "ws://localhost:3000".into(),
         avatar_url: None,
-        acp_command: "sprout-acp".into(),
+        acp_command: "buzz-acp".into(),
         agent_command: "goose".into(),
         agent_args: vec![],
         mcp_command: String::new(),
@@ -374,7 +374,7 @@ fn runtime_metadata_env_vars_skips_provider_when_locked() {
 
 #[test]
 fn runtime_metadata_env_vars_injects_model_even_with_acp_model_switching() {
-    // sprout-agent has supports_acp_model_switching=true but we still inject
+    // buzz-agent has supports_acp_model_switching=true but we still inject
     // the model env var because ACP model switching is post-bootstrap
     let vars = runtime_metadata_env_vars(
         Some("BUZZ_AGENT_MODEL"),

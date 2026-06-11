@@ -49,13 +49,13 @@ function TransitionLine({
 }) {
   return (
     <div
-      className="sprout-onboarding-transition-line flex w-full justify-center"
+      className="buzz-onboarding-transition-line flex w-full justify-center"
       data-onboarding-direction={direction}
       data-onboarding-effect={effect}
     >
       <div
         className={cn(
-          "sprout-onboarding-transition-content w-full",
+          "buzz-onboarding-transition-content w-full",
           contentClassName,
         )}
       >
