@@ -132,7 +132,7 @@ function NostrKeyImportPage({
     >
       <div className="w-full max-w-[440px]">
         <h1 className="text-3xl font-semibold tracking-tight">
-          Continue using Nostr
+          Import your Nostr key
         </h1>
         <p className="mt-3 text-sm leading-6 text-muted-foreground">
           Import an existing Nostr private key to use that identity with Buzz.
@@ -289,7 +289,7 @@ function NostrKeyImportPage({
             {isBusy ? (
               <Spinner aria-label="Importing key" className="h-4 w-4" />
             ) : (
-              "Continue using Nostr"
+              "Import key"
             )}
           </Button>
 
@@ -494,7 +494,7 @@ export function WelcomeSetup({
                 type="button"
                 variant="ghost"
               >
-                Continue using Nostr
+                I have my own Nostr key
               </Button>
             </div>
 

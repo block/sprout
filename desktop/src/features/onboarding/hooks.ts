@@ -36,6 +36,7 @@ type UseFirstRunOnboardingGateOptions = {
   identityIsFetching: boolean;
   identityStatus: QueryStatus;
   isSharedIdentity: boolean;
+  profileDisplayName: string | null | undefined;
   profileIsFetching: boolean;
   profileStatus: QueryStatus;
 };
@@ -130,6 +131,7 @@ export function useFirstRunOnboardingGate({
   identityIsFetching,
   identityStatus,
   isSharedIdentity,
+  profileDisplayName,
   profileIsFetching,
   profileStatus,
 }: UseFirstRunOnboardingGateOptions) {
@@ -198,9 +200,25 @@ export function useFirstRunOnboardingGate({
       return;
     }
 
+    // If the relay already has a profile with a display name for this pubkey,
+    // the user has previously completed onboarding (possibly on another
+    // machine or app data directory). Skip the onboarding flow and mark as
+    // complete so they go straight to the app.
+    const hasExistingProfile =
+      profileStatus === "success" &&
+      typeof profileDisplayName === "string" &&
+      profileDisplayName.trim().length > 0;
+
     setGateState((current) =>
       updateActiveGateState(current, currentPubkey, (activeGateState) => {
-        const alreadyOnboarded = activeGateState.hasCompletedCurrentPubkey;
+        const alreadyOnboarded =
+          activeGateState.hasCompletedCurrentPubkey || hasExistingProfile;
+        if (alreadyOnboarded && typeof window !== "undefined") {
+          window.localStorage.setItem(
+            onboardingCompletionStorageKey(currentPubkey),
+            "true",
+          );
+        }
         return {
           ...activeGateState,
           hasCompletedCurrentPubkey: alreadyOnboarded,
@@ -215,6 +233,7 @@ export function useFirstRunOnboardingGate({
     hasSettledCurrentPubkey,
     identityStatus,
     isSharedIdentity,
+    profileDisplayName,
     profileIsFetching,
     profileStatus,
   ]);
@@ -268,6 +287,7 @@ export function useAppOnboardingState(isSharedIdentity: boolean) {
     identityIsFetching: identityQuery.fetchStatus === "fetching",
     identityStatus: identityQuery.status,
     isSharedIdentity,
+    profileDisplayName: profileQuery.data?.displayName,
     profileIsFetching: profileQuery.fetchStatus === "fetching",
     profileStatus: profileQuery.status,
   });
