@@ -64,12 +64,12 @@ async function waitForMockLiveSubscription(
           return (
             (
               window as Window & {
-                __SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+                __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
                   channelName: string;
                   kind?: number;
                 }) => boolean;
               }
-            ).__SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+            ).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
               channelName: currentChannelName,
               kind,
             }) ?? false
@@ -139,8 +139,8 @@ async function getManagedAgentPubkey(
 async function readCommandLog(page: import("@playwright/test").Page) {
   return page.evaluate(() => {
     return (
-      (window as Window & { __SPROUT_E2E_COMMANDS__?: string[] })
-        .__SPROUT_E2E_COMMANDS__ ?? []
+      (window as Window & { __BUZZ_E2E_COMMANDS__?: string[] })
+        .__BUZZ_E2E_COMMANDS__ ?? []
     );
   });
 }
@@ -150,12 +150,12 @@ async function readCommandPayloadLog(page: import("@playwright/test").Page) {
     return (
       (
         window as Window & {
-          __SPROUT_E2E_COMMAND_LOG__?: Array<{
+          __BUZZ_E2E_COMMAND_LOG__?: Array<{
             command: string;
             payload: unknown;
           }>;
         }
-      ).__SPROUT_E2E_COMMAND_LOG__ ?? []
+      ).__BUZZ_E2E_COMMAND_LOG__ ?? []
     );
   });
 }
@@ -169,9 +169,9 @@ async function invokeMockCommand<T>(
     return Boolean(
       (
         window as Window & {
-          __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: unknown;
+          __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: unknown;
         }
-      ).__SPROUT_E2E_INVOKE_MOCK_COMMAND__,
+      ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__,
     );
   });
 
@@ -185,12 +185,12 @@ async function invokeMockCommand<T>(
     }) => {
       const invoke = (
         window as Window & {
-          __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
+          __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
             command: string,
             payload?: Record<string, unknown>,
           ) => Promise<unknown>;
         }
-      ).__SPROUT_E2E_INVOKE_MOCK_COMMAND__;
+      ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
 
       if (!invoke) {
         throw new Error("Mock bridge is not installed.");
@@ -464,9 +464,9 @@ test("archived channels stay out of all sidebar sections", async ({ page }) => {
     return Boolean(
       (
         window as Window & {
-          __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: unknown;
+          __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: unknown;
         }
-      ).__SPROUT_E2E_INVOKE_MOCK_COMMAND__,
+      ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__,
     );
   });
   await page.evaluate(
@@ -481,12 +481,12 @@ test("archived channels stay out of all sidebar sections", async ({ page }) => {
     }) => {
       const invoke = (
         window as Window & {
-          __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
+          __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
             command: string,
             payload?: Record<string, unknown>,
           ) => Promise<{ id: string }>;
         }
-      ).__SPROUT_E2E_INVOKE_MOCK_COMMAND__;
+      ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__;
 
       if (!invoke) {
         throw new Error("Mock bridge is not installed.");
@@ -647,7 +647,7 @@ test("shows and clears activity indicators for active channel agents", async ({
   await waitForMockLiveSubscription(page, "agents", KIND_TYPING_INDICATOR);
 
   await page.evaluate((pubkey) => {
-    window.__SPROUT_E2E_EMIT_MOCK_TYPING__?.({
+    window.__BUZZ_E2E_EMIT_MOCK_TYPING__?.({
       channelName: "agents",
       pubkey,
     });
@@ -670,7 +670,7 @@ test("shows and clears activity indicators for active channel agents", async ({
   await expect(page.getByTestId("message-typing-indicator")).toHaveCount(0);
 
   await page.evaluate((pubkey) => {
-    window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({
+    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "agents",
       content: "Done.",
       pubkey,
@@ -684,7 +684,7 @@ test("shows and clears activity indicators for active channel agents", async ({
 
   await page.waitForTimeout(1_200);
   await page.evaluate((pubkey) => {
-    window.__SPROUT_E2E_EMIT_MOCK_TYPING__?.({
+    window.__BUZZ_E2E_EMIT_MOCK_TYPING__?.({
       channelName: "agents",
       pubkey,
     });
@@ -706,7 +706,7 @@ test("typing indicator shows avatars and maintains stable name order", async ({
 
   // Alice starts typing first
   await page.evaluate((pubkey) => {
-    window.__SPROUT_E2E_EMIT_MOCK_TYPING__?.({
+    window.__BUZZ_E2E_EMIT_MOCK_TYPING__?.({
       channelName: "random",
       pubkey,
     });
@@ -725,7 +725,7 @@ test("typing indicator shows avatars and maintains stable name order", async ({
 
   // Bob starts typing second
   await page.evaluate((pubkey) => {
-    window.__SPROUT_E2E_EMIT_MOCK_TYPING__?.({
+    window.__BUZZ_E2E_EMIT_MOCK_TYPING__?.({
       channelName: "random",
       pubkey,
     });
@@ -738,7 +738,7 @@ test("typing indicator shows avatars and maintains stable name order", async ({
 
   // Alice re-broadcasts — order should stay "alice and bob", not flip
   await page.evaluate((pubkey) => {
-    window.__SPROUT_E2E_EMIT_MOCK_TYPING__?.({
+    window.__BUZZ_E2E_EMIT_MOCK_TYPING__?.({
       channelName: "random",
       pubkey,
     });
@@ -750,7 +750,7 @@ test("typing indicator shows avatars and maintains stable name order", async ({
 
   // Bob re-broadcasts — order should still stay "alice and bob"
   await page.evaluate((pubkey) => {
-    window.__SPROUT_E2E_EMIT_MOCK_TYPING__?.({
+    window.__BUZZ_E2E_EMIT_MOCK_TYPING__?.({
       channelName: "random",
       pubkey,
     });
@@ -773,7 +773,7 @@ test("sidebar shows unread indicator for newly active channels", async ({
   // alice — simulating a real "another user posted while I was elsewhere".
   await page.evaluate(
     ({ pubkey }) => {
-      window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "random",
         content: "Unread update for #random",
         kind: 40002,
@@ -802,7 +802,7 @@ test("sidebar shows unread indicator for new forum posts", async ({ page }) => {
   // Emit as alice — the unread tracker ignores self-authored messages.
   await page.evaluate(
     ({ pubkey }) => {
-      window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "watercooler",
         content: "Unread update for the forum",
         kind: 45001,
@@ -826,7 +826,7 @@ test("sidebar clears unread indicator after opening a DM", async ({ page }) => {
   await waitForMockLiveSubscription(page, "alice-tyler");
 
   await page.evaluate((pubkey) => {
-    window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({
+    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
       channelName: "alice-tyler",
       content: "Unread update for the DM",
       pubkey,

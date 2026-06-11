@@ -2,7 +2,7 @@ import * as React from "react";
 
 import type { AgentPersona } from "@/shared/api/types";
 
-const STORAGE_KEY = "sprout:bot-recents";
+const STORAGE_KEY = "buzz:bot-recents";
 const MAX_RECENTS = 8;
 
 // Default persona display names to seed the list when empty.

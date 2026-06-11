@@ -2,7 +2,7 @@ use super::ManagedAgentRecord;
 pub use super::RelayMeshConfig;
 
 pub const RELAY_MESH_API_BASE_URL: &str = "http://127.0.0.1:9337/v1";
-pub const RELAY_MESH_API_KEY_PLACEHOLDER: &str = "sprout-mesh-local";
+pub const RELAY_MESH_API_KEY_PLACEHOLDER: &str = "buzz-mesh-local";
 
 /// Resolve a record's relay-mesh config, typed field first.
 ///
@@ -19,7 +19,7 @@ pub fn relay_mesh_config(record: &ManagedAgentRecord) -> Option<RelayMeshConfig>
 }
 
 /// Returns the relay-mesh model id for agents whose provider env points at the
-/// local mesh client endpoint created by Sprout's relay-mesh preset.
+/// local mesh client endpoint created by Buzz's relay-mesh preset.
 ///
 /// Prefer [`relay_mesh_config`]; this remains as a convenience for call sites
 /// that only need the model id.
@@ -69,7 +69,7 @@ mod tests {
             auth_tag: Some("tag".into()),
             relay_url: "ws://localhost:3000".into(),
             avatar_url: None,
-            acp_command: "sprout-acp".into(),
+            acp_command: "buzz-acp".into(),
             agent_command: "goose".into(),
             agent_args: vec![],
             mcp_command: String::new(),

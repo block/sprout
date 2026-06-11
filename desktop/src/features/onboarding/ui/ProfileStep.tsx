@@ -78,7 +78,7 @@ export function ProfileStep({
               <span className="relative inline-flex select-none items-center gap-0 text-4xl font-semibold text-muted-foreground/35 sm:text-5xl">
                 <span
                   aria-hidden="true"
-                  className="sprout-onboarding-name-placeholder-caret h-[0.9em] w-0.5 rounded-full bg-primary"
+                  className="buzz-onboarding-name-placeholder-caret h-[0.9em] w-0.5 rounded-full bg-primary"
                 />
                 Name
               </span>

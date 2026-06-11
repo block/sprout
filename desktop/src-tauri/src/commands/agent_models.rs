@@ -16,7 +16,7 @@ use crate::{
     util::now_iso,
 };
 
-/// Query available models from an agent via `sprout-acp models --json`.
+/// Query available models from an agent via `buzz-acp models --json`.
 ///
 /// Spawns a short-lived subprocess (no relay connection needed). The subprocess
 /// starts the agent, queries its model catalog, and exits. ~2-5s total.
@@ -92,14 +92,14 @@ pub async fn get_agent_models(
                 }
             }
         }
-        // User env layering — written LAST so it overrides any Sprout-set env above.
+        // User env layering — written LAST so it overrides any Buzz-set env above.
         for (k, v) in &merged_env {
             cmd.env(k, v);
         }
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .output()
-            .map_err(|e| format!("failed to spawn sprout-acp models: {e}"))
+            .map_err(|e| format!("failed to spawn buzz-acp models: {e}"))
     })
     .await
     .map_err(|e| format!("model discovery task failed: {e}"))?
@@ -113,7 +113,7 @@ pub async fn get_agent_models(
         let stderr_redacted =
             crate::managed_agents::redact_env_values_in(stderr.as_ref(), &env_for_redaction);
         return Err(format!(
-            "sprout-acp models failed (exit {}): {stderr_redacted}",
+            "buzz-acp models failed (exit {}): {stderr_redacted}",
             output.status.code().unwrap_or(-1)
         ));
     }
@@ -270,7 +270,7 @@ pub async fn update_managed_agent(
             {
                 Ok(()) => None,
                 Err(e) => {
-                    eprintln!("sprout-desktop: relay profile sync failed after rename: {e}");
+                    eprintln!("buzz-desktop: relay profile sync failed after rename: {e}");
                     Some(e)
                 }
             }
@@ -286,7 +286,7 @@ pub async fn update_managed_agent(
 
 // ── Model normalization ───────────────────────────────────────────────────────
 
-/// Normalize raw `sprout-acp models --json` output into a typed DTO for the frontend.
+/// Normalize raw `buzz-acp models --json` output into a typed DTO for the frontend.
 ///
 /// Merges models from both ACP paths (stable configOptions + unstable SessionModelState),
 /// deduplicates by ID (stable takes precedence), and returns a unified list.

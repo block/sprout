@@ -55,7 +55,7 @@ pub(crate) fn filter_derived_provider_model_env_vars(
         .collect()
 }
 
-/// Env var keys that Sprout sets itself and users must not override from
+/// Env var keys that Buzz sets itself and users must not override from
 /// the persona/agent env_vars UI. Three categories:
 ///
 /// 1. **Identity / secrets** — overriding would swap the agent's nsec or
@@ -107,8 +107,8 @@ pub(crate) fn is_reserved_env_key(key: &str) -> bool {
 /// nit: Rust's `Command::env` will happily accept a key containing `=`
 /// or whitespace and pass it straight into the child's environ block,
 /// where `getenv("FOO")` then matches whatever comes after the first
-/// `=`. That means a key like `SPROUT_AUTH_TAG=x` with value `forged`
-/// lands as `SPROUT_AUTH_TAG=x=forged` in the child env and
+/// `=`. That means a key like `BUZZ_AUTH_TAG=x` with value `forged`
+/// lands as `BUZZ_AUTH_TAG=x=forged` in the child env and
 /// `getenv("BUZZ_AUTH_TAG")` returns `"x=forged"` — a full reserved-
 /// key bypass. Rejecting non-POSIX keys closes this hole at the
 /// boundary where the input enters the system.
@@ -200,7 +200,7 @@ pub fn validate_user_env_keys(env_vars: &BTreeMap<String, String>) -> Result<(),
     reserved.dedup();
     if !reserved.is_empty() {
         return Err(format!(
-            "the following env vars are reserved by Sprout and cannot be overridden: {}",
+            "the following env vars are reserved by Buzz and cannot be overridden: {}",
             reserved.join(", ")
         ));
     }
@@ -260,7 +260,7 @@ pub(crate) fn merged_user_env(
     merged.retain(|k, v| {
         if is_reserved_env_key(k) {
             eprintln!(
-                "sprout-desktop: ignoring reserved env var `{k}` from persona/agent overrides"
+                "buzz-desktop: ignoring reserved env var `{k}` from persona/agent overrides"
             );
             return false;
         }
@@ -270,7 +270,7 @@ pub(crate) fn merged_user_env(
             // smuggle a reserved key past us via `=`-in-key tricks. See
             // `is_well_formed_env_key` for the exploit.
             eprintln!(
-                "sprout-desktop: ignoring malformed env var key `{}` from persona/agent overrides",
+                "buzz-desktop: ignoring malformed env var key `{}` from persona/agent overrides",
                 display_invalid_key(k)
             );
             return false;
@@ -280,13 +280,13 @@ pub(crate) fn merged_user_env(
             // have escaped the value validator; drop them here rather
             // than crash the spawn. We deliberately do NOT log the value.
             eprintln!(
-                "sprout-desktop: ignoring env var `{k}` with NUL byte in value"
+                "buzz-desktop: ignoring env var `{k}` with NUL byte in value"
             );
             return false;
         }
         if v.len() > MAX_ENV_VALUE_BYTES {
             eprintln!(
-                "sprout-desktop: ignoring env var `{k}` with oversize value ({} bytes > {MAX_ENV_VALUE_BYTES})",
+                "buzz-desktop: ignoring env var `{k}` with oversize value ({} bytes > {MAX_ENV_VALUE_BYTES})",
                 v.len()
             );
             return false;

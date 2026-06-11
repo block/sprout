@@ -29,12 +29,12 @@ pub use team_repair::sync_team_personas;
 pub use teams::*;
 pub use types::*;
 
-/// Returns the Sprout nest directory (`~/.sprout`) if it exists as a real
+/// Returns the Buzz nest directory (`~/.buzz`) if it exists as a real
 /// directory (not a symlink), falling back to the user's home directory.
 ///
 /// Used as the default working directory for spawned agent processes.
 /// `ensure_nest()` must be called during app setup before this is first
-/// invoked, so that `~/.sprout` exists and gets cached.
+/// invoked, so that `~/.buzz` exists and gets cached.
 ///
 /// Cached for the process lifetime via `OnceLock`.
 /// Returns `None` in sandboxed/containerized environments where `$HOME` is
@@ -45,7 +45,7 @@ pub fn default_agent_workdir() -> Option<std::path::PathBuf> {
     static WORKDIR: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
     WORKDIR
         .get_or_init(|| {
-            // Prefer ~/.sprout if it exists (created by ensure_nest()).
+            // Prefer ~/.buzz if it exists (created by ensure_nest()).
             // Reject symlinks to prevent redirect attacks — is_dir()
             // follows symlinks, so check symlink_metadata() first.
             // Fall back to $HOME for resilience.

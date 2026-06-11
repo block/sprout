@@ -138,13 +138,13 @@ async function joinChannel(
 async function getLoggedNotifications(page: import("@playwright/test").Page) {
   return page.evaluate(() => {
     const win = window as Window & {
-      __SPROUT_E2E_NOTIFICATIONS__?: Array<{
+      __BUZZ_E2E_NOTIFICATIONS__?: Array<{
         body: string | null;
         title: string;
       }>;
     };
 
-    return win.__SPROUT_E2E_NOTIFICATIONS__ ?? [];
+    return win.__BUZZ_E2E_NOTIFICATIONS__ ?? [];
   });
 }
 

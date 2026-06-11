@@ -33,7 +33,7 @@ Your text is read aloud via TTS. You will be interrupted when humans speak — t
 - When tool results are long, summarize the key finding verbally.
 - If interrupted, continue naturally. No apologies.
 - In multi-agent huddles, identify yourself only when needed.
-- Use your Sprout tools proactively when asked."
+- Use your Buzz tools proactively when asked."
     )
 }
 
@@ -84,7 +84,7 @@ pub async fn add_agent_to_huddle(
             Ok(_) => (true, None),
             Err(e) => {
                 eprintln!(
-                    "sprout-desktop: add agent to parent channel failed (may already be member): {e}"
+                    "buzz-desktop: add agent to parent channel failed (may already be member): {e}"
                 );
                 (false, Some(e))
             }

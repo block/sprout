@@ -1,6 +1,10 @@
 import * as React from "react";
 import { useQueryClient, type QueryStatus } from "@tanstack/react-query";
 
+import {
+  managedAgentsQueryKey,
+  relayAgentsQueryKey,
+} from "@/features/agents/hooks";
 import { channelsQueryKey } from "@/features/channels/hooks";
 import {
   ensureWelcomeChannel,
@@ -77,6 +81,10 @@ async function initializeWelcomeChannel(
     try {
       await ensureWelcomeGuideIntro(welcomeChannel.id);
       didInitializeWelcomeGuide = true;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey }),
+        queryClient.invalidateQueries({ queryKey: relayAgentsQueryKey }),
+      ]);
     } catch (error) {
       console.warn("Failed to initialize Welcome guide.", error);
     }
@@ -108,7 +116,7 @@ async function refreshChannelsCache(
   await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
 }
 
-const ONBOARDING_COMPLETION_STORAGE_KEY = "sprout-onboarding-complete.v1";
+const ONBOARDING_COMPLETION_STORAGE_KEY = "buzz-onboarding-complete.v1";
 type OnboardingGateStage = "blocking" | "onboarding" | "ready";
 
 type UseFirstRunOnboardingGateOptions = {

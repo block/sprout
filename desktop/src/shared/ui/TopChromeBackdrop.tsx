@@ -10,7 +10,7 @@ import { topChromeBackdrop } from "@/shared/layout/chromeLayout";
  * pointer-events-none) and sits at z-40 — below the global chrome controls
  * (z-[45]) but above page content.
  *
- * Height follows `--sprout-top-chrome-height` on the app `<main>` inset.
+ * Height follows `--buzz-top-chrome-height` on the app `<main>` inset.
  * Pass `className` to override for panels whose own header occupies the top.
  */
 export function TopChromeBackdrop({ className }: { className?: string }) {

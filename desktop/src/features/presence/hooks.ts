@@ -15,7 +15,7 @@ const PRESENCE_HEARTBEAT_INTERVAL_MS = 30_000;
 const PRESENCE_IDLE_TIMEOUT_MS = 5 * 60_000;
 const PRESENCE_STATUS_TICK_INTERVAL_MS = 30_000;
 const PRESENCE_TTL_SECONDS = 90;
-const PRESENCE_PREFERENCE_STORAGE_KEY = "sprout-presence-preference";
+const PRESENCE_PREFERENCE_STORAGE_KEY = "buzz-presence-preference";
 
 type PresencePreference = "auto" | "away" | "offline" | null;
 

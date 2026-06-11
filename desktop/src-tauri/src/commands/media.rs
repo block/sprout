@@ -173,7 +173,7 @@ fn sign_blossom_upload_auth(
     if let Some(domain) = extract_server_authority(base_url) {
         tags.push(Tag::parse(vec!["server".to_string(), domain]).map_err(|e| e.to_string())?);
     }
-    EventBuilder::new(Kind::from(24242), "Upload sprout-media")
+    EventBuilder::new(Kind::from(24242), "Upload buzz-media")
         .tags(tags)
         .sign_with_keys(keys)
         .map_err(|e| e.to_string())
@@ -321,7 +321,7 @@ async fn process_picked_path(
     if let Some(poster) = poster_bytes {
         match do_upload(poster, "image/jpeg", state).await {
             Ok(poster_desc) => descriptor.image = Some(poster_desc.url),
-            Err(e) => eprintln!("sprout-desktop: poster upload failed (non-fatal): {e}"),
+            Err(e) => eprintln!("buzz-desktop: poster upload failed (non-fatal): {e}"),
         }
     }
 
@@ -398,7 +398,7 @@ pub async fn upload_media_bytes(
         // All blocking I/O runs off the async runtime via spawn_blocking.
         tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
             let tmp_input =
-                std::env::temp_dir().join(format!("sprout-drop-{}", uuid::Uuid::new_v4()));
+                std::env::temp_dir().join(format!("buzz-drop-{}", uuid::Uuid::new_v4()));
             // Cleanup guard: remove temp file on ALL exit paths (including write failure).
             let result = (|| {
                 std::fs::write(&tmp_input, &data)
@@ -422,7 +422,7 @@ pub async fn upload_media_bytes(
     if let Some(poster) = poster_bytes {
         match do_upload(poster, "image/jpeg", &state).await {
             Ok(poster_desc) => descriptor.image = Some(poster_desc.url),
-            Err(e) => eprintln!("sprout-desktop: poster upload failed (non-fatal): {e}"),
+            Err(e) => eprintln!("buzz-desktop: poster upload failed (non-fatal): {e}"),
         }
     }
 

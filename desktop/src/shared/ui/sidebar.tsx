@@ -27,7 +27,7 @@ import {
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state";
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
-const SIDEBAR_WIDTH_STORAGE_KEY = "sprout-sidebar-width";
+const SIDEBAR_WIDTH_STORAGE_KEY = "buzz-sidebar-width";
 const SIDEBAR_WIDTH_DEFAULT = 300;
 const SIDEBAR_WIDTH_DEFAULT_HAPTIC_THRESHOLD = 2;
 const SIDEBAR_WIDTH_DEFAULT_SNAP_DISTANCE = 8;

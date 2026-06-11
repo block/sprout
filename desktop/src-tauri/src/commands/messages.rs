@@ -285,19 +285,19 @@ pub async fn send_channel_message(
     let media = media_tags.unwrap_or_default();
     let emoji = emoji_tags.unwrap_or_default();
     let mention_refs_only = mention_tags.unwrap_or_default();
-    let kind_num = kind.unwrap_or(sprout_core::kind::KIND_STREAM_MESSAGE);
+    let kind_num = kind.unwrap_or(buzz_core_pkg::kind::KIND_STREAM_MESSAGE);
 
     let mut resolved_root: Option<String> = None;
 
     let builder = match kind_num {
-        sprout_core::kind::KIND_FORUM_POST => events::build_forum_post(
+        buzz_core_pkg::kind::KIND_FORUM_POST => events::build_forum_post(
             channel_uuid,
             content.trim(),
             &mention_refs,
             &media,
             &mention_refs_only,
         )?,
-        sprout_core::kind::KIND_FORUM_COMMENT => {
+        buzz_core_pkg::kind::KIND_FORUM_COMMENT => {
             let parent_id = parent_event_id
                 .as_deref()
                 .ok_or("forum comment requires parent_event_id")?;
@@ -498,7 +498,7 @@ pub async fn add_reaction(
         // Custom-emoji reaction (NIP-30): kind:7 with `:shortcode:` content and
         // an `["emoji", shortcode, url]` tag. Delegates to the SDK builder so
         // shortcode normalization + validation match the relay exactly.
-        Some(url) => sprout_sdk::build_custom_emoji_reaction(target_eid, emoji.trim(), &url)
+        Some(url) => buzz_sdk_pkg::build_custom_emoji_reaction(target_eid, emoji.trim(), &url)
             .map_err(|e| format!("invalid custom emoji reaction: {e}"))?,
         None => events::build_reaction(target_eid, emoji.trim())?,
     };

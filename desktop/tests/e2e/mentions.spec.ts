@@ -30,8 +30,8 @@ function autocomplete(page: import("@playwright/test").Page) {
 async function readCommandLog(page: import("@playwright/test").Page) {
   return page.evaluate(() => {
     return (
-      (window as Window & { __SPROUT_E2E_COMMANDS__?: string[] })
-        .__SPROUT_E2E_COMMANDS__ ?? []
+      (window as Window & { __BUZZ_E2E_COMMANDS__?: string[] })
+        .__BUZZ_E2E_COMMANDS__ ?? []
     );
   });
 }
@@ -41,12 +41,12 @@ async function readCommandPayloads(page: import("@playwright/test").Page) {
     return (
       (
         window as Window & {
-          __SPROUT_E2E_COMMAND_PAYLOADS__?: Array<{
+          __BUZZ_E2E_COMMAND_PAYLOADS__?: Array<{
             command: string;
             payload: unknown;
           }>;
         }
-      ).__SPROUT_E2E_COMMAND_PAYLOADS__ ?? []
+      ).__BUZZ_E2E_COMMAND_PAYLOADS__ ?? []
     );
   });
 }
@@ -67,12 +67,12 @@ async function waitForMockLiveSubscription(
           return (
             (
               window as Window & {
-                __SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+                __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
                   channelName: string;
                   kind?: number;
                 }) => boolean;
               }
-            ).__SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+            ).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
               channelName: currentChannelName,
               kind: expectedKind,
             }) ?? false
@@ -650,7 +650,7 @@ test("system add and remove rows use agent mention styling for managed agents", 
 
   await page.evaluate(
     ({ actorPubkey, kind, targetPubkey }) => {
-      window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: JSON.stringify({
           type: "member_joined",
@@ -659,7 +659,7 @@ test("system add and remove rows use agent mention styling for managed agents", 
         }),
         kind,
       });
-      window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({
+      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
         content: JSON.stringify({
           type: "member_removed",

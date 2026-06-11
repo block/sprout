@@ -46,14 +46,14 @@ async function waitForInvokeBridge(page: import("@playwright/test").Page) {
   await page.waitForFunction(
     () => {
       const tauriWindow = window as Window & {
-        __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: unknown;
+        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: unknown;
         __TAURI_INTERNALS__?: {
           invoke?: unknown;
         };
       };
 
       return (
-        typeof tauriWindow.__SPROUT_E2E_INVOKE_MOCK_COMMAND__ === "function" ||
+        typeof tauriWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ === "function" ||
         typeof tauriWindow.__TAURI_INTERNALS__?.invoke === "function"
       );
     },
@@ -72,7 +72,7 @@ async function invokeTauri<T>(
   return page.evaluate(
     async ({ command: targetCommand, payload: targetPayload }) => {
       const tauriWindow = window as Window & {
-        __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
+        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
           command: string,
           payload?: Record<string, unknown>,
         ) => Promise<unknown>;
@@ -85,7 +85,7 @@ async function invokeTauri<T>(
       };
 
       const invoke =
-        tauriWindow.__SPROUT_E2E_INVOKE_MOCK_COMMAND__ ??
+        tauriWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ ??
         tauriWindow.__TAURI_INTERNALS__?.invoke;
       if (!invoke) {
         throw new Error("Mock invoke bridge is unavailable.");
@@ -107,7 +107,7 @@ async function invokeTauriExpectError(
   return page.evaluate(
     async ({ command: targetCommand, payload: targetPayload }) => {
       const tauriWindow = window as Window & {
-        __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
+        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
           command: string,
           payload?: Record<string, unknown>,
         ) => Promise<unknown>;
@@ -120,7 +120,7 @@ async function invokeTauriExpectError(
       };
 
       const invoke =
-        tauriWindow.__SPROUT_E2E_INVOKE_MOCK_COMMAND__ ??
+        tauriWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ ??
         tauriWindow.__TAURI_INTERNALS__?.invoke;
       if (!invoke) {
         throw new Error("Mock invoke bridge is unavailable.");

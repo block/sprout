@@ -5,42 +5,42 @@ use crate::managed_agents::known_acp_runtime;
 #[test]
 fn identifier_prefix_does_not_match_longer_id() {
     // DMG identifier should NOT match inside a dev desktop's config JSON.
-    let buf = br#""identifier":"xyz.block.sprout.app.dev""#;
-    let id = b"xyz.block.sprout.app";
+    let buf = br#""identifier":"xyz.block.buzz.app.dev""#;
+    let id = b"xyz.block.buzz.app";
     assert!(!super::buffer_contains_identifier(buf, id));
 }
 
 #[test]
 fn identifier_prefix_does_not_match_worktree_slug() {
     // Main dev identifier should NOT match inside a worktree desktop's buffer.
-    let buf = br#""identifier":"xyz.block.sprout.app.dev.my-branch""#;
-    let id = b"xyz.block.sprout.app.dev";
+    let buf = br#""identifier":"xyz.block.buzz.app.dev.my-branch""#;
+    let id = b"xyz.block.buzz.app.dev";
     assert!(!super::buffer_contains_identifier(buf, id));
 }
 
 #[test]
 fn identifier_exact_match_with_quote_boundary() {
     // Exact match followed by closing quote — should match.
-    let buf = br#""identifier":"xyz.block.sprout.app.dev""#;
-    let id = b"xyz.block.sprout.app.dev";
+    let buf = br#""identifier":"xyz.block.buzz.app.dev""#;
+    let id = b"xyz.block.buzz.app.dev";
     assert!(super::buffer_contains_identifier(buf, id));
 }
 
 #[test]
 fn identifier_match_with_null_boundary() {
     // In KERN_PROCARGS2, entries are null-delimited.
-    let mut buf = b"BUZZ_MANAGED_AGENT=xyz.block.sprout.app.dev".to_vec();
+    let mut buf = b"BUZZ_MANAGED_AGENT=xyz.block.buzz.app.dev".to_vec();
     buf.push(0);
     buf.extend_from_slice(b"OTHER_VAR=value");
-    let id = b"xyz.block.sprout.app.dev";
+    let id = b"xyz.block.buzz.app.dev";
     assert!(super::buffer_contains_identifier(&buf, id));
 }
 
 #[test]
 fn identifier_exact_match_at_end_of_buffer() {
     // Exact match with end-of-buffer as the boundary — Thufir's case 1.
-    let buf = b"xyz.block.sprout.app.dev";
-    let id = b"xyz.block.sprout.app.dev";
+    let buf = b"xyz.block.buzz.app.dev";
+    let id = b"xyz.block.buzz.app.dev";
     assert!(super::buffer_contains_identifier(buf, id));
 }
 
@@ -48,10 +48,10 @@ fn identifier_exact_match_at_end_of_buffer() {
 fn longer_id_matches_when_short_prefix_also_present() {
     // Searching for the longer ID finds it even when a shorter prefix token
     // appears earlier — Thufir's "longer-of-prefix must match" case.
-    let mut buf = b"xyz.block.sprout.app".to_vec();
+    let mut buf = b"xyz.block.buzz.app".to_vec();
     buf.push(0);
-    buf.extend_from_slice(br#""identifier":"xyz.block.sprout.app.dev""#);
-    let id = b"xyz.block.sprout.app.dev";
+    buf.extend_from_slice(br#""identifier":"xyz.block.buzz.app.dev""#);
+    let id = b"xyz.block.buzz.app.dev";
     assert!(super::buffer_contains_identifier(&buf, id));
 }
 
@@ -66,36 +66,36 @@ fn identifier_empty_returns_false() {
 #[test]
 fn marker_entry_is_namespaced_by_instance_id() {
     // The spawn stamp and the sweep matcher must produce identical bytes;
-    // both go through sprout_marker_entry, so this pins the on-the-wire
+    // both go through buzz_marker_entry, so this pins the on-the-wire
     // format and guards against a dev build (`...app.dev`) matching a
     // release build's (`...app`) agents.
     assert_eq!(
-        super::sprout_marker_entry("xyz.block.sprout.app"),
-        b"BUZZ_MANAGED_AGENT=xyz.block.sprout.app".to_vec()
+        super::buzz_marker_entry("xyz.block.buzz.app"),
+        b"BUZZ_MANAGED_AGENT=xyz.block.buzz.app".to_vec()
     );
     assert_ne!(
-        super::sprout_marker_entry("xyz.block.sprout.app"),
-        super::sprout_marker_entry("xyz.block.sprout.app.dev")
+        super::buzz_marker_entry("xyz.block.buzz.app"),
+        super::buzz_marker_entry("xyz.block.buzz.app.dev")
     );
 }
 
 #[test]
-fn sprout_agent_has_mcp_hooks() {
-    let p = known_acp_runtime("sprout-agent").expect("should resolve");
+fn buzz_agent_has_mcp_hooks() {
+    let p = known_acp_runtime("buzz-agent").expect("should resolve");
     assert!(p.mcp_hooks);
-    assert_eq!(p.mcp_command, Some("sprout-dev-mcp"));
+    assert_eq!(p.mcp_command, Some("buzz-dev-mcp"));
 }
 
 #[test]
 fn databricks_defaults_empty_in_oss_build() {
-    // OSS (and normal test) builds set neither SPROUT_BUILD_DATABRICKS_*,
+    // OSS (and normal test) builds set neither BUZZ_BUILD_DATABRICKS_*,
     // so nothing is baked in and no DATABRICKS_* is injected on spawn.
     assert!(super::build_databricks_defaults().is_empty());
 }
 
 #[test]
-fn sprout_agent_resolved_via_path() {
-    assert!(known_acp_runtime("/usr/local/bin/sprout-agent").is_some_and(|p| p.mcp_hooks));
+fn buzz_agent_resolved_via_path() {
+    assert!(known_acp_runtime("/usr/local/bin/buzz-agent").is_some_and(|p| p.mcp_hooks));
 }
 
 #[test]
@@ -130,7 +130,7 @@ fn fixture(
         auth_tag,
         relay_url: "ws://localhost:3000".into(),
         avatar_url: None,
-        acp_command: "sprout-acp".into(),
+        acp_command: "buzz-acp".into(),
         agent_command: "goose".into(),
         agent_args: vec![],
         mcp_command: String::new(),
@@ -374,7 +374,7 @@ fn runtime_metadata_env_vars_skips_provider_when_locked() {
 
 #[test]
 fn runtime_metadata_env_vars_injects_model_even_with_acp_model_switching() {
-    // sprout-agent has supports_acp_model_switching=true but we still inject
+    // buzz-agent has supports_acp_model_switching=true but we still inject
     // the model env var because ACP model switching is post-bootstrap
     let vars = runtime_metadata_env_vars(
         Some("BUZZ_AGENT_MODEL"),

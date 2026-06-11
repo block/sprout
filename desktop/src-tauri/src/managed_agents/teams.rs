@@ -230,7 +230,7 @@ pub fn import_team_from_directory(
     use uuid::Uuid;
 
     // 1. Validate + resolve at source
-    let resolved = sprout_persona::resolve::resolve_pack(source_dir)
+    let resolved = buzz_persona_pkg::resolve::resolve_pack(source_dir)
         .map_err(|e| format!("team directory validation failed: {e}"))?;
 
     // 2. Sanitize team ID
@@ -271,7 +271,7 @@ pub fn import_team_from_directory(
     }
 
     // 5. Re-validate the copy/symlink target (defense-in-depth)
-    let re_resolved = sprout_persona::resolve::resolve_pack(&dest).map_err(|e| {
+    let re_resolved = buzz_persona_pkg::resolve::resolve_pack(&dest).map_err(|e| {
         // Clean up on failure
         if use_symlink {
             let _ = fs::remove_file(&dest);
@@ -445,7 +445,7 @@ pub fn sync_team_from_dir(
     }
 
     // Resolve current state of the directory
-    let resolved = sprout_persona::resolve::resolve_pack(source_dir)
+    let resolved = buzz_persona_pkg::resolve::resolve_pack(source_dir)
         .map_err(|e| format!("failed to resolve team directory: {e}"))?;
 
     let mut personas = super::load_personas(app)?;

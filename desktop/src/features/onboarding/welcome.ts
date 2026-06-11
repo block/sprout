@@ -9,12 +9,12 @@ export const WELCOME_CHANNEL_NAME = "Welcome";
 export const WELCOME_CHANNEL_DESCRIPTION =
   "A private channel for getting oriented in this workspace.";
 export const WELCOME_CHANNEL_READY_EVENT =
-  "sprout:onboarding-welcome-channel-ready";
+  "buzz:onboarding-welcome-channel-ready";
 
 const PENDING_WELCOME_CHANNEL_STORAGE_KEY =
-  "sprout:onboarding-welcome-channel.v1";
+  "buzz:onboarding-welcome-channel.v1";
 const PENDING_WELCOME_CHANNEL_MAX_AGE_MS = 5 * 60 * 1000;
-const WELCOME_CHANNEL_ENSURED_STORAGE_KEY = "sprout-welcome-channel-ensured.v2";
+const WELCOME_CHANNEL_ENSURED_STORAGE_KEY = "buzz-welcome-channel-ensured.v2";
 
 type WelcomeChannelClient = {
   createChannel: (input: CreateChannelInput) => Promise<Channel>;

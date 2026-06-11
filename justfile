@@ -274,6 +274,7 @@ proxy-release:
 dev *ARGS: _ensure-sidecar-stubs
     #!/usr/bin/env bash
     set -euo pipefail
+    cargo build -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p buzz-cli
     cd {{desktop_dir}}
     [[ -d node_modules ]] || pnpm install
     source ../scripts/instance-env.sh

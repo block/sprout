@@ -13,16 +13,16 @@ use crate::{
 
 type RespondToEnv = (Vec<(&'static str, String)>, Vec<&'static str>);
 
-/// Binary name fragments for all known agent/harness processes that Sprout
+/// Binary name fragments for all known agent/harness processes that Buzz
 /// may spawn. Used by `process_belongs_to_us()` and the orphan sweep to
 /// identify processes we should clean up. Both hyphenated and underscored
 /// variants are listed because macOS `proc_name()` and Linux `/proc/comm`
 /// may report either form depending on how the binary was built.
 pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
-    "sprout-acp",
-    "sprout_acp",
-    "sprout-agent",
-    "sprout_agent",
+    "buzz-acp",
+    "buzz_acp",
+    "buzz-agent",
+    "buzz_agent",
     "claude-agent-acp",
     "claude_agent_acp",
     "claude-code-acp",
@@ -30,11 +30,11 @@ pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
     "codex-acp",
     "codex_acp",
     "goose",
-    // sprout-dev-mcp's multicall personalities (rg, tree, sprout,
+    // buzz-dev-mcp's multicall personalities (rg, tree, buzz,
     // git-credential-nostr, git-sign-nostr) are short-lived per-tool-call
     // invocations — not listed here.
-    "sprout-dev-mcp",
-    "sprout_dev_mcp",
+    "buzz-dev-mcp",
+    "buzz_dev_mcp",
 ];
 
 /// Check if a process name matches any of our known agent binaries.
@@ -118,11 +118,11 @@ pub(crate) fn process_belongs_to_us(_pid: u32) -> bool {
 
 /// The value stamped into the `BUZZ_MANAGED_AGENT` env var of every agent we
 /// spawn, identifying *which* desktop instance owns it. We use the app's bundle
-/// identifier (`xyz.block.sprout.app` for release, `xyz.block.sprout.app.dev`
+/// identifier (`xyz.block.buzz.app` for release, `xyz.block.buzz.app.dev`
 /// for `just dev`) because it is stable across restarts — a relaunched dev
 /// instance still recognizes its own previously-spawned agents as reclaimable,
 /// while never matching another instance's (e.g. a dev build never reaps a DMG
-/// build's agents, and vice versa). This is what lets two Sprouts coexist on
+/// build's agents, and vice versa). This is what lets two Buzzs coexist on
 /// one machine without one's cleanup nuking the other's agents.
 pub(crate) fn current_instance_id(app: &AppHandle) -> String {
     app.config().identifier.clone()
@@ -131,17 +131,17 @@ pub(crate) fn current_instance_id(app: &AppHandle) -> String {
 /// Build the full `BUZZ_MANAGED_AGENT=<instance-id>` env entry we match
 /// against when scanning processes. Kept here so the spawn stamp and the sweep
 /// matcher can never drift apart.
-fn sprout_marker_entry(instance_id: &str) -> Vec<u8> {
+fn buzz_marker_entry(instance_id: &str) -> Vec<u8> {
     format!("BUZZ_MANAGED_AGENT={instance_id}").into_bytes()
 }
 
 /// Check if a running process is one of *our* managed agents: it must carry
 /// `BUZZ_MANAGED_AGENT=<instance_id>` in its environment, where `instance_id`
 /// is this desktop instance's id. A process stamped with a *different* instance
-/// id belongs to another live Sprout app and must never be reaped here.
+/// id belongs to another live Buzz app and must never be reaped here.
 #[cfg(target_os = "macos")]
-fn process_has_sprout_marker(pid: u32, instance_id: &str) -> bool {
-    let marker = sprout_marker_entry(instance_id);
+fn process_has_buzz_marker(pid: u32, instance_id: &str) -> bool {
+    let marker = buzz_marker_entry(instance_id);
 
     let mut mib: [libc::c_int; 3] = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
     let mut buf_size: libc::size_t = 0;
@@ -215,8 +215,8 @@ fn process_has_sprout_marker(pid: u32, instance_id: &str) -> bool {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn process_has_sprout_marker(pid: u32, instance_id: &str) -> bool {
-    let marker = sprout_marker_entry(instance_id);
+fn process_has_buzz_marker(pid: u32, instance_id: &str) -> bool {
+    let marker = buzz_marker_entry(instance_id);
     let Ok(data) = std::fs::read(format!("/proc/{pid}/environ")) else {
         return false;
     };
@@ -224,7 +224,7 @@ fn process_has_sprout_marker(pid: u32, instance_id: &str) -> bool {
 }
 
 #[cfg(not(unix))]
-fn process_has_sprout_marker(_pid: u32, _instance_id: &str) -> bool {
+fn process_has_buzz_marker(_pid: u32, _instance_id: &str) -> bool {
     false
 }
 
@@ -402,7 +402,7 @@ const PROC_PIDTBSDINFO: libc::c_int = 3;
 /// (`instance_id`) that isn't in `skip_pids`. This catches orphans that escaped
 /// PID-file-based cleanup (e.g. agent workers spawned with their own process
 /// group whose parent harness already exited and had its PID file removed),
-/// while leaving another live Sprout instance's agents untouched.
+/// while leaving another live Buzz instance's agents untouched.
 #[cfg(target_os = "macos")]
 pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32]) {
     let my_uid = unsafe { libc::getuid() };
@@ -470,7 +470,7 @@ pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32])
         if skip_pids.contains(&info.pbi_ppid) {
             continue;
         }
-        if !process_has_sprout_marker(upid, instance_id) {
+        if !process_has_buzz_marker(upid, instance_id) {
             continue;
         }
         orphans.push(pid);
@@ -478,7 +478,7 @@ pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32])
 
     if !orphans.is_empty() {
         eprintln!(
-            "sprout-desktop: system sweep found {} orphaned agent process(es), cleaning up",
+            "buzz-desktop: system sweep found {} orphaned agent process(es), cleaning up",
             orphans.len()
         );
         sigterm_then_sigkill(&orphans);
@@ -529,7 +529,7 @@ pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32])
         if meta.uid() != my_uid {
             continue;
         }
-        if !process_belongs_to_us(upid) || !process_has_sprout_marker(upid, instance_id) {
+        if !process_belongs_to_us(upid) || !process_has_buzz_marker(upid, instance_id) {
             continue;
         }
         // Live child of a tracked harness — not an orphan. If /proc/<pid>/stat
@@ -547,7 +547,7 @@ pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32])
 
     if !orphans.is_empty() {
         eprintln!(
-            "sprout-desktop: system sweep found {} orphaned agent process(es), cleaning up",
+            "buzz-desktop: system sweep found {} orphaned agent process(es), cleaning up",
             orphans.len()
         );
         sigterm_then_sigkill(&orphans);
@@ -577,7 +577,7 @@ pub(crate) fn sweep_system_agent_processes_with_grace(
         .collect();
     if !confirmed.is_empty() {
         eprintln!(
-            "sprout-desktop: periodic sweep confirmed {} orphaned agent process(es), cleaning up",
+            "buzz-desktop: periodic sweep confirmed {} orphaned agent process(es), cleaning up",
             confirmed.len()
         );
         sigterm_then_sigkill(&confirmed);
@@ -661,7 +661,7 @@ pub(crate) fn collect_same_instance_orphans(
         if skip_pids.contains(&info.pbi_ppid) {
             continue;
         }
-        if process_has_sprout_marker(upid, instance_id) {
+        if process_has_buzz_marker(upid, instance_id) {
             orphans.insert(upid);
         }
     }
@@ -702,7 +702,7 @@ pub(crate) fn collect_same_instance_orphans(
         if meta.uid() != my_uid {
             continue;
         }
-        if !process_belongs_to_us(upid) || !process_has_sprout_marker(upid, instance_id) {
+        if !process_belongs_to_us(upid) || !process_has_buzz_marker(upid, instance_id) {
             continue;
         }
         // Live child of a tracked harness — not an orphan. If /proc/<pid>/stat
@@ -727,22 +727,21 @@ pub(crate) fn collect_same_instance_orphans(
     std::collections::HashSet::new()
 }
 
-/// Binary names for the Sprout desktop/Tauri process. Used by dead-instance
-/// detection to confirm the owning desktop is still alive. The release .app
-/// bundle reports as "Sprout"; `tauri dev` reports as "sprout-desktop".
-const DESKTOP_BINARY_NAMES: &[&str] = &["Sprout", "sprout-desktop", "sprout_desktop"];
+/// Binary names for the Buzz desktop/Tauri process. Used by dead-instance
+/// detection to confirm the owning desktop is still alive.
+const DESKTOP_BINARY_NAMES: &[&str] = &["Buzz", "buzz-desktop", "buzz_desktop"];
 
-/// Check if a process name matches a known Sprout desktop binary.
+/// Check if a process name matches a known Buzz desktop binary.
 fn is_desktop_binary(name: &str) -> bool {
     DESKTOP_BINARY_NAMES.contains(&name)
 }
 
 /// Check whether `buf` contains `id` as a complete identifier — not as a
 /// prefix of a longer dotted name. The identifier appears in the Tauri config
-/// JSON as `"identifier":"xyz.block.sprout.app.dev"` and in environment entries
+/// JSON as `"identifier":"xyz.block.buzz.app.dev"` and in environment entries
 /// as `KEY=...app.dev\0`, so a valid match is followed by a non-identifier byte
 /// (not `[A-Za-z0-9._-]`) or sits at the end of the buffer. This prevents
-/// `xyz.block.sprout.app` from matching inside `xyz.block.sprout.app.dev`.
+/// `xyz.block.buzz.app` from matching inside `xyz.block.buzz.app.dev`.
 fn buffer_contains_identifier(buf: &[u8], id: &[u8]) -> bool {
     if id.is_empty() {
         return false;
@@ -765,7 +764,7 @@ fn buffer_contains_identifier(buf: &[u8], id: &[u8]) -> bool {
 /// Extract the `BUZZ_MANAGED_AGENT` value from a process's environment.
 /// Returns `None` if the process doesn't have the marker or can't be read.
 #[cfg(target_os = "macos")]
-fn extract_sprout_marker_value(pid: u32) -> Option<String> {
+fn extract_buzz_marker_value(pid: u32) -> Option<String> {
     let prefix = b"BUZZ_MANAGED_AGENT=";
 
     let mut mib: [libc::c_int; 3] = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
@@ -842,7 +841,7 @@ fn extract_sprout_marker_value(pid: u32) -> Option<String> {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn extract_sprout_marker_value(pid: u32) -> Option<String> {
+fn extract_buzz_marker_value(pid: u32) -> Option<String> {
     let prefix = b"BUZZ_MANAGED_AGENT=";
     let data = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
     for entry in data.split(|&b| b == 0) {
@@ -854,12 +853,12 @@ fn extract_sprout_marker_value(pid: u32) -> Option<String> {
 }
 
 #[cfg(not(unix))]
-fn extract_sprout_marker_value(_pid: u32) -> Option<String> {
+fn extract_buzz_marker_value(_pid: u32) -> Option<String> {
     None
 }
 
-/// Check if a Sprout desktop process is still alive for the given instance ID.
-/// Scans all user-owned processes named "Sprout" or "sprout-desktop" and checks
+/// Check if a Buzz desktop process is still alive for the given instance ID.
+/// Scans all user-owned processes named "Buzz" or "buzz-desktop" and checks
 /// whether any has the identifier in its command-line args (KERN_PROCARGS2 buffer
 /// includes both argv and environ — the `--config` JSON from `tauri dev` contains
 /// the identifier string).
@@ -1020,11 +1019,11 @@ fn desktop_is_alive_for_instance(_instance_id: &str) -> bool {
     false
 }
 
-/// Reap agent processes belonging to dead Sprout desktop instances.
+/// Reap agent processes belonging to dead Buzz desktop instances.
 ///
 /// Scans all user processes for `BUZZ_MANAGED_AGENT=*`, groups them by
 /// instance ID, and for each foreign instance (≠ `our_instance_id`) checks
-/// whether a Sprout desktop binary is still alive for that instance. If not,
+/// whether a Buzz desktop binary is still alive for that instance. If not,
 /// all agents from that dead instance are reaped.
 #[cfg(target_os = "macos")]
 pub(crate) fn reap_dead_instance_agents(our_instance_id: &str, skip_pids: &[u32]) {
@@ -1087,7 +1086,7 @@ pub(crate) fn reap_dead_instance_agents(our_instance_id: &str, skip_pids: &[u32]
             continue;
         }
         // Extract the instance ID from this agent's env.
-        let Some(agent_instance_id) = extract_sprout_marker_value(upid) else {
+        let Some(agent_instance_id) = extract_buzz_marker_value(upid) else {
             continue;
         };
         // Skip agents belonging to our own instance (handled by sweep_system_agent_processes).
@@ -1106,7 +1105,7 @@ pub(crate) fn reap_dead_instance_agents(our_instance_id: &str, skip_pids: &[u32]
             continue;
         }
         eprintln!(
-            "sprout-desktop: reaping {} orphaned agent(s) from dead instance '{instance_id}'",
+            "buzz-desktop: reaping {} orphaned agent(s) from dead instance '{instance_id}'",
             agent_pids.len()
         );
         sigterm_then_sigkill(agent_pids);
@@ -1147,7 +1146,7 @@ pub(crate) fn reap_dead_instance_agents(our_instance_id: &str, skip_pids: &[u32]
         if !process_belongs_to_us(upid) {
             continue;
         }
-        let Some(agent_instance_id) = extract_sprout_marker_value(upid) else {
+        let Some(agent_instance_id) = extract_buzz_marker_value(upid) else {
             continue;
         };
         if agent_instance_id == our_instance_id {
@@ -1164,7 +1163,7 @@ pub(crate) fn reap_dead_instance_agents(our_instance_id: &str, skip_pids: &[u32]
             continue;
         }
         eprintln!(
-            "sprout-desktop: reaping {} orphaned agent(s) from dead instance '{instance_id}'",
+            "buzz-desktop: reaping {} orphaned agent(s) from dead instance '{instance_id}'",
             agent_pids.len()
         );
         sigterm_then_sigkill(agent_pids);
@@ -1488,7 +1487,7 @@ pub fn spawn_agent_child(
             Some(path) => Some(path),
             None => {
                 eprintln!(
-                    "sprout-desktop: mcp_command {:?} not found, skipping",
+                    "buzz-desktop: mcp_command {:?} not found, skipping",
                     record.mcp_command
                 );
                 None
@@ -1501,8 +1500,8 @@ pub fn spawn_agent_child(
         .unwrap_or_else(|| record.agent_command.clone());
 
     // Augment PATH for DMG launches so child processes can find:
-    //   - sprout CLI via ~/.local/bin symlink
-    //   - bundled sidecars (sprout, sprout-acp, etc.) via exe parent (Contents/MacOS/)
+    //   - bundled CLI via ~/.local/bin symlink
+    //   - bundled sidecars (buzz, buzz-acp, etc.) via exe parent (Contents/MacOS/)
     //   - runtimes (node, python, etc.) via login shell PATH
     let augmented_path = {
         let mut parts: Vec<String> = Vec::new();
@@ -1548,14 +1547,14 @@ pub fn spawn_agent_child(
         }
     }
     // Enable MCP hook tools (_Stop, _PostCompact) for agents that need them.
-    // Uses "*" because build_mcp_servers() hard-codes the server name to "sprout-mcp".
+    // Uses "*" because build_mcp_servers() hard-codes the server name to "buzz-mcp".
     let runtime_meta = known_acp_runtime(&record.agent_command);
     if runtime_meta.is_some_and(|r| r.mcp_hooks) {
         command.env("MCP_HOOK_SERVERS", "*");
     }
     // Only emit BUZZ_ACP_IDLE_TIMEOUT when the user has explicitly set an
-    // override. When unset, the sprout-acp harness applies its own default
-    // (see `DEFAULT_IDLE_TIMEOUT_SECS` in crates/sprout-acp/src/config.rs),
+    // override. When unset, the buzz-acp harness applies its own default
+    // (see `DEFAULT_IDLE_TIMEOUT_SECS` in crates/buzz-acp/src/config.rs),
     // which is the single source of truth. The previously-emitted
     // `BUZZ_ACP_TURN_TIMEOUT` is deprecated upstream and was pinning every
     // agent to the desktop's stale default (320s), bypassing harness bumps.
@@ -1647,9 +1646,9 @@ pub fn spawn_agent_child(
 
     command.env("BUZZ_ACP_RELAY_OBSERVER", "true");
 
-    // ── Git credential helper for Sprout relay ──────────────────────────
+    // ── Git credential helper for Buzz relay ──────────────────────────
     //
-    // Agents need to clone/push repos hosted on the Sprout relay's git
+    // Agents need to clone/push repos hosted on the Buzz relay's git
     // server, which authenticates via NIP-98. The `git-credential-nostr`
     // binary signs auth events using the agent's nostr key.
     //
@@ -1676,13 +1675,13 @@ pub fn spawn_agent_child(
         command.env("GIT_CONFIG_VALUE_1", "true");
     } else {
         eprintln!(
-            "sprout-desktop: git-credential-nostr not found — agent {} will not have automatic Sprout git auth",
+            "buzz-desktop: git-credential-nostr not found — agent {} will not have automatic Buzz git auth",
             record.name,
         );
     }
 
-    // Baked-in Databricks defaults for internal builds (sprout-releases sets
-    // SPROUT_BUILD_DATABRICKS_* at compile time; OSS builds bake nothing).
+    // Baked-in Databricks defaults for internal builds (buzz-releases sets
+    // BUZZ_BUILD_DATABRICKS_* at compile time; OSS builds bake nothing).
     // Written BEFORE user env_vars so a GUI/persona override still wins.
     for (key, value) in build_databricks_defaults() {
         command.env(key, value);
@@ -1691,11 +1690,11 @@ pub fn spawn_agent_child(
     // ── User env vars: persona first, then per-agent (last wins) ────────
     //
     // Precedence: desktop parent env < persona env_vars < agent env_vars.
-    // These writes go LAST so user-provided values win over every Sprout-set
+    // These writes go LAST so user-provided values win over every Buzz-set
     // env above — EXCEPT reserved keys (BUZZ_PRIVATE_KEY, NOSTR_PRIVATE_KEY,
     // BUZZ_AUTH_TAG, BUZZ_API_TOKEN, BUZZ_ACP_PRIVATE_KEY,
     // BUZZ_ACP_API_TOKEN), which `merged_user_env` strips. Those carry
-    // Sprout's identity and must never be GUI-overridable.
+    // Buzz's identity and must never be GUI-overridable.
     // Fail closed on persona-lookup errors: persona env_vars carry API
     // credentials, so silently substituting an empty map would spawn an
     // unauthenticated agent and surface as a confusing downstream auth error.
@@ -1704,11 +1703,11 @@ pub fn spawn_agent_child(
         command.env(key, value);
     }
 
-    // Mark as Sprout-managed *and* which desktop instance owns us, so the
+    // Mark as Buzz-managed *and* which desktop instance owns us, so the
     // system-wide orphan sweep only reaps this instance's own agents and never
-    // another live Sprout's (e.g. a `just dev` build won't kill a DMG build's
-    // agents). Propagates automatically through the full tree (sprout-acp →
-    // goose → MCP servers) because neither sprout-acp nor goose calls
+    // another live Buzz's (e.g. a `just dev` build won't kill a DMG build's
+    // agents). Propagates automatically through the full tree (buzz-acp →
+    // goose → MCP servers) because neither buzz-acp nor goose calls
     // env_clear().
     command.env("BUZZ_MANAGED_AGENT", current_instance_id(app));
 
@@ -1735,22 +1734,22 @@ pub fn spawn_agent_child(
 
 fn child_rust_log_filter() -> String {
     match std::env::var("RUST_LOG") {
-        Ok(existing) if existing.contains("sprout_acp") => existing,
-        Ok(existing) if !existing.trim().is_empty() => format!("{existing},sprout_acp=info"),
-        _ => "sprout_acp=info".to_string(),
+        Ok(existing) if existing.contains("buzz_acp") => existing,
+        Ok(existing) if !existing.trim().is_empty() => format!("{existing},buzz_acp=info"),
+        _ => "buzz_acp=info".to_string(),
     }
 }
 
 /// Databricks host/model baked in at compile time for internal builds. Empty
-/// in OSS builds, where the `SPROUT_BUILD_DATABRICKS_*` env is unset.
+/// in OSS builds, where the `BUZZ_BUILD_DATABRICKS_*` env is unset.
 fn build_databricks_defaults() -> Vec<(&'static str, &'static str)> {
     let mut defaults = Vec::new();
-    if let Some(host) = option_env!("SPROUT_DESKTOP_BUILD_DATABRICKS_HOST") {
+    if let Some(host) = option_env!("BUZZ_DESKTOP_BUILD_DATABRICKS_HOST") {
         if !host.is_empty() {
             defaults.push(("DATABRICKS_HOST", host));
         }
     }
-    if let Some(model) = option_env!("SPROUT_DESKTOP_BUILD_DATABRICKS_MODEL") {
+    if let Some(model) = option_env!("BUZZ_DESKTOP_BUILD_DATABRICKS_MODEL") {
         if !model.is_empty() {
             defaults.push(("DATABRICKS_MODEL", model));
         }

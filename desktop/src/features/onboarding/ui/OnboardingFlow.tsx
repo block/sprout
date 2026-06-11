@@ -415,9 +415,9 @@ export function OnboardingFlow({
 
   return (
     <div
-      className={`sprout-startup-shell flex items-center justify-center bg-background px-4 py-8 text-foreground ${
+      className={`buzz-startup-shell flex items-center justify-center bg-background px-4 py-8 text-foreground ${
         currentPage === "profile" || currentPage === "avatar"
-          ? "sprout-onboarding-neutral-theme"
+          ? "buzz-onboarding-neutral-theme"
           : ""
       }`}
       data-testid="onboarding-gate"
