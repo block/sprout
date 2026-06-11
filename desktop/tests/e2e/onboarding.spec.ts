@@ -333,14 +333,27 @@ async function expectWelcomeComposerBannerCompletesAfterPersonaMention(
 
 async function getMockChannels(page: Page) {
   return page.evaluate(async () => {
-    const invoke = (
-      window as Window & {
-        __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
+    const bridgeWindow = window as Window & {
+      __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+        command: string,
+        payload?: Record<string, unknown>,
+      ) => Promise<unknown>;
+      __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
+        command: string,
+        payload?: Record<string, unknown>,
+      ) => Promise<unknown>;
+      __TAURI_INTERNALS__?: {
+        invoke?: (
           command: string,
           payload?: Record<string, unknown>,
         ) => Promise<unknown>;
-      }
-    ).__SPROUT_E2E_INVOKE_MOCK_COMMAND__;
+      };
+    };
+    const invoke =
+      bridgeWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ ??
+      bridgeWindow.__SPROUT_E2E_INVOKE_MOCK_COMMAND__ ??
+      bridgeWindow.__TAURI_INTERNALS__?.invoke;
+
     if (!invoke) {
       throw new Error("Mock invoke bridge is unavailable.");
     }
@@ -364,14 +377,27 @@ async function invokeMockCommand<T>(
 ) {
   return page.evaluate(
     async ({ command, payload }) => {
-      const invoke = (
-        window as Window & {
-          __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
+      const bridgeWindow = window as Window & {
+        __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+          command: string,
+          payload?: Record<string, unknown>,
+        ) => Promise<unknown>;
+        __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
+          command: string,
+          payload?: Record<string, unknown>,
+        ) => Promise<unknown>;
+        __TAURI_INTERNALS__?: {
+          invoke?: (
             command: string,
             payload?: Record<string, unknown>,
           ) => Promise<unknown>;
-        }
-      ).__SPROUT_E2E_INVOKE_MOCK_COMMAND__;
+        };
+      };
+      const invoke =
+        bridgeWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ ??
+        bridgeWindow.__SPROUT_E2E_INVOKE_MOCK_COMMAND__ ??
+        bridgeWindow.__TAURI_INTERNALS__?.invoke;
+
       if (!invoke) {
         throw new Error("Mock invoke bridge is unavailable.");
       }
