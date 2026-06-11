@@ -59,6 +59,91 @@ async fn spawn_fake_llm(responses: Vec<Value>) -> String {
     url
 }
 
+// ─── Request-capturing fake LLM server ──────────────────────────────────────
+
+/// Like `spawn_fake_llm` but also captures the full JSON request body from each
+/// incoming HTTP request. Returns (url, captured_requests).
+async fn spawn_capturing_fake_llm(
+    responses: Vec<Value>,
+) -> (String, Arc<Mutex<Vec<Value>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let queue = Arc::new(Mutex::new(VecDeque::from(responses)));
+    let captures: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let captures_clone = captures.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut sock, _) = match listener.accept().await {
+                Ok(p) => p,
+                Err(_) => return,
+            };
+            let queue = queue.clone();
+            let captures = captures_clone.clone();
+            tokio::spawn(async move {
+                // Read headers.
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 4096];
+                while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match sock.read(&mut tmp).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                    }
+                    if buf.len() > 2_000_000 {
+                        return;
+                    }
+                }
+                // Parse Content-Length from headers to read the body.
+                let header_end = buf
+                    .windows(4)
+                    .position(|w| w == b"\r\n\r\n")
+                    .unwrap()
+                    + 4;
+                let header_str = String::from_utf8_lossy(&buf[..header_end]);
+                let content_length: usize = header_str
+                    .lines()
+                    .find_map(|line| {
+                        let lower = line.to_lowercase();
+                        if lower.starts_with("content-length:") {
+                            lower.trim_start_matches("content-length:").trim().parse().ok()
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+
+                // Collect body bytes (some may already be in buf after headers).
+                let mut body_buf = buf[header_end..].to_vec();
+                while body_buf.len() < content_length {
+                    match sock.read(&mut tmp).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => body_buf.extend_from_slice(&tmp[..n]),
+                    }
+                }
+
+                // Parse and store the request body.
+                if let Ok(parsed) = serde_json::from_slice::<Value>(&body_buf[..content_length.min(body_buf.len())]) {
+                    captures.lock().await.push(parsed);
+                }
+
+                // Send canned response.
+                let body = queue
+                    .lock()
+                    .await
+                    .pop_front()
+                    .unwrap_or_else(|| json!({ "error": "no canned response" }));
+                let body_s = serde_json::to_string(&body).unwrap();
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body_s.len(), body_s,
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            });
+        }
+    });
+    (url, captures)
+}
+
 // ─── ACP harness ────────────────────────────────────────────────────────────
 
 struct Harness {
@@ -367,5 +452,140 @@ async fn session_new_rejects_oversized_system_prompt() {
         err_msg.contains("512KB limit"),
         "error message should mention 512KB limit, got: {err_msg}"
     );
+    h.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn system_prompt_reaches_llm_system_role() {
+    // Proves the full contract: systemPrompt sent via session/new → agent appends
+    // it to the effective system prompt → LLM receives it in the system role.
+    let canary = "CANARY_E2E_TEST_MARKER_7f3a9b";
+    let (url, captures) = spawn_capturing_fake_llm(vec![openai_text("done")]).await;
+    let mut h = Harness::spawn(&url).await;
+
+    // initialize — verify the agent advertises systemPrompt capability.
+    h.send(
+        "initialize",
+        json!({"protocolVersion":1,"clientCapabilities":{}}),
+    )
+    .await;
+    let r = h.recv().await;
+    assert_eq!(r["result"]["protocolVersion"], 1);
+    assert_eq!(
+        r["result"]["agentCapabilities"]["promptCapabilities"]["systemPrompt"],
+        json!(true),
+        "agent must advertise systemPrompt capability"
+    );
+
+    // session/new with systemPrompt containing the canary.
+    let sn_id = h
+        .send(
+            "session/new",
+            json!({"cwd":"/tmp","mcpServers":[],"systemPrompt": canary}),
+        )
+        .await;
+    let r = h.recv_until(|v| v["id"] == json!(sn_id)).await;
+    let sid = r["result"]["sessionId"].as_str().unwrap().to_owned();
+    assert!(sid.starts_with("ses_"));
+
+    // session/prompt — triggers the LLM call.
+    let p_id = h
+        .send(
+            "session/prompt",
+            json!({
+                "sessionId": sid,
+                "prompt": [{"type":"text","text":"hello"}],
+            }),
+        )
+        .await;
+    let _ = h.recv_until(|v| v["id"] == json!(p_id)).await;
+
+    // Inspect the captured LLM request.
+    let reqs = captures.lock().await;
+    assert!(!reqs.is_empty(), "expected at least one LLM request");
+    let llm_req = &reqs[0];
+    let messages = llm_req["messages"].as_array().expect("messages array");
+
+    // First message should be the system role.
+    let system_msg = &messages[0];
+    assert_eq!(system_msg["role"], "system", "first message must be system role");
+    let system_content = system_msg["content"].as_str().unwrap_or("");
+
+    // Canary must appear in the system message (proves systemPrompt was appended).
+    assert!(
+        system_content.contains(canary),
+        "system message must contain the canary string.\nGot: {system_content}"
+    );
+
+    // The agent's default prompt must appear BEFORE the canary (additive ordering).
+    let default_prompt = "You are buzz-agent";
+    let default_pos = system_content.find(default_prompt).expect(
+        "system message must contain the agent's default prompt"
+    );
+    let canary_pos = system_content.find(canary).unwrap();
+    assert!(
+        default_pos < canary_pos,
+        "default prompt must appear before canary (additive append ordering)"
+    );
+
+    h.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn system_prompt_absent_no_canary() {
+    // Negative case: when systemPrompt is NOT sent in session/new, the canary
+    // must NOT appear in the LLM system message.
+    let canary = "CANARY_E2E_TEST_MARKER_7f3a9b";
+    let (url, captures) = spawn_capturing_fake_llm(vec![openai_text("done")]).await;
+    let mut h = Harness::spawn(&url).await;
+
+    // initialize.
+    h.send(
+        "initialize",
+        json!({"protocolVersion":1,"clientCapabilities":{}}),
+    )
+    .await;
+    let _ = h.recv().await;
+
+    // session/new WITHOUT systemPrompt field.
+    let sn_id = h
+        .send("session/new", json!({"cwd":"/tmp","mcpServers":[]}))
+        .await;
+    let r = h.recv_until(|v| v["id"] == json!(sn_id)).await;
+    let sid = r["result"]["sessionId"].as_str().unwrap().to_owned();
+
+    // session/prompt — triggers the LLM call.
+    let p_id = h
+        .send(
+            "session/prompt",
+            json!({
+                "sessionId": sid,
+                "prompt": [{"type":"text","text":"hello"}],
+            }),
+        )
+        .await;
+    let _ = h.recv_until(|v| v["id"] == json!(p_id)).await;
+
+    // Inspect the captured LLM request.
+    let reqs = captures.lock().await;
+    assert!(!reqs.is_empty(), "expected at least one LLM request");
+    let llm_req = &reqs[0];
+    let messages = llm_req["messages"].as_array().expect("messages array");
+    let system_msg = &messages[0];
+    assert_eq!(system_msg["role"], "system");
+    let system_content = system_msg["content"].as_str().unwrap_or("");
+
+    // Canary must NOT appear (it was never sent).
+    assert!(
+        !system_content.contains(canary),
+        "system message must NOT contain canary when systemPrompt is absent.\nGot: {system_content}"
+    );
+
+    // But the agent's default prompt should still be there.
+    assert!(
+        system_content.contains("You are buzz-agent"),
+        "system message must still contain the agent's default prompt"
+    );
+
     h.shutdown().await;
 }
