@@ -36,6 +36,12 @@ export type NotificationSettings = {
   notifyWhileViewing: boolean;
   sounds: SlotSounds;
   slotAlertsEnabled: Record<SoundSlot, boolean>;
+  /**
+   * Per-row state captured when the master switch bulk-disables, so turning
+   * it back on restores the user's granular picks instead of enabling all.
+   * Cleared by any individual row toggle.
+   */
+  slotAlertsSnapshot: Record<SoundSlot, boolean> | null;
 };
 
 const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
@@ -44,6 +50,7 @@ const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   notifyWhileViewing: false,
   sounds: { ...DEFAULT_SLOT_SOUNDS },
   slotAlertsEnabled: { ...DEFAULT_SLOT_ALERTS_ENABLED },
+  slotAlertsSnapshot: null,
 };
 
 const SOUND_NAME_SET = new Set<SoundName>(SOUND_NAMES);
@@ -116,6 +123,11 @@ function sanitizeNotificationSettings(value: unknown): NotificationSettings {
       mentions: candidate.mentions,
       needsAction: candidate.needsAction,
     }),
+    slotAlertsSnapshot:
+      candidate.slotAlertsSnapshot != null &&
+      typeof candidate.slotAlertsSnapshot === "object"
+        ? sanitizeSlotAlertsEnabled(candidate.slotAlertsSnapshot, {})
+        : null,
   };
 }
 
@@ -278,12 +290,33 @@ export function useNotificationSettings(pubkey?: string) {
   const setAllSlotAlertsEnabled = React.useCallback((enabled: boolean) => {
     setSettings((current) => {
       const next = { ...current.slotAlertsEnabled };
+      if (!enabled) {
+        // Super-switch off: remember the granular picks, zero the live rows.
+        for (const slot of SOUND_SLOTS) {
+          if (!COMING_SOON_SLOTS.has(slot)) {
+            next[slot] = false;
+          }
+        }
+        return {
+          ...current,
+          slotAlertsEnabled: next,
+          slotAlertsSnapshot: { ...current.slotAlertsEnabled },
+        };
+      }
+      // Super-switch on: restore the snapshot when it has anything on,
+      // otherwise enable every live row.
+      const snapshot = current.slotAlertsSnapshot;
+      const snapshotHasAlerts =
+        snapshot != null &&
+        SOUND_SLOTS.some(
+          (slot) => !COMING_SOON_SLOTS.has(slot) && snapshot[slot],
+        );
       for (const slot of SOUND_SLOTS) {
         if (!COMING_SOON_SLOTS.has(slot)) {
-          next[slot] = enabled;
+          next[slot] = snapshotHasAlerts ? (snapshot?.[slot] ?? true) : true;
         }
       }
-      return { ...current, slotAlertsEnabled: next };
+      return { ...current, slotAlertsEnabled: next, slotAlertsSnapshot: null };
     });
   }, []);
 
@@ -292,6 +325,8 @@ export function useNotificationSettings(pubkey?: string) {
       setSettings((current) => ({
         ...current,
         slotAlertsEnabled: { ...current.slotAlertsEnabled, [slot]: enabled },
+        // A manual row toggle supersedes any pending super-switch snapshot.
+        slotAlertsSnapshot: null,
       }));
     },
     [],
