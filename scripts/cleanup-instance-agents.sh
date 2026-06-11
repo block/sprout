@@ -2,7 +2,7 @@
 # Reap the agent processes belonging to a single desktop instance.
 #
 # `tauri dev` Ctrl+C tears down the Rust app before its in-process system sweep
-# can finish, so agent workers (goose, sprout-agent, ...) it spawned in their
+# can finish, so agent workers (goose, buzz-agent, ...) it spawned in their
 # own process groups survive as orphans. This script is the shell-side backstop:
 # run it from an EXIT trap in the `just dev`/`just staging` recipes.
 #
@@ -10,7 +10,7 @@
 # under `<app-data>/agents/agent-pids/<pubkey>.pid`, each containing the agent's
 # PGID (agents are spawned with `process_group(0)`, so PID == PGID). Killing by
 # PGID reaches the whole agent subtree. We deliberately do NOT match the
-# `SPROUT_MANAGED_AGENT` env var from the shell: on macOS `pkill -f` matches only
+# `BUZZ_MANAGED_AGENT` env var from the shell: on macOS `pkill -f` matches only
 # argv, not the environment, so an env-marker match silently reaps nothing.
 #
 # Scoping is exact because the app-data directory is keyed by the instance's
@@ -18,8 +18,8 @@
 # (the main checkout never reaps a worktree's agents, or vice versa).
 #
 # Usage: cleanup-instance-agents.sh <instance-id>
-#   <instance-id> is the desktop bundle identifier, e.g. `xyz.block.sprout.app.dev`
-#   (main checkout) or `xyz.block.sprout.app.dev.my-branch` (a worktree).
+#   <instance-id> is the desktop bundle identifier, e.g. `xyz.block.buzz.app.dev`
+#   (main checkout) or `xyz.block.buzz.app.dev.my-branch` (a worktree).
 
 set -euo pipefail
 
