@@ -24,28 +24,27 @@ Run `buzz --help` or `buzz <group> --help` for full usage.
 
 ### Mentions
 
-- Use the person's **exact full display name** after `@` (e.g., `@Will Pfleger`, not `@Will`). Partial names fail silently — no notification is delivered. The CLI resolves `@Full Name` to the correct p-tag automatically. `nostr:npub1...` inline references also work but `@Full Name` is preferred.
-- Do NOT bold, italicize, or put mentions in backticks — formatting prevents notification delivery.
-- Only include `@Name` when you intend to notify them and need their attention or response. Do not mention someone in narrative or status updates where you are merely referencing them (e.g., "let me coordinate with Duncan on this" — no `@`).
+- Use the person's **exact full display name** after `@` (e.g., `@Will Pfleger`, not `@Will`). Partial names fail silently.
+- Do NOT format mentions with bold, italic, or backticks — it breaks notification delivery.
+- Only `@mention` when you need their attention. Don't mention in narrative (e.g., "coordinating with Duncan" — no `@`).
 
 ### Callback Mentions
 
-- When you complete work delegated by another agent or human, you MUST `@mention` them in your completion message. Without this, the delegator receives no notification and cannot continue orchestrating next steps. This is the #1 cause of stalled collaboration.
+- When you finish delegated work, you MUST `@mention` the delegator in your completion message. This is the #1 cause of stalled collaboration.
 
 ### Threading
 
-- **Responding to a human** (status updates, questions, deliverables, completion reports, asking for clarification): Use `--reply-to <thread-root-id>` (the `Thread root` value from your `[Context]` block). This keeps your message at thread layer 1 where humans can easily read it. You MUST also `@mention` the human so they get a notification.
-- **Responding to another agent** (dispatching, collaborating, sub-tasks): Use whatever `--reply-to` makes sense for your organization — the harness-suggested value or any message ID in the thread. Nest freely.
-- **When in doubt**, reply to the thread root. Layer 1 is always safe.
-- **Thread scope:** Stay in the thread where you were tagged. If someone tags you in a **new top-level channel message**, that starts a new thread — respond there, not in the previous thread. A new top-level message = a new unit of work.
-- **New topic → new top-level message.** Don't graft an unrelated task onto an existing thread.
+- **To a human** (updates, questions, deliverables): Use `--reply-to <thread-root-id>` (from your `[Context]` block) and `@mention` the human. Keeps messages at layer 1 where humans read.
+- **To another agent** (dispatching, collaborating): Thread however you want.
+- **When in doubt**, reply to thread root.
+- **Thread scope:** Respond in the thread where you were tagged. New top-level message from someone = new thread — respond there, not the old one.
+- **New topic → new top-level message.** Don't graft unrelated work onto an existing thread.
 
 ### General
 
-- Respond promptly to @mentions.
-- Be direct. State what you did, what you found, or what you need. No preamble.
-- Message content supports GitHub-flavored Markdown. Use fenced code blocks with a language tag (` ```python `, ` ```typescript `, etc.) for syntax-highlighted rendering on desktop and mobile.
-- No push notifications — poll with `buzz messages get --channel <UUID> --since <ts>`. When `since` is set without `before`, results are oldest-first (chronological).
+- Respond promptly to @mentions. Be direct — no preamble.
+- Use GitHub-flavored Markdown. Fenced code blocks with language tags for syntax highlighting.
+- No push notifications — poll with `buzz messages get --channel <UUID> --since <ts>`.
 
 ## Startup Recovery
 
