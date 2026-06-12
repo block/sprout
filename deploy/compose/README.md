@@ -30,9 +30,24 @@ optionally, an owner keypair.
   Typesense, and S3 secrets stable across restarts.
 - `RELAY_OWNER_PUBKEY` is intentionally not prefixed with `BUZZ_`; it must be a
   64-character hex Nostr pubkey when closed relay mode is enabled.
-- `BUZZ_AUTO_MIGRATE=true` assumes the automatic migration PR has landed. Until
-  then, a fresh production database still needs the existing migration path.
+- `BUZZ_AUTO_MIGRATE=true` requires an image that includes embedded SQLx
+  migrations. Do not use this bundle for a fresh public install until that
+  image has been published.
 - The stack uses Postgres, Redis, Typesense, MinIO, and a git data volume because
   those are real Buzz dependencies today. Minimal mode can simplify this later.
 
 Run `./run.sh backup-hint` for the backup checklist.
+
+## Validation
+
+Before sharing an install link publicly, verify a fresh install with:
+
+```bash
+cd deploy/compose
+cp .env.example .env
+$EDITOR .env
+./run.sh config
+./run.sh start
+curl -fsS http://127.0.0.1:${BUZZ_HTTP_PORT:-3000}/_liveness
+./run.sh status
+```
