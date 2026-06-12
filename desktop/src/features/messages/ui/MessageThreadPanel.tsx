@@ -227,8 +227,7 @@ export function MessageThreadPanel({
             <div className="space-y-2.5">
               {threadReplies.map((entry, index) => {
                 const showUnreadDivider =
-                  index > 0 &&
-                  entry.message.id === firstUnreadReplyId;
+                  index > 0 && entry.message.id === firstUnreadReplyId;
                 return (
                   <div
                     className={cn(
