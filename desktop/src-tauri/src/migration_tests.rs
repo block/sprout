@@ -1,3 +1,4 @@
+use super::test_support::*;
 use super::*;
 
 #[test]
@@ -320,20 +321,6 @@ fn canonical_dev_data_dir_returns_self_for_canonical_instance() {
     assert_eq!(canonical_dev_data_dir(&canonical).unwrap(), canonical);
 }
 
-fn write_agents_json(dir: &Path, records: &serde_json::Value) {
-    std::fs::create_dir_all(dir.join("agents")).unwrap();
-    std::fs::write(
-        dir.join("agents/managed-agents.json"),
-        serde_json::to_vec_pretty(records).unwrap(),
-    )
-    .unwrap();
-}
-
-fn read_agents_json(dir: &Path) -> Vec<serde_json::Value> {
-    let content = std::fs::read_to_string(dir.join("agents/managed-agents.json")).unwrap();
-    serde_json::from_str(&content).unwrap()
-}
-
 #[test]
 fn sync_creates_teams_directory_symlink() {
     let (_parent, canonical, worktree) = setup_sync_layout();
@@ -527,20 +514,6 @@ fn migrate_packs_to_teams_rewrites_agents_json() {
     assert_eq!(records[0]["persona_name_in_team"], "agent-one");
     assert!(records[0].get("persona_pack_path").is_none());
     assert!(records[0].get("persona_name_in_pack").is_none());
-}
-
-fn write_personas_json(dir: &Path, records: &serde_json::Value) {
-    std::fs::create_dir_all(dir.join("agents")).unwrap();
-    std::fs::write(
-        dir.join("agents/personas.json"),
-        serde_json::to_vec_pretty(records).unwrap(),
-    )
-    .unwrap();
-}
-
-fn read_personas_json(dir: &Path) -> Vec<serde_json::Value> {
-    let content = std::fs::read_to_string(dir.join("agents/personas.json")).unwrap();
-    serde_json::from_str(&content).unwrap()
 }
 
 #[test]

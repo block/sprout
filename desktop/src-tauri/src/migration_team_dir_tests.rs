@@ -1,19 +1,5 @@
+use super::test_support::*;
 use super::*;
-use std::path::Path;
-
-fn write_agents_json(dir: &Path, records: &serde_json::Value) {
-    std::fs::create_dir_all(dir.join("agents")).unwrap();
-    std::fs::write(
-        dir.join("agents/managed-agents.json"),
-        serde_json::to_vec_pretty(records).unwrap(),
-    )
-    .unwrap();
-}
-
-fn read_agents_json(dir: &Path) -> Vec<serde_json::Value> {
-    let content = std::fs::read_to_string(dir.join("agents/managed-agents.json")).unwrap();
-    serde_json::from_str(&content).unwrap()
-}
 
 // ── reconcile_team_dirs_in_file tests ────────────────────────────────
 
@@ -324,7 +310,7 @@ fn reconcile_target_dir_release_with_existing_dev_sibling_returns_self() {
     std::fs::create_dir_all(&release_dir).unwrap();
     std::fs::create_dir_all(&dev_dir).unwrap();
 
-    assert_eq!(reconcile_target_dir(release_dir.clone()), release_dir);
+    assert_eq!(reconcile_target_dir(&release_dir), release_dir);
 }
 
 #[test]
@@ -336,7 +322,7 @@ fn reconcile_target_dir_worktree_dev_with_canonical_sibling_returns_canonical() 
     std::fs::create_dir_all(&worktree_dir).unwrap();
     std::fs::create_dir_all(&canonical_dir).unwrap();
 
-    assert_eq!(reconcile_target_dir(worktree_dir), canonical_dir);
+    assert_eq!(reconcile_target_dir(&worktree_dir), canonical_dir);
 }
 
 #[test]
@@ -347,7 +333,7 @@ fn reconcile_target_dir_canonical_dev_returns_self() {
     let canonical_dir = parent.path().join(CANONICAL_DEV_IDENTIFIER);
     std::fs::create_dir_all(&canonical_dir).unwrap();
 
-    assert_eq!(reconcile_target_dir(canonical_dir.clone()), canonical_dir);
+    assert_eq!(reconcile_target_dir(&canonical_dir), canonical_dir);
 }
 
 #[test]
@@ -357,7 +343,7 @@ fn reconcile_target_dir_release_without_dev_sibling_returns_self() {
     let release_dir = parent.path().join("xyz.block.buzz.app");
     std::fs::create_dir_all(&release_dir).unwrap();
 
-    assert_eq!(reconcile_target_dir(release_dir.clone()), release_dir);
+    assert_eq!(reconcile_target_dir(&release_dir), release_dir);
 }
 
 #[test]
@@ -367,5 +353,67 @@ fn reconcile_target_dir_worktree_dev_without_canonical_sibling_returns_self() {
     let worktree_dir = parent.path().join("xyz.block.buzz.app.dev.mybranch");
     std::fs::create_dir_all(&worktree_dir).unwrap();
 
-    assert_eq!(reconcile_target_dir(worktree_dir.clone()), worktree_dir);
+    assert_eq!(reconcile_target_dir(&worktree_dir), worktree_dir);
+}
+
+#[test]
+fn reconcile_target_dir_ignores_non_prefix_dev_identifier() {
+    // Dev detection is prefix-only — a dir merely *containing* the dev
+    // identifier later in its name is not a dev instance.
+    let parent = tempfile::tempdir().unwrap();
+    let odd_dir = parent.path().join("com.example.xyz.block.buzz.app.dev");
+    let canonical_dir = parent.path().join(CANONICAL_DEV_IDENTIFIER);
+    std::fs::create_dir_all(&odd_dir).unwrap();
+    std::fs::create_dir_all(&canonical_dir).unwrap();
+
+    assert_eq!(reconcile_target_dir(&odd_dir), odd_dir);
+}
+
+#[test]
+fn team_dir_reconcile_skips_path_without_teams_or_packs_component() {
+    // A path with no teams/packs component yields no team id — record is
+    // silently skipped and the file is not rewritten.
+    let parent = tempfile::tempdir().unwrap();
+    let canonical = parent.path().join(CANONICAL_DEV_IDENTIFIER);
+    std::fs::create_dir_all(canonical.join("agents")).unwrap();
+
+    write_agents_json(
+        &canonical,
+        &serde_json::json!([{
+            "name": "Leto",
+            "persona_team_dir": "/some/random/path"
+        }]),
+    );
+
+    let path = canonical.join("agents/managed-agents.json");
+    let before = std::fs::read_to_string(&path).unwrap();
+    reconcile_team_dirs_in_file(&path, &canonical);
+    let after = std::fs::read_to_string(&path).unwrap();
+
+    assert_eq!(before, after);
+}
+
+#[test]
+fn team_dir_reconcile_renames_legacy_field_when_value_already_canonical() {
+    // Value already points at the target — only the legacy field name is
+    // normalized; the value is untouched.
+    let parent = tempfile::tempdir().unwrap();
+    let canonical = parent.path().join(CANONICAL_DEV_IDENTIFIER);
+    std::fs::create_dir_all(canonical.join("agents/teams/com.example.team")).unwrap();
+
+    let correct_path = format!("{}/agents/teams/com.example.team", canonical.display());
+
+    write_agents_json(
+        &canonical,
+        &serde_json::json!([{
+            "name": "Thufir",
+            "persona_pack_path": correct_path
+        }]),
+    );
+
+    reconcile_team_dirs_in_file(&canonical.join("agents/managed-agents.json"), &canonical);
+
+    let records = read_agents_json(&canonical);
+    assert_eq!(records[0]["persona_team_dir"], correct_path);
+    assert!(records[0].get("persona_pack_path").is_none());
 }
