@@ -6149,6 +6149,12 @@ export function maybeInstallE2eTauriMocks() {
         return getRelayWsUrl(activeConfig);
       case "get_default_relay_url":
         return getRelayWsUrl(activeConfig);
+      case "get_legacy_workspace_storage":
+        return {
+          workspaces: null,
+          activeWorkspaceId: null,
+          onboardingCompletions: [],
+        };
       case "get_relay_http_url":
         return getRelayHttpUrl(activeConfig);
       case "discover_acp_providers":
