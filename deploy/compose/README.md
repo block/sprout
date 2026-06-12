@@ -19,9 +19,9 @@ cd deploy/compose
 BUZZ_COMPOSE_TLS=true ./run.sh start
 ```
 
-Normal users should eventually run Dawn's bootstrap script instead of editing
-`.env` by hand. The bootstrap is responsible for generating stable secrets and,
-optionally, an owner keypair.
+The bootstrap script should eventually replace manual `.env` editing for normal
+users. It is responsible for generating stable secrets and, optionally, an owner
+keypair.
 
 ## Production notes
 
@@ -31,8 +31,10 @@ optionally, an owner keypair.
 - `RELAY_OWNER_PUBKEY` is intentionally not prefixed with `BUZZ_`; it must be a
   64-character hex Nostr pubkey when closed relay mode is enabled.
 - `BUZZ_AUTO_MIGRATE=true` requires an image that includes embedded SQLx
-  migrations. Do not use this bundle for a fresh public install until that
-  image has been published.
+  migrations. Do not share this quick start for a fresh public install until PR
+  #988 is merged and `ghcr.io/block/buzz:main` has been rebuilt from it. Before
+  then, this bundle is only suitable for instances whose database schema has
+  already been applied.
 - The stack uses Postgres, Redis, Typesense, MinIO, and a git data volume because
   those are real Buzz dependencies today. Minimal mode can simplify this later.
 
