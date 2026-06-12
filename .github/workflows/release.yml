@@ -559,10 +559,12 @@ jobs:
       - uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
 
       - name: Install desktop dependencies
+        shell: bash
         run: just desktop-install-ci
 
       - name: Add Rust target
-        run: rustup target add "$env:TARGET"
+        shell: bash
+        run: rustup target add "$TARGET"
 
       - name: Patch version
         shell: bash
@@ -665,12 +667,17 @@ jobs:
           persist-credentials: false
 
       - name: Write signature files
+        env:
+          SIG_ARM64: ${{ needs.release.outputs.sig }}
+          SIG_X64: ${{ needs.release-macos-x64.outputs.sig }}
+          SIG_LINUX: ${{ needs.release-linux.outputs.sig }}
+          SIG_WIN: ${{ needs.release-windows.outputs.sig }}
         run: |
           mkdir -p /tmp/sigs
-          echo '${{ needs.release.outputs.sig }}' > /tmp/sigs/darwin-aarch64.sig
-          echo '${{ needs.release-macos-x64.outputs.sig }}' > /tmp/sigs/darwin-x86_64.sig
-          echo '${{ needs.release-linux.outputs.sig }}' > /tmp/sigs/linux-x86_64.sig
-          echo '${{ needs.release-windows.outputs.sig }}' > /tmp/sigs/windows-x86_64.sig
+          echo "$SIG_ARM64" > /tmp/sigs/darwin-aarch64.sig
+          echo "$SIG_X64" > /tmp/sigs/darwin-x86_64.sig
+          echo "$SIG_LINUX" > /tmp/sigs/linux-x86_64.sig
+          echo "$SIG_WIN" > /tmp/sigs/windows-x86_64.sig
 
       - name: Verify archive URLs are accessible
         run: |
@@ -683,10 +690,19 @@ jobs:
             "${{ needs.release-linux.outputs.archive_name }}" \
             "${{ needs.release-windows.outputs.archive_name }}"; do
             echo "Checking $BASE/$name ..."
-            curl -fsI "$BASE/$name" > /dev/null || {
-              echo "::error::Archive not yet accessible: $BASE/$name"
+            success=false
+            for attempt in 1 2 3; do
+              if curl -fsI "$BASE/$name" > /dev/null 2>&1; then
+                success=true
+                break
+              fi
+              echo "Attempt $attempt failed for $name, retrying in 10s..."
+              sleep 10
+            done
+            if [ "$success" != "true" ]; then
+              echo "::error::Archive not accessible after 3 attempts: $BASE/$name"
               exit 1
-            }
+            fi
           done
           echo "All archive URLs verified."
 
