@@ -3,13 +3,19 @@ import { describe, it, beforeEach } from "node:test";
 
 import {
   syncAgentTurnsFromEvents,
-  getActiveChannelsForAgent,
+  getActiveTurnsForAgent,
   resetActiveAgentTurnsStore,
   subscribeActiveAgentTurns,
 } from "./activeAgentTurnsStore.ts";
+import { formatElapsed } from "./ui/agentSessionUtils.ts";
 
 const AGENT =
   "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
+
+/** Channel-id Set view of the summary array — keeps legacy assertions terse. */
+function channelIdsOf(turns) {
+  return new Set(turns.map((t) => t.channelId));
+}
 
 function makeEvent(overrides) {
   return {
@@ -35,7 +41,7 @@ describe("activeAgentTurnsStore", () => {
       syncAgentTurnsFromEvents(AGENT, [
         makeEvent({ seq: 1, turnId: "t1", channelId: "c1" }),
       ]);
-      const channels = getActiveChannelsForAgent(AGENT);
+      const channels = channelIdsOf(getActiveTurnsForAgent(AGENT));
       assert.equal(channels.size, 1);
       assert.ok(channels.has("c1"));
     });
@@ -48,7 +54,7 @@ describe("activeAgentTurnsStore", () => {
       syncAgentTurnsFromEvents(AGENT, [
         makeEvent({ seq: 3, turnId: "t2", channelId: "c2" }),
       ]);
-      const channels = getActiveChannelsForAgent(AGENT);
+      const channels = channelIdsOf(getActiveTurnsForAgent(AGENT));
       assert.equal(channels.size, 1);
       assert.ok(channels.has("c1"));
       assert.ok(!channels.has("c2"));
@@ -61,7 +67,7 @@ describe("activeAgentTurnsStore", () => {
       syncAgentTurnsFromEvents(AGENT, [
         makeEvent({ seq: 1, turnId: "t2", channelId: "c2" }),
       ]);
-      const channels = getActiveChannelsForAgent(AGENT);
+      const channels = channelIdsOf(getActiveTurnsForAgent(AGENT));
       assert.equal(channels.size, 1);
       assert.ok(channels.has("c1"));
     });
@@ -78,7 +84,7 @@ describe("activeAgentTurnsStore", () => {
           timestamp: "2024-01-01T00:00:00Z",
         }),
       ]);
-      assert.equal(getActiveChannelsForAgent(AGENT).size, 1);
+      assert.equal(getActiveTurnsForAgent(AGENT).length, 1);
 
       // Agent restarts — seq resets to 1, but wall-clock timestamp keeps
       // climbing. The composite watermark accepts it on timestamp alone.
@@ -90,7 +96,7 @@ describe("activeAgentTurnsStore", () => {
           timestamp: "2024-01-01T00:01:00Z",
         }),
       ]);
-      const channels = getActiveChannelsForAgent(AGENT);
+      const channels = channelIdsOf(getActiveTurnsForAgent(AGENT));
       assert.ok(channels.has("c2"), "post-restart event should be processed");
     });
 
@@ -126,7 +132,7 @@ describe("activeAgentTurnsStore", () => {
           timestamp: "2024-01-01T00:01:02Z",
         }),
       ]);
-      const channels = getActiveChannelsForAgent(AGENT);
+      const channels = channelIdsOf(getActiveTurnsForAgent(AGENT));
       // t1 still active (not ended), t2 ended, t3 still active.
       assert.ok(channels.has("c1"));
       assert.ok(!channels.has("c2"));
@@ -148,7 +154,7 @@ describe("activeAgentTurnsStore", () => {
         );
       }
       syncAgentTurnsFromEvents(AGENT, events);
-      const channels = getActiveChannelsForAgent(AGENT);
+      const channels = channelIdsOf(getActiveTurnsForAgent(AGENT));
       // Should have evicted c1 (oldest) to make room for c5
       assert.equal(channels.size, 4);
       assert.ok(!channels.has("c1"), "oldest turn should be evicted");
@@ -168,7 +174,7 @@ describe("activeAgentTurnsStore", () => {
           channelId: null,
         }),
       ]);
-      assert.equal(getActiveChannelsForAgent(AGENT).size, 0);
+      assert.equal(getActiveTurnsForAgent(AGENT).length, 0);
     });
 
     it("falls back to channelId when turnId is null", () => {
@@ -181,7 +187,7 @@ describe("activeAgentTurnsStore", () => {
           channelId: "c1",
         }),
       ]);
-      assert.equal(getActiveChannelsForAgent(AGENT).size, 0);
+      assert.equal(getActiveTurnsForAgent(AGENT).length, 0);
     });
 
     it("does nothing when both turnId and channelId are null", () => {
@@ -195,7 +201,7 @@ describe("activeAgentTurnsStore", () => {
         }),
       ]);
       // Turn should still be active — no way to identify which to end
-      assert.equal(getActiveChannelsForAgent(AGENT).size, 1);
+      assert.equal(getActiveTurnsForAgent(AGENT).length, 1);
     });
 
     it("channelId fallback removes only one matching turn", () => {
@@ -210,7 +216,7 @@ describe("activeAgentTurnsStore", () => {
         }),
       ]);
       // Only one of the two turns in c1 should be removed
-      const channels = getActiveChannelsForAgent(AGENT);
+      const channels = channelIdsOf(getActiveTurnsForAgent(AGENT));
       assert.equal(channels.size, 1);
       assert.ok(channels.has("c1"));
     });
@@ -264,8 +270,8 @@ describe("activeAgentTurnsStore", () => {
 
       // Initial pass.
       syncAgentTurnsFromEvents(AGENT, buffer);
-      const afterFirst = getActiveChannelsForAgent(AGENT);
-      assert.equal(afterFirst.size, 2);
+      const afterFirst = getActiveTurnsForAgent(AGENT);
+      assert.equal(afterFirst.length, 2);
 
       // Subscribe, then replay the identical buffer.
       let notified = 0;
@@ -276,7 +282,7 @@ describe("activeAgentTurnsStore", () => {
       unsub();
 
       assert.equal(notified, 0, "replay must not notify listeners");
-      const afterReplay = getActiveChannelsForAgent(AGENT);
+      const afterReplay = getActiveTurnsForAgent(AGENT);
       assert.equal(
         afterReplay,
         afterFirst,
@@ -301,7 +307,7 @@ describe("activeAgentTurnsStore", () => {
           timestamp: "2024-01-01T00:00:01Z",
         }),
       ]);
-      assert.equal(getActiveChannelsForAgent(AGENT).size, 0);
+      assert.equal(getActiveTurnsForAgent(AGENT).length, 0);
 
       // Agent restarts. The harness replays its buffer with seq reset to 1,
       // but the original event timestamps (older than the watermark) are
@@ -322,7 +328,7 @@ describe("activeAgentTurnsStore", () => {
         }),
       ]);
       assert.equal(
-        getActiveChannelsForAgent(AGENT).size,
+        getActiveTurnsForAgent(AGENT).length,
         0,
         "stale replayed start must not resurrect an evicted turn",
       );
@@ -354,7 +360,7 @@ describe("activeAgentTurnsStore", () => {
           timestamp: "2024-01-01T00:00:02Z",
         }),
       ]);
-      assert.equal(getActiveChannelsForAgent(AGENT).size, 1);
+      assert.equal(getActiveTurnsForAgent(AGENT).length, 1);
 
       // The full buffer is replayed on the next observer event. The stale
       // turn_error (below the watermark) must NOT re-run its channel-match
@@ -380,7 +386,7 @@ describe("activeAgentTurnsStore", () => {
           timestamp: "2024-01-01T00:00:02Z",
         }),
       ]);
-      const channels = getActiveChannelsForAgent(AGENT);
+      const channels = channelIdsOf(getActiveTurnsForAgent(AGENT));
       assert.equal(
         channels.size,
         1,
@@ -429,19 +435,97 @@ describe("activeAgentTurnsStore", () => {
     });
   });
 
-  describe("getActiveChannelsForAgent", () => {
-    it("returns EMPTY_SET for null/undefined pubkey", () => {
-      assert.equal(getActiveChannelsForAgent(null).size, 0);
-      assert.equal(getActiveChannelsForAgent(undefined).size, 0);
+  describe("getActiveTurnsForAgent", () => {
+    it("returns empty array for null/undefined pubkey", () => {
+      assert.equal(getActiveTurnsForAgent(null).length, 0);
+      assert.equal(getActiveTurnsForAgent(undefined).length, 0);
     });
 
     it("returns stable reference when unchanged", () => {
       syncAgentTurnsFromEvents(AGENT, [
         makeEvent({ seq: 1, turnId: "t1", channelId: "c1" }),
       ]);
-      const ref1 = getActiveChannelsForAgent(AGENT);
-      const ref2 = getActiveChannelsForAgent(AGENT);
-      assert.equal(ref1, ref2, "should return cached reference");
+      const ref1 = getActiveTurnsForAgent(AGENT);
+      const ref2 = getActiveTurnsForAgent(AGENT);
+      assert.equal(ref1, ref2, "should return cached array reference");
     });
+
+    it("preserves a desktop-clock observedAt per channel", () => {
+      const before = Date.now();
+      syncAgentTurnsFromEvents(AGENT, [
+        // startedAt comes from the (stale) event timestamp; observedAt must
+        // instead anchor to the local clock at insert time.
+        makeEvent({
+          seq: 1,
+          turnId: "t1",
+          channelId: "c1",
+          timestamp: "2000-01-01T00:00:00Z",
+        }),
+      ]);
+      const after = Date.now();
+      const [summary] = getActiveTurnsForAgent(AGENT);
+      assert.equal(summary.channelId, "c1");
+      assert.ok(
+        summary.observedAt >= before && summary.observedAt <= after,
+        "observedAt must be the local clock at insert, not the event timestamp",
+      );
+    });
+
+    it("collapses two turns in one channel to the earliest observedAt", () => {
+      syncAgentTurnsFromEvents(AGENT, [
+        makeEvent({ seq: 1, turnId: "t1", channelId: "c1" }),
+      ]);
+      const firstObservedAt = getActiveTurnsForAgent(AGENT)[0].observedAt;
+
+      // Second turn in the same channel — its observedAt is >= the first
+      // because the clock is monotonic, so the earliest must still win.
+      syncAgentTurnsFromEvents(AGENT, [
+        makeEvent({ seq: 2, turnId: "t2", channelId: "c1" }),
+      ]);
+      const summaries = getActiveTurnsForAgent(AGENT);
+      assert.equal(summaries.length, 1, "same channel collapses to one entry");
+      assert.equal(
+        summaries[0].observedAt,
+        firstObservedAt,
+        "earliest observedAt for the channel must be surfaced",
+      );
+    });
+
+    it("sorts summaries by channelId", () => {
+      syncAgentTurnsFromEvents(AGENT, [
+        makeEvent({ seq: 1, turnId: "t1", channelId: "c-zebra" }),
+        makeEvent({ seq: 2, turnId: "t2", channelId: "c-alpha" }),
+      ]);
+      const ids = getActiveTurnsForAgent(AGENT).map((s) => s.channelId);
+      assert.deepEqual(ids, ["c-alpha", "c-zebra"]);
+    });
+  });
+});
+
+describe("formatElapsed", () => {
+  it("renders sub-10s as whole seconds", () => {
+    assert.equal(formatElapsed(0), "0s");
+    assert.equal(formatElapsed(4_900), "4s");
+  });
+
+  it("renders sub-minute as whole seconds", () => {
+    assert.equal(formatElapsed(59_000), "59s");
+  });
+
+  it("rolls into minutes at exactly 60s", () => {
+    assert.equal(formatElapsed(60_000), "1m 0s");
+  });
+
+  it("renders minutes and seconds", () => {
+    assert.equal(formatElapsed(83_000), "1m 23s");
+  });
+
+  it("rolls 59m 59s cleanly into 1h 0m 0s at 3600s", () => {
+    assert.equal(formatElapsed(3_599_000), "59m 59s");
+    assert.equal(formatElapsed(3_600_000), "1h 0m 0s");
+  });
+
+  it("clamps negative input to 0s", () => {
+    assert.equal(formatElapsed(-5_000), "0s");
   });
 });

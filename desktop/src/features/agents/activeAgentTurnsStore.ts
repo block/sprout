@@ -19,7 +19,14 @@ type ActiveTurn = {
   turnId: string;
   channelId: string;
   startedAt: number;
+  observedAt: number;
   lastActivityAt: number;
+};
+
+/** One working channel surfaced to the UI, anchored to the desktop clock. */
+export type ActiveTurnSummary = {
+  channelId: string;
+  observedAt: number;
 };
 
 // Module-level state: agentPubkey → turnId → ActiveTurn
@@ -28,7 +35,7 @@ const listeners = new Set<() => void>();
 
 // Cached snapshots for useSyncExternalStore reference stability.
 // Only regenerated when the underlying turn map for an agent actually changes.
-const cachedChannelSets = new Map<string, Set<string>>();
+const cachedTurnSummaries = new Map<string, ActiveTurnSummary[]>();
 
 // Composite watermark per agent: the newest observer event processed, by
 // (timestamp, seq) ordering. An event is processed only if it is strictly
@@ -39,7 +46,7 @@ const lastProcessed = new Map<string, ObserverEvent>();
 let pruneInterval: ReturnType<typeof setInterval> | null = null;
 
 function invalidateCache(agentKey: string) {
-  cachedChannelSets.delete(agentKey);
+  cachedTurnSummaries.delete(agentKey);
 }
 
 function notifyListeners() {
@@ -81,6 +88,7 @@ function startTurn(
     turnId,
     channelId,
     startedAt: now,
+    observedAt: Date.now(),
     lastActivityAt: now,
   });
   invalidateCache(key);
@@ -215,24 +223,41 @@ export function subscribeActiveAgentTurns(listener: () => void) {
   };
 }
 
-/** Returns the set of channel IDs where the given agent has active turns. */
-export function getActiveChannelsForAgent(
+/**
+ * Returns the channels where the given agent has active turns, sorted by
+ * channelId, each anchored to the earliest `observedAt` for that channel.
+ * The array reference is cached and stable until the turn map mutates — a
+ * requirement for `useSyncExternalStore`.
+ */
+export function getActiveTurnsForAgent(
   agentPubkey: string | null | undefined,
-): Set<string> {
-  if (!agentPubkey) return EMPTY_SET;
+): ActiveTurnSummary[] {
+  if (!agentPubkey) return EMPTY_TURNS;
   const key = normalizePubkey(agentPubkey);
   const agentTurns = activeTurnsByAgent.get(key);
-  if (!agentTurns || agentTurns.size === 0) return EMPTY_SET;
+  if (!agentTurns || agentTurns.size === 0) return EMPTY_TURNS;
 
-  const cached = cachedChannelSets.get(key);
+  const cached = cachedTurnSummaries.get(key);
   if (cached) return cached;
 
-  const result = new Set([...agentTurns.values()].map((t) => t.channelId));
-  cachedChannelSets.set(key, result);
+  // Collapse multiple turns in one channel to the earliest observation —
+  // the badge should count from when the channel first went active.
+  const earliestByChannel = new Map<string, number>();
+  for (const turn of agentTurns.values()) {
+    const prior = earliestByChannel.get(turn.channelId);
+    if (prior === undefined || turn.observedAt < prior) {
+      earliestByChannel.set(turn.channelId, turn.observedAt);
+    }
+  }
+
+  const result = [...earliestByChannel.entries()]
+    .map(([channelId, observedAt]) => ({ channelId, observedAt }))
+    .sort((a, b) => a.channelId.localeCompare(b.channelId));
+  cachedTurnSummaries.set(key, result);
   return result;
 }
 
-const EMPTY_SET: Set<string> = new Set();
+const EMPTY_TURNS: ActiveTurnSummary[] = [];
 
 /**
  * Synchronize the active-turns store with the latest observer events for a
@@ -248,14 +273,15 @@ export function syncAgentTurnsFromEvents(
 }
 
 /**
- * Hook: returns the set of channel IDs where the given agent is currently working.
- * Re-renders when the set changes.
+ * Hook: returns the channels where the given agent is currently working, each
+ * with the desktop-clock `observedAt` to anchor a live elapsed counter.
+ * Re-renders when the set of channels changes — not when the clock ticks.
  */
 export function useActiveAgentTurns(
   agentPubkey: string | null | undefined,
-): Set<string> {
+): ActiveTurnSummary[] {
   const getSnapshot = React.useCallback(
-    () => getActiveChannelsForAgent(agentPubkey),
+    () => getActiveTurnsForAgent(agentPubkey),
     [agentPubkey],
   );
 
@@ -286,6 +312,6 @@ export function useActiveAgentTurnsBridge(
 export function resetActiveAgentTurnsStore() {
   activeTurnsByAgent.clear();
   lastProcessed.clear();
-  cachedChannelSets.clear();
+  cachedTurnSummaries.clear();
   notifyListeners();
 }
