@@ -204,13 +204,13 @@ impl Llm {
             }
         };
 
-        // A 401 can mean the local expiry clock disagreed with the server
-        // (skew, revocation, a node that never saw the token). On the first
-        // such rejection, force a refresh keyed off the rejected bearer and
-        // retry once. The guard is local to this call so an earlier turn's 401
-        // can never suppress a later turn's legitimate retry. (A 403 is an
-        // authorization verdict — a refresh can't fix it — so `post` maps it
-        // to a plain `Llm` error that this loop propagates without retrying.)
+        // A 401 or 403 can mean the local expiry clock disagreed with the
+        // server (skew, revocation, a node that never saw the token). On the
+        // first such rejection, force a refresh keyed off the rejected bearer
+        // and retry once. The guard is local to this call so an earlier turn's
+        // rejection can never suppress a later turn's legitimate retry. Both
+        // statuses map to `LlmAuth` in `post`: a 403 is indistinguishable from
+        // an expired-token 403 here, so we refresh once and let it propagate.
         let mut bearer = self.auth.bearer().await?;
         let mut refreshed = false;
         loop {
@@ -820,11 +820,12 @@ where
             }
         };
         let status = resp.status();
-        // 401 is refreshable (stale/rejected token); the caller's retry loop
-        // keys off `LlmAuth`. 403 is an authorization verdict (scope, quota,
-        // entitlement) that a token refresh can't fix, so surface it as a
-        // terminal `Llm` error and don't tempt a pointless refresh + retry.
-        if status == 401 {
+        // Both 401 and 403 are treated as refreshable: a 403 can mean an
+        // expired or revoked token, not just a pure authorization verdict, and
+        // the two are indistinguishable at the HTTP-status layer. The caller's
+        // retry loop keys off `LlmAuth` and refreshes once; the per-call guard
+        // bounds a pure-authz 403 to one wasted refresh before it propagates.
+        if status == 401 || status == 403 {
             return Err(AgentError::LlmAuth(read_error_body(resp).await));
         }
         if (status.is_server_error() || status == 429) && attempt + 1 < MAX_RETRIES {
