@@ -81,10 +81,17 @@ const VOICE_EMBEDDING_CACHE_CAPACITY: i32 = 16;
 /// synthesis time by ~5× with no audible benefit on this model.
 const SYNTH_NUM_STEPS: i32 = 1;
 
-/// Disable the upstream default 200 ms of pre/post silence padding. We splice
-/// `INTER_SENTENCE_SILENCE` in `tts.rs` ourselves and don't want a double
-/// helping of leading silence on every utterance.
-const SYNTH_SILENCE_SCALE: f32 = 0.0;
+/// Leave the generated audio's silences untouched (1.0 is the identity).
+///
+/// sherpa-onnx's `ScaleSilence` (`offline-tts.cc`) is *not* pre/post padding
+/// control: it finds every interior silence run ≥ 0.2 s (|s| ≤ 0.01) and
+/// multiplies its length by this factor. The previous value of 0.0 — set
+/// under the mistaken belief it disabled lead-in/lead-out padding — deleted
+/// every natural pause inside an utterance: clause breaks, breaths, the gap
+/// after a comma. Words slammed together and endings cut abruptly. The
+/// reference Pocket TTS pipeline does not post-process silence at all;
+/// 1.0 restores parity.
+const SYNTH_SILENCE_SCALE: f32 = 1.0;
 
 /// sherpa-onnx upstream default for `max_frames` (LM steps), in
 /// `offline-tts-pocket-impl.h:Generate`. 500 steps ≈ 40 s of audio at the
