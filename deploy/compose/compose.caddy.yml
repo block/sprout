@@ -4,7 +4,6 @@ services:
 
   caddy:
     image: caddy:2-alpine
-    container_name: buzz-caddy
     depends_on:
       relay:
         condition: service_healthy
