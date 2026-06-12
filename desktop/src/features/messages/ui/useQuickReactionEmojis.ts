@@ -6,6 +6,7 @@ import {
 } from "@/features/workspaces/workspaceStorage";
 
 const QUICK_REACTION_STORAGE_KEY = "buzz.quick-reaction-emojis.v1";
+const QUICK_REACTION_UPDATED_EVENT = "buzz:quick-reaction-emojis-updated";
 const DEFAULT_QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉"] as const;
 const MAX_STORED_REACTIONS = 24;
 const sessionQuickReactionEmojis = new Map<string, string[]>();
@@ -141,17 +142,38 @@ function getSessionQuickReactionEmojis(
   return emojis;
 }
 
+function invalidateSessionQuickReactions(workspaceScope: string | null) {
+  const prefix = `${workspaceScope ?? "global"}:`;
+  for (const key of sessionQuickReactionEmojis.keys()) {
+    if (key.startsWith(prefix)) {
+      sessionQuickReactionEmojis.delete(key);
+    }
+  }
+}
+
+function notifyQuickReactionUpdate(workspaceScope: string | null) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent(QUICK_REACTION_UPDATED_EVENT, {
+      detail: { workspaceScope },
+    }),
+  );
+}
+
 export function recordQuickReactionEmoji(emoji: string) {
   const trimmed = emoji.trim();
   if (!trimmed) return;
 
-  const storageKey = quickReactionStorageKey(getActiveWorkspaceScope());
+  const workspaceScope = getActiveWorkspaceScope();
+  const storageKey = quickReactionStorageKey(workspaceScope);
   const entries = readQuickReactionEntries(storageKey);
   const existing = entries.find((entry) => entry.emoji === trimmed);
+  let didAddEntry = false;
   if (existing) {
     existing.count += 1;
     existing.lastUsedAt = Date.now();
   } else {
+    didAddEntry = true;
     entries.push({
       count: 1,
       emoji: trimmed,
@@ -160,6 +182,10 @@ export function recordQuickReactionEmoji(emoji: string) {
   }
 
   writeQuickReactionEntries(entries, storageKey);
+  if (didAddEntry) {
+    invalidateSessionQuickReactions(workspaceScope);
+    notifyQuickReactionUpdate(workspaceScope);
+  }
 }
 
 export function useQuickReactionEmojis(limit = 4) {
@@ -179,12 +205,25 @@ export function useQuickReactionEmojis(limit = 4) {
         setEmojis(getSessionQuickReactionEmojis(limit, workspaceScope));
       }
     };
+    const handleLocalUpdate = (event: Event) => {
+      if (
+        event instanceof CustomEvent &&
+        event.detail?.workspaceScope === workspaceScope
+      ) {
+        setEmojis(getSessionQuickReactionEmojis(limit, workspaceScope));
+      }
+    };
 
     window.addEventListener("storage", handleStorage);
+    window.addEventListener(QUICK_REACTION_UPDATED_EVENT, handleLocalUpdate);
     setEmojis(getSessionQuickReactionEmojis(limit, workspaceScope));
 
     return () => {
       window.removeEventListener("storage", handleStorage);
+      window.removeEventListener(
+        QUICK_REACTION_UPDATED_EVENT,
+        handleLocalUpdate,
+      );
     };
   }, [limit, workspaceScope]);
 
