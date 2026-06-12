@@ -254,7 +254,7 @@ fn openai_tool_call(id: &str, name: &str, args: Value) -> Value {
 async fn init_session(h: &mut Harness) -> String {
     h.send(
         "initialize",
-        json!({"protocolVersion":1,"clientCapabilities":{}}),
+        json!({"protocolVersion":2,"clientCapabilities":{}}),
     )
     .await;
     let r = h.recv().await;
@@ -428,7 +428,7 @@ async fn session_new_rejects_oversized_system_prompt() {
     let mut h = Harness::spawn(&url).await;
     h.send(
         "initialize",
-        json!({"protocolVersion":1,"clientCapabilities":{}}),
+        json!({"protocolVersion":2,"clientCapabilities":{}}),
     )
     .await;
     let r = h.recv().await;
@@ -466,7 +466,7 @@ async fn system_prompt_reaches_llm_system_role() {
     // initialize.
     h.send(
         "initialize",
-        json!({"protocolVersion":1,"clientCapabilities":{}}),
+        json!({"protocolVersion":2,"clientCapabilities":{}}),
     )
     .await;
     let r = h.recv().await;
@@ -537,7 +537,7 @@ async fn system_prompt_absent_no_canary() {
     // initialize.
     h.send(
         "initialize",
-        json!({"protocolVersion":1,"clientCapabilities":{}}),
+        json!({"protocolVersion":2,"clientCapabilities":{}}),
     )
     .await;
     let _ = h.recv().await;

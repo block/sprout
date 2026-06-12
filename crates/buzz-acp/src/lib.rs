@@ -2354,8 +2354,17 @@ fn dispatch_heartbeat(
         .heartbeat_prompt
         .clone()
         .unwrap_or_else(default_heartbeat_prompt);
-    // base_prompt is delivered via system role in session/new — no need
-    // to prepend it to the heartbeat user message.
+    // For legacy agents (protocol_version < 2), prepend base_prompt to the
+    // heartbeat user message since they don't receive it via session/new.
+    let prompt_text = if agent.protocol_version < 2 {
+        if let Some(bp) = ctx.base_prompt {
+            format!("[Base]\n{}\n\n{prompt_text}", bp.trim_end())
+        } else {
+            prompt_text
+        }
+    } else {
+        prompt_text
+    };
     let result_tx = pool.result_tx();
     let ctx_clone = Arc::clone(ctx);
     let agent_index = agent.index;

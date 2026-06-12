@@ -181,7 +181,7 @@ async fn handshake(h: &mut Harness) -> String {
     let init_id = h
         .send(
             "initialize",
-            json!({ "protocolVersion": 1, "clientCapabilities": {} }),
+            json!({ "protocolVersion": 2, "clientCapabilities": {} }),
         )
         .await;
     let init = h.recv_for_id(init_id).await;
@@ -305,7 +305,7 @@ async fn test_initialize_version_check() {
         )
         .await;
     let ok = h.recv_for_id(id2).await;
-    assert_eq!(ok["result"]["protocolVersion"], 2);
+    assert_eq!(ok["result"]["protocolVersion"], 1);
 
     h.shutdown().await;
 }
@@ -371,7 +371,7 @@ async fn test_malformed_json_rpc() {
         )
         .await;
     let ok = h.recv_for_id(init_id).await;
-    assert_eq!(ok["result"]["protocolVersion"], 2);
+    assert_eq!(ok["result"]["protocolVersion"], 1);
 
     let bad_id = h.send("nonsense/method", json!({})).await;
     let v = h.recv_for_id(bad_id).await;

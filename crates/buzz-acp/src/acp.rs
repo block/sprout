@@ -271,7 +271,7 @@ impl AcpClient {
     /// The caller may inspect `agentCapabilities` in the returned value.
     pub async fn initialize(&mut self) -> Result<serde_json::Value, AcpError> {
         let params = serde_json::json!({
-            "protocolVersion": 1,
+            "protocolVersion": 2,
             "clientCapabilities": {},
             "clientInfo": {
                 "name": "buzz-acp",
@@ -1402,7 +1402,7 @@ mod tests {
             "id": 0u64,
             "method": "initialize",
             "params": {
-                "protocolVersion": 1,
+                "protocolVersion": 2,
                 "clientCapabilities": {},
                 "clientInfo": {
                     "name": "buzz-acp",
@@ -1410,7 +1410,7 @@ mod tests {
                 }
             }
         });
-        assert_eq!(msg["params"]["protocolVersion"].as_u64(), Some(1));
+        assert_eq!(msg["params"]["protocolVersion"].as_u64(), Some(2));
         assert_eq!(
             msg["params"]["clientInfo"]["name"].as_str(),
             Some("buzz-acp")

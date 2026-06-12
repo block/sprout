@@ -835,7 +835,15 @@ pub async fn run_prompt_task(
             // For agents with systemPrompt support (protocol_version >= 2),
             // base_prompt is delivered via the system role in session/new.
             // Legacy agents receive it via [Base] in the user message instead.
-            let init_msg = initial_msg.to_string();
+            let init_msg = if agent.protocol_version < 2 {
+                if let Some(bp) = ctx.base_prompt {
+                    format!("[Base]\n{}\n\n{}", bp.trim_end(), initial_msg)
+                } else {
+                    initial_msg.to_string()
+                }
+            } else {
+                initial_msg.to_string()
+            };
             let init_result = agent
                 .acp
                 .session_prompt_with_idle_timeout(

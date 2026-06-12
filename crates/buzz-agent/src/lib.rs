@@ -215,13 +215,15 @@ async fn initialize(id: Value, params: Value, wire_tx: &WireSender) {
         Ok(p) => p,
         Err(m) => return reject(wire_tx, id, INVALID_PARAMS, &m).await,
     };
-    let _ = p.protocol_version;
+    // Honest negotiation: respond with the minimum of what the client
+    // requested and what we support.
+    let negotiated_version = p.protocol_version.min(PROTOCOL_VERSION);
     wire::send(
         wire_tx,
         wire::ok(
             id,
             json!({
-                "protocolVersion": PROTOCOL_VERSION,
+                "protocolVersion": negotiated_version,
                 "agentCapabilities": {
                     "loadSession": false,
                     "promptCapabilities": { "image": false, "audio": false, "embeddedContext": false },
