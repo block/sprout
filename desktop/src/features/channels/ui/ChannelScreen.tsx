@@ -34,6 +34,7 @@ import {
   formatTimelineMessages,
 } from "@/features/messages/lib/formatTimelineMessages";
 import { buildThreadPanelData } from "@/features/messages/lib/threadPanel";
+import { computeChannelUnreadMarker } from "@/features/messages/lib/unreadMarker";
 import { imetaMediaFromTags } from "@/features/messages/lib/imetaMediaMarkdown";
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
 import { useLoadMissingAncestors } from "@/features/messages/useLoadMissingAncestors";
@@ -79,6 +80,7 @@ export function ChannelScreen({
   const {
     markChannelRead,
     markChannelUnread,
+    getChannelReadAt,
     openCreateChannel,
     openChannelManagement,
     followThread,
@@ -127,6 +129,42 @@ export function ChannelScreen({
   const activeReadAt = latestActiveMessage
     ? new Date(latestActiveMessage.created_at * 1_000).toISOString()
     : (activeChannel?.lastMessageAt ?? null);
+  // Capture the read frontier as it stood the instant this channel was opened,
+  // BEFORE the mark-read effect below advances it to latest. Written during
+  // render (not in an effect) so the value is read prior to any effect for
+  // this commit — the divider must reflect "what was unread on open", not the
+  // post-open frontier. Keyed per channel and recomputed only when the channel
+  // id changes, never when activeReadAt advances, or the divider would vanish
+  // the moment the open marks the channel read.
+  const openFrontierRef = React.useRef(new Map<string, number | null>());
+  if (activeChannelId && !openFrontierRef.current.has(activeChannelId)) {
+    openFrontierRef.current.set(
+      activeChannelId,
+      getChannelReadAt(activeChannelId),
+    );
+  }
+  const openFrontierSeconds = activeChannelId
+    ? (openFrontierRef.current.get(activeChannelId) ?? null)
+    : null;
+  // Channels the user manually marked unread this session. A deliberate
+  // mark-unread has no meaningful "new" boundary inside the timeline — the
+  // open-time snapshot already covers every message — so the pill and divider
+  // would otherwise render nothing while the sidebar dot says unread. Suppress
+  // the marker for such channels to avoid that visible contradiction. The flag
+  // is cleared on re-open (a fresh snapshot is recomputed for the channel).
+  const forcedUnreadRef = React.useRef(new Set<string>());
+  const [, forceUnreadRender] = React.useReducer((n: number) => n + 1, 0);
+  const isActiveChannelForcedUnread =
+    !!activeChannelId && forcedUnreadRef.current.has(activeChannelId);
+  // Drop the forced-unread flag when the user leaves a channel, so reopening
+  // it recomputes a normal marker rather than staying suppressed forever.
+  React.useEffect(() => {
+    const channelId = activeChannelId;
+    if (!channelId) return;
+    return () => {
+      forcedUnreadRef.current.delete(channelId);
+    };
+  }, [activeChannelId]);
   React.useEffect(() => {
     if (!activeChannelId || activeChannel?.isMember === false) {
       return;
@@ -289,6 +327,19 @@ export function ChannelScreen({
     channelId: activeChannelId,
     messages: timelineMessages,
   });
+  // Oldest-unread top-level message + count, derived from the open-time
+  // frontier snapshot above. Drives the "N new messages" pill and the "New"
+  // divider; both stay put even after the open marks the channel read because
+  // openFrontierSeconds is keyed per channel, not on the live marker.
+  const { firstUnreadMessageId, unreadCount } = React.useMemo(
+    () =>
+      computeChannelUnreadMarker(
+        timelineMessages,
+        openFrontierSeconds,
+        isActiveChannelForcedUnread,
+      ),
+    [isActiveChannelForcedUnread, openFrontierSeconds, timelineMessages],
+  );
   const directReplyIdsByParentId = React.useMemo(() => {
     const map = new Map<string, string[]>();
     for (const message of timelineMessages) {
@@ -400,6 +451,10 @@ export function ChannelScreen({
       : undefined;
   const handleMarkUnread = React.useCallback(() => {
     if (!activeChannelId) return;
+    // Mirror the deliberate mark-unread locally so the timeline marker is
+    // suppressed (see forcedUnreadRef above). Re-render so the memo re-runs.
+    forcedUnreadRef.current.add(activeChannelId);
+    forceUnreadRender();
     markChannelUnread(activeChannelId);
   }, [activeChannelId, markChannelUnread]);
   const {
@@ -643,6 +698,8 @@ export function ChannelScreen({
                   profilePanelPubkey={profilePanelPubkey}
                   personaLookup={personaLookup}
                   profiles={messageProfiles}
+                  firstUnreadMessageId={firstUnreadMessageId}
+                  unreadCount={unreadCount}
                   targetMessageId={mainTimelineTargetMessageId}
                   threadHeadMessage={openThreadHeadMessage}
                   threadMessages={threadMessages}
