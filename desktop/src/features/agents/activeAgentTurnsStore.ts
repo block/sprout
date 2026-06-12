@@ -88,6 +88,8 @@ function startTurn(
     turnId,
     channelId,
     startedAt: now,
+    // Desktop-clock anchor for the live elapsed counter. Must NOT use startedAt
+    // (agent-host clock) — ticking the desktop clock against it skews remote agents.
     observedAt: Date.now(),
     lastActivityAt: now,
   });

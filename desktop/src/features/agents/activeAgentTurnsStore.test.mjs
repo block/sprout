@@ -491,6 +491,47 @@ describe("activeAgentTurnsStore", () => {
       );
     });
 
+    it("advances to the surviving turn's observedAt after the earliest ends", () => {
+      // Two turns in one channel; the array must be rebuilt from the LIVE map
+      // on every mutation, so ending the earliest-observed turn must surface
+      // the survivor's observedAt — not a stale cached minimum.
+      syncAgentTurnsFromEvents(AGENT, [
+        makeEvent({ seq: 1, turnId: "t-early", channelId: "c1" }),
+      ]);
+      const tEarly = getActiveTurnsForAgent(AGENT)[0].observedAt;
+
+      // Force the second turn's observedAt strictly past the first so the
+      // advance is observable even when Date.now() would otherwise collide.
+      const spinUntil = Date.now() + 2;
+      while (Date.now() < spinUntil) {
+        /* busy-wait one clock tick */
+      }
+      syncAgentTurnsFromEvents(AGENT, [
+        makeEvent({ seq: 2, turnId: "t-later", channelId: "c1" }),
+      ]);
+      assert.equal(
+        getActiveTurnsForAgent(AGENT)[0].observedAt,
+        tEarly,
+        "earliest wins while both turns survive",
+      );
+
+      // End the earliest turn by its turnId.
+      syncAgentTurnsFromEvents(AGENT, [
+        makeEvent({
+          seq: 3,
+          kind: "turn_completed",
+          turnId: "t-early",
+          channelId: "c1",
+        }),
+      ]);
+      const [survivor] = getActiveTurnsForAgent(AGENT);
+      assert.equal(survivor.channelId, "c1");
+      assert.ok(
+        survivor.observedAt > tEarly,
+        "surfaced observedAt must advance to the surviving turn after eviction",
+      );
+    });
+
     it("sorts summaries by channelId", () => {
       syncAgentTurnsFromEvents(AGENT, [
         makeEvent({ seq: 1, turnId: "t1", channelId: "c-zebra" }),
