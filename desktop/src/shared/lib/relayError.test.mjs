@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isRelayUnreachableError, relayErrorDetail } from "./relayError.ts";
+import {
+  isRelayUnreachableError,
+  relayErrorDetail,
+  RELAY_UNREACHABLE_MESSAGE,
+} from "./relayError.ts";
 
 // ── isRelayUnreachableError ───────────────────────────────────────────────────
 
@@ -60,22 +64,19 @@ test("relayErrorDetail: strips prefix and trims for string", () => {
   );
 });
 
-test("relayErrorDetail: prefix with no detail trims to empty string", () => {
-  assert.equal(relayErrorDetail("relay unreachable:"), "");
+test("relayErrorDetail: prefix with no detail returns RELAY_UNREACHABLE_MESSAGE", () => {
+  assert.equal(
+    relayErrorDetail("relay unreachable:"),
+    RELAY_UNREACHABLE_MESSAGE,
+  );
 });
 
 test("relayErrorDetail: unrelated Error returns generic message", () => {
   const detail = relayErrorDetail(new Error("something else"));
-  assert.equal(
-    detail,
-    "The relay is unreachable. Check your VPN or network connection.",
-  );
+  assert.equal(detail, RELAY_UNREACHABLE_MESSAGE);
 });
 
 test("relayErrorDetail: null returns generic message", () => {
   const detail = relayErrorDetail(null);
-  assert.equal(
-    detail,
-    "The relay is unreachable. Check your VPN or network connection.",
-  );
+  assert.equal(detail, RELAY_UNREACHABLE_MESSAGE);
 });

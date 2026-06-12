@@ -14,6 +14,15 @@
 const STORAGE_KEY_PREFIX = "buzz-self-profile.v1";
 
 /**
+ * Normalizes a relay URL for use in storage keys.
+ * Trim, strip trailing slashes, lowercase — ensures equivalent URLs map to
+ * the same key regardless of formatting differences.
+ */
+export function normalizeRelayUrl(relayUrl: string): string {
+  return relayUrl.trim().replace(/\/+$/, "").toLowerCase();
+}
+
+/**
  * Dispatched on window after a successful writeSelfProfileCache so that any
  * mounted UI listening for identity changes can re-read without polling.
  *
@@ -52,8 +61,7 @@ const DEFAULT_CACHE: SelfProfileCache = Object.freeze({
  * to the same slot.
  */
 export function storageKey(relayUrl: string, pubkey: string): string {
-  const normalized = relayUrl.trim().replace(/\/+$/, "").toLowerCase();
-  return `${STORAGE_KEY_PREFIX}:${normalized}:${pubkey}`;
+  return `${STORAGE_KEY_PREFIX}:${normalizeRelayUrl(relayUrl)}:${pubkey}`;
 }
 
 /**
@@ -68,8 +76,13 @@ export function parseSelfProfileCache(json: unknown): SelfProfileCache | null {
   const displayName =
     typeof obj.displayName === "string" ? obj.displayName : null;
   const avatarUrl = typeof obj.avatarUrl === "string" ? obj.avatarUrl : null;
+  // Defense-in-depth: avatarDataUrl flows into an <img src> sink; only accept
+  // values that are provably safe image data URLs.
   const avatarDataUrl =
-    typeof obj.avatarDataUrl === "string" ? obj.avatarDataUrl : null;
+    typeof obj.avatarDataUrl === "string" &&
+    obj.avatarDataUrl.startsWith("data:image/")
+      ? obj.avatarDataUrl
+      : null;
   const updatedAt =
     typeof obj.updatedAt === "number" && Number.isFinite(obj.updatedAt)
       ? obj.updatedAt
@@ -108,10 +121,13 @@ export function writeSelfProfileCache(
   cache: SelfProfileCache,
 ): boolean {
   try {
-    window.localStorage.setItem(
-      storageKey(relayUrl, pubkey),
-      JSON.stringify(cache),
-    );
+    const key = storageKey(relayUrl, pubkey);
+    const serialized = JSON.stringify(cache);
+    // The 30s profile refetch otherwise re-stringifies ~341KB, rewrites it,
+    // dispatches the cache event, and re-parses on the listener side even
+    // when nothing changed. Skip the write and event entirely when identical.
+    if (window.localStorage.getItem(key) === serialized) return true;
+    window.localStorage.setItem(key, serialized);
     // localStorage is not reactive — dispatch a custom event so any mounted
     // listeners (e.g. useEffect with addEventListener) can re-read the cache
     // without a polling interval.
@@ -120,6 +136,63 @@ export function writeSelfProfileCache(
   } catch {
     return false;
   }
+}
+
+/**
+ * Removes all self-profile cache entries for every pubkey on the given relay.
+ * Called when a workspace is removed to GC storage for that relay.
+ */
+export function removeSelfProfileCachesForRelay(relayUrl: string): void {
+  try {
+    const prefix = `${STORAGE_KEY_PREFIX}:${normalizeRelayUrl(relayUrl)}:`;
+    // Collect keys first; don't mutate localStorage while iterating by index.
+    const toRemove: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+      if (key?.startsWith(prefix)) {
+        toRemove.push(key);
+      }
+    }
+    for (const key of toRemove) {
+      window.localStorage.removeItem(key);
+    }
+  } catch {
+    // Storage access failures are non-fatal.
+  }
+}
+
+/**
+ * Returns true when a fresh avatar data URL should be fetched.
+ *
+ * Fetch when the avatar URL changed or we have no cached data URL — but not on
+ * every ~30s refetch when nothing has changed.
+ */
+export function shouldFetchAvatar(
+  nextAvatarUrl: string | null,
+  existing: SelfProfileCache,
+): boolean {
+  return (
+    nextAvatarUrl !== null &&
+    (nextAvatarUrl !== existing.avatarUrl || existing.avatarDataUrl === null)
+  );
+}
+
+/**
+ * Resolves the avatar data URL to persist given the outcome of the fetch.
+ *
+ * - nextAvatarUrl null → null (avatar cleared)
+ * - fetch succeeded → use fetched value
+ * - fetch failed, URL unchanged → preserve existing data URL (keep offline fallback)
+ * - fetch failed, URL changed → null (stale data URL would show wrong avatar)
+ */
+export function resolveAvatarDataUrl(
+  nextAvatarUrl: string | null,
+  fetched: string | null,
+  existing: SelfProfileCache,
+): string | null {
+  if (nextAvatarUrl === null) return null;
+  if (fetched !== null) return fetched;
+  return nextAvatarUrl === existing.avatarUrl ? existing.avatarDataUrl : null;
 }
 
 /**

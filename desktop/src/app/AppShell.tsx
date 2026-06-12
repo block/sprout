@@ -66,10 +66,7 @@ import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
 import { useApplyTemplate } from "@/features/channel-templates/useApplyTemplate";
 import { relayClient } from "@/shared/api/relayClient";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import {
-  isRelayConnectionDegraded,
-  useRelayConnection,
-} from "@/shared/api/useRelayConnection";
+import { useRelayAutoHeal } from "@/shared/api/useRelayAutoHeal";
 import { useDeferredStartup } from "@/shared/hooks/useDeferredStartup";
 import { joinChannel } from "@/shared/api/tauri";
 import type { Channel, RelayEvent, SearchHit } from "@/shared/api/types";
@@ -222,9 +219,8 @@ export function AppShell() {
     identityQuery.data?.pubkey,
   );
   const profileQuery = useProfileQuery();
-  const connectionState = useRelayConnection();
-  const prevConnectionStateRef = React.useRef(connectionState);
   const deferredPubkey = startupReady ? identityQuery.data?.pubkey : undefined;
+  useRelayAutoHeal();
   usePresenceSubscription();
   useUserStatusSubscription();
   useWorkspaceEmojiLiveUpdates();
@@ -288,17 +284,6 @@ export function AppShell() {
       });
     },
   );
-
-  // Auto-heal: when the connection recovers from a degraded state, invalidate
-  // all queries so errored queries (e.g. messages, which don't poll) refetch
-  // automatically without requiring a manual reconnect action.
-  React.useEffect(() => {
-    const prev = prevConnectionStateRef.current;
-    prevConnectionStateRef.current = connectionState;
-    if (isRelayConnectionDegraded(prev) && connectionState === "connected") {
-      void queryClient.invalidateQueries();
-    }
-  }, [connectionState, queryClient]);
 
   const channelsQuery = useChannelsQuery();
   const { refetch: refetchChannels } = channelsQuery;

@@ -127,7 +127,7 @@ pub fn build_nip98_auth_header_for_keys(
 ///
 /// The returned string always starts with `"relay unreachable:"` so the
 /// frontend connectivity classifier can detect it with a simple prefix check.
-fn classify_request_error(e: &reqwest::Error) -> String {
+pub(crate) fn classify_request_error(e: &reqwest::Error) -> String {
     let display = e.to_string().to_lowercase();
     if e.is_timeout() {
         "relay unreachable: request timed out".to_string()
@@ -182,7 +182,7 @@ fn classify_intercepted_response(final_host: &str, content_type: &str) -> Option
 /// appropriate `"relay unreachable:"` message instead of attempting JSON parsing.
 /// URL details are deliberately omitted from error strings so raw URLs are never
 /// surfaced in the UI.
-async fn parse_json_response<T: DeserializeOwned>(
+pub(crate) async fn parse_json_response<T: DeserializeOwned>(
     response: reqwest::Response,
 ) -> Result<T, String> {
     let final_host = response.url().host_str().unwrap_or("").to_string();

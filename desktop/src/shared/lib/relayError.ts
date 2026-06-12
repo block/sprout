@@ -12,6 +12,10 @@
  */
 const RELAY_UNREACHABLE_PREFIX = "relay unreachable:";
 
+export const RELAY_UNREACHABLE_SHORT = "Can't reach the relay.";
+export const RELAY_UNREACHABLE_MESSAGE =
+  "Can't reach the relay — check your VPN or network connection.";
+
 /**
  * Returns true when `error` carries the stable Rust-layer prefix indicating
  * the relay is unreachable (network failure, WARP VPN reauth needed, etc.).
@@ -41,7 +45,8 @@ export function isRelayUnreachableError(error: unknown): boolean {
 export function relayErrorDetail(error: unknown): string {
   if (isRelayUnreachableError(error)) {
     const message = error instanceof Error ? error.message : (error as string);
-    return message.slice(RELAY_UNREACHABLE_PREFIX.length).trim();
+    const detail = message.slice(RELAY_UNREACHABLE_PREFIX.length).trim();
+    return detail || RELAY_UNREACHABLE_MESSAGE;
   }
-  return "The relay is unreachable. Check your VPN or network connection.";
+  return RELAY_UNREACHABLE_MESSAGE;
 }

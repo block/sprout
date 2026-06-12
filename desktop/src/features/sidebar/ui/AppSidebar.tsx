@@ -10,7 +10,10 @@ import {
   Zap,
 } from "lucide-react";
 import { useReconnectRelay } from "@/shared/api/useReconnectRelay";
-import { isRelayUnreachableError } from "@/shared/lib/relayError";
+import {
+  isRelayUnreachableError,
+  RELAY_UNREACHABLE_SHORT,
+} from "@/shared/lib/relayError";
 import * as React from "react";
 import { FeatureGate } from "@/shared/features";
 import { SidebarDndContext } from "@/features/sidebar/ui/SidebarDnd";
@@ -730,7 +733,7 @@ export function AppSidebar({
                 data-testid="sidebar-relay-unreachable"
               >
                 <span className="text-muted-foreground">
-                  Can't reach the relay.{" "}
+                  {RELAY_UNREACHABLE_SHORT}{" "}
                 </span>
                 <button
                   className="text-primary hover:underline disabled:opacity-50"

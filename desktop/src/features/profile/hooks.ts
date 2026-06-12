@@ -24,6 +24,8 @@ import {
   fetchAvatarDataUrl,
   readSelfProfileCache,
   writeSelfProfileCache,
+  shouldFetchAvatar,
+  resolveAvatarDataUrl,
 } from "@/features/profile/lib/selfProfileStorage";
 import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
 
@@ -47,33 +49,15 @@ async function persistSelfProfile(
   profile: Profile,
 ): Promise<void> {
   const existing = readSelfProfileCache(relayUrl, pubkey);
-  let avatarDataUrl: string | null = null;
-
-  if (profile.avatarUrl !== null) {
-    if (
-      profile.avatarUrl !== existing.avatarUrl ||
-      existing.avatarDataUrl === null
-    ) {
-      // Avatar URL changed or we never captured a data URL — fetch a fresh one.
-      const fetched = await fetchAvatarDataUrl(
-        rewriteRelayUrl(profile.avatarUrl),
-      );
-      // If the fetch failed but the URL is unchanged, keep the existing data URL
-      // so the offline fallback stays intact.
-      avatarDataUrl =
-        fetched !== null
-          ? fetched
-          : profile.avatarUrl === existing.avatarUrl
-            ? existing.avatarDataUrl
-            : null;
-    } else {
-      // Avatar URL unchanged and a data URL already exists — reuse it without
-      // refetching. Profile refetches every ~30s; don't re-download each time.
-      avatarDataUrl = existing.avatarDataUrl;
-    }
-  }
-  // avatarUrl === null → avatarDataUrl stays null (cleared)
-
+  const fetched =
+    shouldFetchAvatar(profile.avatarUrl, existing) && profile.avatarUrl !== null
+      ? await fetchAvatarDataUrl(rewriteRelayUrl(profile.avatarUrl))
+      : null;
+  const avatarDataUrl = resolveAvatarDataUrl(
+    profile.avatarUrl,
+    fetched,
+    existing,
+  );
   writeSelfProfileCache(relayUrl, pubkey, {
     version: 1,
     displayName: profile.displayName,
@@ -130,6 +114,11 @@ export function useProfileQuery(enabled = true) {
     }
   }, [queryClient, initialData, cached]);
 
+  const seedOptions =
+    initialData !== undefined
+      ? { initialData, initialDataUpdatedAt: cached?.updatedAt }
+      : {};
+
   return useQuery({
     enabled,
     queryKey: profileQueryKey,
@@ -141,12 +130,7 @@ export function useProfileQuery(enabled = true) {
       return profile;
     },
     staleTime: 30_000,
-    ...(initialData !== undefined
-      ? {
-          initialData,
-          initialDataUpdatedAt: cached?.updatedAt,
-        }
-      : {}),
+    ...seedOptions,
   });
 }
 
@@ -166,13 +150,29 @@ export function useSelfProfileCache(): SelfProfileCache | null {
     relayUrl && pubkey ? readSelfProfileCache(relayUrl, pubkey) : null,
   );
 
+  // Track whether this is the initial mount so we can skip re-reading the same
+  // localStorage value the useState initializer already parsed.
+  const isFirstRun = React.useRef(true);
+
   React.useEffect(() => {
+    // Skip the redundant read only on the very first run — it sees the same
+    // relayUrl/pubkey the useState initializer already parsed. Consume the
+    // flag before the guard below: if the first run bails out (e.g. identity
+    // still resolving), the run that later receives the values must read.
+    // Accepted: a sub-millisecond unsubscribed window on mount. It is
+    // self-healing — the next SELF_PROFILE_CACHE_EVENT or dep change re-syncs;
+    // with the no-op write skip the event only fires on real changes.
+    const firstRun = isFirstRun.current;
+    isFirstRun.current = false;
+
     if (!relayUrl || !pubkey) {
       setCache(null);
       return;
     }
 
-    setCache(readSelfProfileCache(relayUrl, pubkey));
+    if (!firstRun) {
+      setCache(readSelfProfileCache(relayUrl, pubkey));
+    }
 
     function handleCacheEvent() {
       setCache(readSelfProfileCache(relayUrl, pubkey));

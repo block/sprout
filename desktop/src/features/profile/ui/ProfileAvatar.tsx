@@ -66,7 +66,7 @@ export function ProfileAvatar({
           "font-semibold text-primary",
           plain ? "bg-transparent" : "bg-primary/20",
         )}
-        delayMs={200}
+        delayMs={src === undefined ? undefined : 200}
       >
         {initials.length > 0 ? (
           initials
