@@ -60,6 +60,8 @@ type TimelineMessageListProps = {
   searchMatchingMessageIds?: Set<string>;
   /** The current find-in-channel query string. */
   searchQuery?: string;
+  /** Per-thread unread counts keyed by thread root id. */
+  threadUnreadCounts?: ReadonlyMap<string, number>;
 };
 
 function hasVideoAttachment(message: TimelineMessage): boolean {
@@ -130,6 +132,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   searchActiveMessageId = null,
   searchMatchingMessageIds,
   searchQuery,
+  threadUnreadCounts,
   unfollowThreadById,
 }: TimelineMessageListProps) {
   const entries = React.useMemo(
@@ -289,6 +292,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
             message={message}
             onOpenThread={onReply}
             summary={summary}
+            unreadCount={threadUnreadCounts?.get(message.id)}
           />
           {footer}
         </div>,

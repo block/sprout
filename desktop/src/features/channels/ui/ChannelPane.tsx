@@ -131,6 +131,10 @@ type ChannelPaneProps = {
   threadTypingPubkeys: string[];
   threadReplyTargetMessage: TimelineMessage | null;
   threadScrollTargetId: string | null;
+  /** Per-thread unread counts keyed by thread root id. */
+  threadUnreadCounts?: ReadonlyMap<string, number>;
+  /** Event id of the first unread reply in the open thread panel. */
+  threadFirstUnreadReplyId?: string | null;
   targetMessageId: string | null;
   typingPubkeys: string[];
   isFollowingThread?: boolean;
@@ -256,6 +260,8 @@ export const ChannelPane = React.memo(function ChannelPane({
   threadScrollTargetId,
   threadTypingPubkeys,
   threadReplyTargetMessage,
+  threadUnreadCounts,
+  threadFirstUnreadReplyId,
   typingPubkeys,
 }: ChannelPaneProps) {
   const timelineScrollRef = React.useRef<HTMLDivElement>(null);
@@ -699,6 +705,7 @@ export const ChannelPane = React.memo(function ChannelPane({
             searchMatchingMessageIds={channelFind.matchingMessageIds}
             searchQuery={channelFind.query}
             targetMessageId={targetMessageId}
+            threadUnreadCounts={threadUnreadCounts}
           />
           {isNonMemberView ? (
             <div
@@ -805,6 +812,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                 currentPubkey={currentPubkey}
                 disabled={isComposerDisabled}
                 editTarget={threadEditTarget}
+                firstUnreadReplyId={threadFirstUnreadReplyId}
                 isFollowingThread={isFollowingThread}
                 isSending={isSending}
                 isSinglePanelView={

@@ -74,6 +74,8 @@ type MessageTimelineProps = {
   firstUnreadMessageId?: string | null;
   /** Count of unread top-level messages at channel open. */
   unreadCount?: number;
+  /** Per-thread unread counts keyed by thread root id. */
+  threadUnreadCounts?: ReadonlyMap<string, number>;
 };
 
 type ChannelIntroAction = {
@@ -129,6 +131,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   onTargetReached,
   firstUnreadMessageId = null,
   unreadCount = 0,
+  threadUnreadCounts,
 }: MessageTimelineProps) {
   const internalScrollRef = React.useRef<HTMLDivElement>(null);
   const scrollContainerRef = externalScrollRef ?? internalScrollRef;
@@ -444,6 +447,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                   searchActiveMessageId={searchActiveMessageId}
                   searchMatchingMessageIds={searchMatchingMessageIds}
                   searchQuery={searchQuery}
+                  threadUnreadCounts={threadUnreadCounts}
                   unfollowThreadById={unfollowThreadById}
                 />
               </div>
