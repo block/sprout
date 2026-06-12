@@ -208,6 +208,131 @@ async fn refreshed_token_is_persisted_to_disk() {
     assert!(on_disk["expires_at"].is_u64());
 }
 
+#[tokio::test]
+async fn refresh_now_runs_grant_and_keeps_refresh_token() {
+    let tmp = TempDir::new().unwrap();
+
+    let (base, refresh_counter) = spawn_oidc().await;
+    let cfg = PkceOAuthConfig {
+        discovery_url: format!("{base}/.well-known/oauth-authorization-server"),
+        client_id: "test-client".into(),
+        scopes: vec!["a".into()],
+        cache_namespace: "databricks".into(),
+        cache_dir_override: Some(tmp.path().to_path_buf()),
+    };
+
+    // A token the server has rejected (401). It's past local expiry too, so
+    // the freshness re-check can't short-circuit; the refresh-token grant
+    // must run. The stub never serves a browser flow, so a fresh token here
+    // proves refresh_now() took the grant path, not the interactive one.
+    let path = cache_path_for(tmp.path(), &cfg);
+    seed_cache(
+        &path,
+        json!({
+            "access_token": "rejected",
+            "refresh_token": "valid-refresh",
+            "expires_at": 1u64,
+        }),
+    );
+
+    let src = PkceOAuthTokenSource::new(cfg).unwrap();
+    let bearer = src.refresh_now().await.unwrap();
+    assert_eq!(bearer, "fresh-token-1");
+    assert_eq!(refresh_counter.load(Ordering::SeqCst), 1, "grant ran once");
+
+    // The refresh token was preserved (rotated, not discarded): the saved
+    // token still carries one, so a future 401 can refresh again instead of
+    // falling to the browser flow. This is the property defect #1 broke.
+    let on_disk: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(on_disk["access_token"], "fresh-token-1");
+    assert_eq!(on_disk["refresh_token"], "rotated-refresh");
+}
+
+#[tokio::test]
+async fn refresh_now_coalesces_when_token_already_fresh() {
+    let tmp = TempDir::new().unwrap();
+
+    let (base, refresh_counter) = spawn_oidc().await;
+    let cfg = PkceOAuthConfig {
+        discovery_url: format!("{base}/.well-known/oauth-authorization-server"),
+        client_id: "test-client".into(),
+        scopes: vec!["a".into()],
+        cache_namespace: "databricks".into(),
+        cache_dir_override: Some(tmp.path().to_path_buf()),
+    };
+
+    // A concurrent caller already refreshed: the cached token is unexpired.
+    // refresh_now() must return it without burning another grant, so N
+    // concurrent 401s collapse onto one refresh.
+    let future = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 3600;
+    let path = cache_path_for(tmp.path(), &cfg);
+    seed_cache(
+        &path,
+        json!({
+            "access_token": "already-fresh",
+            "refresh_token": "rt",
+            "expires_at": future,
+        }),
+    );
+
+    let src = PkceOAuthTokenSource::new(cfg).unwrap();
+    let bearer = src.refresh_now().await.unwrap();
+    assert_eq!(bearer, "already-fresh");
+    assert_eq!(
+        refresh_counter.load(Ordering::SeqCst),
+        0,
+        "no grant when a fresh token is already cached"
+    );
+}
+
+#[tokio::test]
+async fn refresh_now_without_refresh_token_is_terminal() {
+    let tmp = TempDir::new().unwrap();
+
+    let (base, refresh_counter) = spawn_oidc().await;
+    let cfg = PkceOAuthConfig {
+        discovery_url: format!("{base}/.well-known/oauth-authorization-server"),
+        client_id: "test-client".into(),
+        scopes: vec!["a".into()],
+        cache_namespace: "databricks".into(),
+        cache_dir_override: Some(tmp.path().to_path_buf()),
+    };
+
+    // Expired token, no refresh token to fall back on. refresh_now() must
+    // fail terminally (LlmAuth) rather than open a browser — the headless
+    // hang this whole change exists to prevent.
+    let path = cache_path_for(tmp.path(), &cfg);
+    seed_cache(
+        &path,
+        json!({
+            "access_token": "rejected",
+            "refresh_token": serde_json::Value::Null,
+            "expires_at": 1u64,
+        }),
+    );
+
+    let src = PkceOAuthTokenSource::new(cfg).unwrap();
+    let err = src.refresh_now().await.unwrap_err();
+    // `types::AgentError` isn't a public path; match on its Display, which
+    // prefixes `LlmAuth` variants with "llm auth:". A terminal LlmAuth (not
+    // a browser hang) is the whole point of this path.
+    let msg = err.to_string();
+    assert!(
+        msg.starts_with("llm auth:"),
+        "expected terminal LlmAuth, got: {msg}"
+    );
+    assert_eq!(
+        refresh_counter.load(Ordering::SeqCst),
+        0,
+        "no grant attempted"
+    );
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // ACP-level envelope regression test.
 //

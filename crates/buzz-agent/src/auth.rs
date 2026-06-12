@@ -43,6 +43,20 @@ const BROWSER_AUTH_TIMEOUT: Duration = Duration::from_secs(60);
 #[async_trait]
 pub trait TokenSource: Send + Sync {
     async fn bearer(&self) -> Result<String, AgentError>;
+
+    /// Force a fresh bearer after the server rejected the current one (401).
+    ///
+    /// Unlike [`bearer`](Self::bearer), which trusts the local expiry clock,
+    /// this is driven by the server's verdict: the cached token looked valid
+    /// to us but the provider rejected it (clock skew, server-side revocation,
+    /// or a load-balancer node that never saw it). Implementations must obtain
+    /// a new token without any interactive step, so a headless harness never
+    /// hangs. The default returns the existing bearer — correct for sources
+    /// that can't refresh (a static key); the caller's retry then fails
+    /// terminally rather than looping.
+    async fn refresh_now(&self) -> Result<String, AgentError> {
+        self.bearer().await
+    }
 }
 
 /// A token that never changes for the life of the process.
@@ -265,6 +279,55 @@ impl TokenSource for PkceOAuthTokenSource {
         let bearer = fresh.access_token.clone();
         self.save(&mut state, fresh)?;
         Ok(bearer)
+    }
+
+    /// Force-refresh after a 401, never touching the browser flow.
+    ///
+    /// Holds the lock for the whole check→refresh→save sequence so concurrent
+    /// callers coalesce: the first refreshes; the rest see the fresh token on
+    /// the re-check and return it without a second grant. On any failure the
+    /// refresh token is preserved (never nulled) and the error is terminal
+    /// `LlmAuth` — no browser, no hang.
+    async fn refresh_now(&self) -> Result<String, AgentError> {
+        let mut state = self.state.lock().await;
+
+        // 1. A concurrent caller (this process or a sibling) may have already
+        //    refreshed between our 401 and acquiring the lock. Trust a fresh
+        //    in-memory or on-disk token rather than burning another grant.
+        if let Some(tok) = state.as_ref() {
+            if !is_expired(tok) {
+                return Ok(tok.access_token.clone());
+            }
+        }
+        if let Some(disk_tok) = read_cache(&self.cache_path) {
+            if !is_expired(&disk_tok) {
+                let bearer = disk_tok.access_token.clone();
+                *state = Some(disk_tok);
+                return Ok(bearer);
+            }
+        }
+
+        // 2. Run the refresh-token grant. A 401 means the cached token was
+        //    rejected before its local expiry, so the in-memory copy can look
+        //    "fresh" here; read the refresh token straight off it regardless.
+        let refresh = state.as_ref().and_then(|t| t.refresh_token.clone());
+        let Some(rt) = refresh else {
+            return Err(AgentError::LlmAuth(
+                "token rejected and no refresh token available".into(),
+            ));
+        };
+        let endpoints = self.endpoints().await?;
+        match self.refresh(&endpoints, &rt).await {
+            Ok(fresh) => {
+                let bearer = fresh.access_token.clone();
+                self.save(&mut state, fresh)?;
+                Ok(bearer)
+            }
+            // 3. Refresh token is itself dead. Terminal — surfacing LlmAuth
+            //    stops the retry loop instead of falling to the browser flow,
+            //    which would hang a headless harness.
+            Err(e) => Err(AgentError::LlmAuth(format!("token refresh failed: {e}"))),
+        }
     }
 }
 

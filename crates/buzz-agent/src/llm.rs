@@ -187,7 +187,6 @@ impl Llm {
         path: &str,
         body: &Value,
     ) -> Result<Value, AgentError> {
-        let bearer = self.auth.bearer().await?;
         let (url, body_owned);
         let body_ref: &Value = match cfg.provider {
             Provider::Databricks => {
@@ -204,7 +203,23 @@ impl Llm {
                 body
             }
         };
-        post(&self.http, &url, body_ref, |r| r.bearer_auth(&bearer)).await
+
+        // A 401 can mean the local expiry clock disagreed with the server
+        // (skew, revocation, a node that never saw the token). On the first
+        // such rejection, force a refresh and retry once. The guard is local
+        // to this call so an earlier turn's 401 can never suppress a later
+        // turn's legitimate retry.
+        let mut bearer = self.auth.bearer().await?;
+        let mut refreshed = false;
+        loop {
+            match post(&self.http, &url, body_ref, |r| r.bearer_auth(&bearer)).await {
+                Err(AgentError::LlmAuth(_)) if !refreshed => {
+                    refreshed = true;
+                    bearer = self.auth.refresh_now().await?;
+                }
+                result => return result,
+            }
+        }
     }
 
     /// If `err` names `/v1/responses` / "use the Responses API", latch a
@@ -1460,5 +1475,153 @@ mod tests {
         // is "no usable reading" -> None, not Some(0).
         let v = serde_json::json!({"usage": {"output_tokens": 5}});
         assert_eq!(sum_usage(&v, &["input_tokens", "prompt_tokens"]), None);
+    }
+
+    // ── one-shot refresh-on-401 in post_openai ─────────────────────────
+
+    /// A token source whose `bearer()` always hands back the same stale
+    /// token and whose `refresh_now()` mints a distinct fresh one, counting
+    /// each refresh. Lets a test assert exactly how many forced refreshes a
+    /// `post_openai` call provoked.
+    struct CountingAuth {
+        refreshes: std::sync::atomic::AtomicU32,
+    }
+
+    #[async_trait::async_trait]
+    impl TokenSource for CountingAuth {
+        async fn bearer(&self) -> Result<String, AgentError> {
+            Ok("stale".into())
+        }
+        async fn refresh_now(&self) -> Result<String, AgentError> {
+            self.refreshes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok("fresh".into())
+        }
+    }
+
+    /// Stub that answers 401 to any request carrying `Bearer stale` and 200
+    /// to `Bearer fresh`. When `always_401` is set it 401s unconditionally,
+    /// simulating a token the refresh can never satisfy. Counts requests so
+    /// a test can assert "one retry, not a loop".
+    async fn spawn_auth_stub(always_401: std::sync::Arc<std::sync::atomic::AtomicBool>) -> String {
+        use std::sync::atomic::Ordering;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+                let always_401 = always_401.clone();
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut tmp = [0u8; 4096];
+                    while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match sock.read(&mut tmp).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(k) => buf.extend_from_slice(&tmp[..k]),
+                        }
+                    }
+                    let head = String::from_utf8_lossy(&buf).to_ascii_lowercase();
+                    let stale = head.contains("authorization: bearer stale");
+                    let resp = if always_401.load(Ordering::SeqCst) || stale {
+                        "HTTP/1.1 401 Unauthorized\r\nContent-Length: 11\r\nConnection: close\r\n\r\ntoken stale"
+                            .to_string()
+                    } else {
+                        let body = "{\"ok\":true}";
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                             Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body,
+                        )
+                    };
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        url
+    }
+
+    fn llm_with(auth: Arc<dyn TokenSource>) -> Llm {
+        Llm {
+            http: Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap(),
+            auto_upgraded: std::sync::atomic::AtomicBool::new(false),
+            auth,
+        }
+    }
+
+    /// A single 401 forces exactly one refresh, the retry with the fresh
+    /// token succeeds, and a *later* call gets its own refresh — proving the
+    /// one-shot guard is per-call, not stored on the source.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn post_openai_refreshes_once_per_call_on_401() {
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+        let always_401 = Arc::new(AtomicBool::new(false));
+        let base = spawn_auth_stub(always_401).await;
+        let auth = Arc::new(CountingAuth {
+            refreshes: AtomicU32::new(0),
+        });
+        let llm = llm_with(auth.clone());
+        let mut c = cfg(Provider::OpenAi);
+        c.base_url = base;
+
+        let out = llm
+            .post_openai(&c, "/v1/x", &json!({}))
+            .await
+            .expect("retry with fresh token should succeed");
+        assert_eq!(out, json!({ "ok": true }));
+        assert_eq!(auth.refreshes.load(Ordering::SeqCst), 1, "one refresh");
+
+        // Second call's 401 must trigger its own refresh — the guard cannot
+        // be a stored flag that an earlier turn already tripped.
+        let out2 = llm.post_openai(&c, "/v1/x", &json!({})).await.unwrap();
+        assert_eq!(out2, json!({ "ok": true }));
+        assert_eq!(
+            auth.refreshes.load(Ordering::SeqCst),
+            2,
+            "later call gets its own retry"
+        );
+    }
+
+    /// A persistent 401 (even the refreshed token is rejected) propagates as
+    /// `LlmAuth` after exactly one refresh — no infinite loop.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn post_openai_persistent_401_propagates_after_one_retry() {
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+        let always_401 = Arc::new(AtomicBool::new(true));
+        let base = spawn_auth_stub(always_401).await;
+        let auth = Arc::new(CountingAuth {
+            refreshes: AtomicU32::new(0),
+        });
+        let llm = llm_with(auth.clone());
+        let mut c = cfg(Provider::OpenAi);
+        c.base_url = base;
+
+        let err = llm.post_openai(&c, "/v1/x", &json!({})).await.unwrap_err();
+        assert!(matches!(err, AgentError::LlmAuth(_)), "got {err:?}");
+        assert_eq!(
+            auth.refreshes.load(Ordering::SeqCst),
+            1,
+            "exactly one refresh, then propagate"
+        );
+    }
+
+    /// The default `refresh_now()` on a static source returns the static
+    /// token unchanged — a key that can't refresh still answers harmlessly.
+    #[tokio::test]
+    async fn static_token_source_refresh_now_returns_static_token() {
+        let src = StaticTokenSource::new("static-key");
+        assert_eq!(src.refresh_now().await.unwrap(), "static-key");
     }
 }
