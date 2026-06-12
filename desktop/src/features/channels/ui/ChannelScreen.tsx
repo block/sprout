@@ -415,6 +415,14 @@ export function ChannelScreen({
   } = useChannelAgentSessions({
     activeChannel,
     activeChannelId,
+    // The agent list comes from three queries; treat it as loaded only once
+    // none of them are in their initial fetch, so a channel with genuinely
+    // zero agents can still auto-close a stale agentSession param. A disabled
+    // query (e.g. no active channel) reports isLoading=false, which is fine.
+    agentsLoaded:
+      !channelMembersQuery.isLoading &&
+      !managedAgentsQuery.isLoading &&
+      !relayAgentsQuery.isLoading,
     channelMembers,
     handleOpenThread,
     managedAgents: activeChannelAgentSessionAgents,

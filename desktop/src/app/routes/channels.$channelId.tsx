@@ -56,7 +56,7 @@ function ChannelRouteComponent() {
         selectedPostId={null}
         targetMessageId={search.messageId ?? null}
         targetReplyId={null}
-        targetThreadRootId={search.threadRootId ?? null}
+        targetThreadRootId={search.threadRootId ?? search.thread ?? null}
       />
     </React.Suspense>
   );

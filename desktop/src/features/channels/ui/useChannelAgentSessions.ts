@@ -23,6 +23,7 @@ export type ChannelAgentSessionAgent = Pick<
 type UseChannelAgentSessionsOptions = {
   activeChannel: Channel | null;
   activeChannelId: string | null;
+  agentsLoaded: boolean;
   channelMembers?: ChannelMember[];
   handleOpenThread: (message: TimelineMessage) => void;
   managedAgents: ChannelAgentSessionAgent[];
@@ -153,6 +154,7 @@ export function getChannelAgentSessionAgents({
 export function useChannelAgentSessions({
   activeChannel,
   activeChannelId,
+  agentsLoaded,
   channelMembers,
   handleOpenThread,
   managedAgents,
@@ -215,12 +217,13 @@ export function useChannelAgentSessions({
   );
 
   React.useEffect(() => {
-    // An empty agent list usually means the queries behind it are still
-    // loading (e.g. a reload restoring the agentSession URL param), so only
-    // auto-close once we have agents to check against.
+    // An empty agent list can mean the queries behind it are still loading
+    // (e.g. a reload restoring the agentSession URL param), so wait until the
+    // agent queries have settled. Once loaded, a channel that legitimately has
+    // zero agents will still auto-close a stale param.
     if (
       openAgentSessionPubkey &&
-      channelAgentSessionAgents.length > 0 &&
+      agentsLoaded &&
       !channelAgentSessionAgents.some(
         (agent) =>
           normalizePubkey(agent.pubkey) ===
@@ -230,6 +233,7 @@ export function useChannelAgentSessions({
       setOpenAgentSessionPubkey(null, { replace: true });
     }
   }, [
+    agentsLoaded,
     channelAgentSessionAgents,
     openAgentSessionPubkey,
     setOpenAgentSessionPubkey,

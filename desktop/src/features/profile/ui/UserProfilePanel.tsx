@@ -207,19 +207,6 @@ export function UserProfilePanel({
     [pubkeyLower, relayAgent, managedAgent, channelsQuery.data],
   );
 
-  // Defensive: opening a different profile normally resets the sub-view at
-  // the call site, but catch any pubkey change that slipped through.
-  const prevPubkeyRef = React.useRef(pubkey);
-  React.useEffect(() => {
-    if (prevPubkeyRef.current === pubkey) {
-      return;
-    }
-    prevPubkeyRef.current = pubkey;
-    if (view !== "summary") {
-      onViewChange("summary", { replace: true });
-    }
-  }, [onViewChange, pubkey, view]);
-
   const handleMessage = React.useCallback(() => {
     onOpenDm?.([pubkey]);
     onClose();
