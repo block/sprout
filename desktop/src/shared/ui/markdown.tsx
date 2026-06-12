@@ -54,14 +54,16 @@ import {
   shallowArrayEqual,
 } from "./markdownUtils";
 import { resolveFileCard } from "./markdownFileCard";
-import { VideoPlayer } from "./VideoPlayer";
+import { VideoPlayer, type VideoReviewContext } from "./VideoPlayer";
 
 type ImetaEntry = {
+  dim?: string;
   image?: string;
   thumb?: string;
   m?: string;
   size?: number;
   filename?: string;
+  duration?: number;
 };
 
 type ImetaLookup = Map<string, ImetaEntry>;
@@ -119,8 +121,72 @@ function useStableArray<T>(arr: T[]): T[] {
   return ref.current;
 }
 
+function aspectRatioFromDim(dim?: string): number | undefined {
+  if (!dim) return undefined;
+  const match = dim.match(/^(\d+)x(\d+)$/i);
+  if (!match) return undefined;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || height <= 0) {
+    return undefined;
+  }
+  return width / height;
+}
+
 /**
- * `urlTransform` for `<ReactMarkdown>` that preserves `sprout://message?…`
+ * Video review context flows through React context instead of
+ * `createMarkdownComponents` arguments. The component map must keep a stable
+ * identity across re-renders: a new map means new element types, which makes
+ * React unmount and remount every rendered node — including `<video>`
+ * elements, killing playback (and any in-progress review comment draft)
+ * whenever the timeline re-renders.
+ */
+const VideoReviewMarkdownContext = React.createContext<
+  VideoReviewContext | undefined
+>(undefined);
+
+function MarkdownVideoPlayer({
+  alt,
+  entry,
+  resolvedSrc,
+  src,
+}: {
+  alt?: string;
+  entry?: ImetaEntry;
+  resolvedSrc: string;
+  src?: string;
+}) {
+  const videoReviewContext = React.useContext(VideoReviewMarkdownContext);
+  // Look up poster frame from imeta tags (NIP-71 `image` field).
+  // Fall back to `thumb` for compatibility with older events.
+  const posterUrl = entry?.image ?? entry?.thumb;
+  const resolvedPoster = posterUrl ? rewriteRelayUrl(posterUrl) : undefined;
+  const resolvedReviewContext = React.useMemo(
+    () =>
+      videoReviewContext
+        ? {
+            ...videoReviewContext,
+            title:
+              videoReviewContext.title ?? entry?.filename ?? alt ?? "Video",
+          }
+        : undefined,
+    [alt, entry?.filename, videoReviewContext],
+  );
+
+  return (
+    <VideoPlayer
+      src={resolvedSrc}
+      aspectRatio={aspectRatioFromDim(entry?.dim)}
+      poster={resolvedPoster}
+      durationSeconds={entry?.duration}
+      reviewKey={src ?? resolvedSrc}
+      reviewContext={resolvedReviewContext}
+    />
+  );
+}
+
+/**
+ * `urlTransform` for `<ReactMarkdown>` that preserves `buzz://message?…`
  * links. The default transform strips unknown schemes (returns `""`) before
  * the `a` component override can see them, which would break copy → paste →
  * click end-to-end. Everything else delegates to `defaultUrlTransform`.
@@ -140,10 +206,12 @@ type MarkdownProps = {
   customEmoji?: CustomEmoji[];
   imetaByUrl?: ImetaLookup;
   interactive?: boolean;
+  agentMentionPubkeysByName?: Record<string, string>;
   mentionNames?: string[];
   mentionPubkeysByName?: Record<string, string>;
   searchQuery?: string;
   tight?: boolean;
+  videoReviewContext?: VideoReviewContext;
 };
 
 type MarkdownVariant = "default" | "compact" | "tight";
@@ -356,7 +424,7 @@ function InlineEmojiPopover({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex border-0 bg-transparent p-0 align-baseline text-inherit"
+          className="inline-flex border-0 bg-transparent p-0 align-middle text-inherit"
           aria-label={label}
           onMouseEnter={handleMouseEnter}
           onMouseLeave={scheduleClose}
@@ -368,7 +436,7 @@ function InlineEmojiPopover({
             title={label}
             src={resolvedSrc}
             data-custom-emoji=""
-            className="mx-px inline-block h-[1.25em] w-auto max-w-none align-text-bottom"
+            className="mx-px inline-block h-[1.25em] w-auto max-w-none align-middle"
             draggable={false}
             onContextMenu={(e) => e.preventDefault()}
           />
@@ -668,6 +736,7 @@ function createMarkdownComponents(
   onOpenMessageLink: (link: ParsedMessageLink) => void,
   imetaByUrl?: ImetaLookup,
   mentionPubkeysByName?: Record<string, string>,
+  agentMentionPubkeysByName?: Record<string, string>,
   interactive = true,
 ): Components {
   const paragraphClassName =
@@ -707,7 +776,7 @@ function createMarkdownComponents(
         );
       }
 
-      // Intercept `sprout://message?channel=…&id=…` links so a click navigates
+      // Intercept `buzz://message?channel=…&id=…` links so a click navigates
       // in-app instead of opening the URL in the OS browser. http(s) links
       // continue to use the existing target="_blank" behavior.
       if (isMessageLink(href)) {
@@ -728,7 +797,7 @@ function createMarkdownComponents(
             </a>
           );
         }
-        // Malformed sprout://message link — fall through to the default
+        // Malformed message deep link — fall through to the default
         // anchor (renders as a normal external link).
       }
       return (
@@ -815,19 +884,15 @@ function createMarkdownComponents(
       }
 
       if (resolvedSrc?.endsWith(".mp4")) {
-        // Look up poster frame from imeta tags (NIP-71 `image` field).
-        // Fall back to `thumb` for compatibility with older events.
         const entry = src ? imetaByUrl?.get(src) : undefined;
-        const posterUrl = entry?.image ?? entry?.thumb;
-        const resolvedPoster = posterUrl
-          ? rewriteRelayUrl(posterUrl)
-          : undefined;
         return (
           <span data-block-media="">
-            <VideoPlayer
-              key={resolvedSrc}
-              src={resolvedSrc}
-              poster={resolvedPoster}
+            <MarkdownVideoPlayer
+              key={src ?? resolvedSrc}
+              alt={alt}
+              entry={entry}
+              resolvedSrc={resolvedSrc}
+              src={src}
             />
           </span>
         );
@@ -909,6 +974,12 @@ function createMarkdownComponents(
       const mentionText = String(children ?? "");
       const mentionName = mentionText.replace(/^@/, "").trim().toLowerCase();
       const pubkey = mentionPubkeysByName?.[mentionName];
+      const isAgentMention =
+        pubkey !== undefined &&
+        agentMentionPubkeysByName?.[mentionName] === pubkey;
+      const renderedMentionText = isAgentMention
+        ? mentionText.replace(/^@/, "")
+        : children;
       const mentionNode = (
         <span
           data-mention=""
@@ -916,9 +987,10 @@ function createMarkdownComponents(
             "cursor-pointer",
             MENTION_CHIP_BASE_CLASSES,
             MENTION_CHIP_HOVER_CLASSES,
+            isAgentMention && "agent-mention-highlight",
           )}
         >
-          {children}
+          {renderedMentionText}
         </span>
       );
 
@@ -982,7 +1054,7 @@ function createMarkdownComponents(
       const href = String(children ?? "");
       const parsed = parseMessageLink(href);
       if (!parsed.ok) {
-        // Malformed `sprout://message?…` — render the raw URL as plain text
+        // Malformed `buzz://message?…` — render the raw URL as plain text
         // rather than a misleading clickable pill.
         return <span data-message-link="">{href}</span>;
       }
@@ -1026,10 +1098,12 @@ function MarkdownInner({
   customEmoji,
   imetaByUrl,
   interactive = true,
+  agentMentionPubkeysByName,
   mentionNames,
   mentionPubkeysByName,
   searchQuery,
   tight = false,
+  videoReviewContext,
 }: MarkdownProps) {
   const variant: MarkdownVariant = tight
     ? "tight"
@@ -1063,6 +1137,7 @@ function MarkdownInner({
         },
         imetaByUrl,
         mentionPubkeysByName,
+        agentMentionPubkeysByName,
         interactive,
       ),
     [
@@ -1071,6 +1146,7 @@ function MarkdownInner({
       channels,
       imetaByUrl,
       mentionPubkeysByName,
+      agentMentionPubkeysByName,
       interactive,
     ],
   );
@@ -1171,7 +1247,9 @@ function MarkdownInner({
         className,
       )}
     >
-      {markdownNode}
+      <VideoReviewMarkdownContext.Provider value={videoReviewContext}>
+        {markdownNode}
+      </VideoReviewMarkdownContext.Provider>
     </div>
   );
 }
@@ -1185,11 +1263,13 @@ export const Markdown = React.memo(
     prev.customEmoji === next.customEmoji &&
     prev.interactive === next.interactive &&
     prev.tight === next.tight &&
+    prev.agentMentionPubkeysByName === next.agentMentionPubkeysByName &&
     prev.mentionPubkeysByName === next.mentionPubkeysByName &&
     shallowArrayEqual(prev.mentionNames, next.mentionNames) &&
     shallowArrayEqual(prev.channelNames, next.channelNames) &&
     prev.imetaByUrl === next.imetaByUrl &&
-    prev.searchQuery === next.searchQuery,
+    prev.searchQuery === next.searchQuery &&
+    prev.videoReviewContext === next.videoReviewContext,
 );
 
 Markdown.displayName = "Markdown";

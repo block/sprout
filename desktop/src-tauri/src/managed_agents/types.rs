@@ -20,14 +20,19 @@ pub struct PersonaRecord {
     pub avatar_url: Option<String>,
     pub system_prompt: String,
     /// Preferred ACP runtime ID (e.g., 'goose', 'claude', 'codex'). Determines which agent binary
-    /// Sprout spawns. When deploying from this persona, this runtime is pre-selected in the UI.
+    /// Buzz spawns. When deploying from this persona, this runtime is pre-selected in the UI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<String>,
     /// Opaque, harness-specific model identifier string. Format depends on the runtime and its LLM
     /// provider (e.g., 'goose-claude-4-6-opus' for Databricks, 'claude-opus-4-7' for Anthropic
-    /// direct). Sprout stores and passes through without interpretation.
+    /// direct). Buzz stores and passes through without interpretation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// LLM inference provider (e.g., 'databricks', 'anthropic', 'openai'). Optional — when set,
+    /// injected as the runtime's provider env var at agent creation time. When absent, the runtime
+    /// falls back to auto-detection (e.g., goose config file or available credentials).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     /// Pool of short, thematic names for bot instances created from this persona.
     /// When a new copy is added to a channel, a random unused name is picked from this pool.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -36,17 +41,25 @@ pub struct PersonaRecord {
     pub is_builtin: bool,
     #[serde(default = "default_record_active")]
     pub is_active: bool,
-    /// Pack ID if this persona was imported from a persona pack.
-    /// Pack personas are non-editable (system_prompt, model locked).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_pack: Option<String>,
-    /// Internal persona slug within the pack (e.g., "lep", "pip").
+    /// Team ID if this persona was imported from a team directory.
+    /// Team personas are non-editable (system_prompt, model locked).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "source_pack"
+    )]
+    pub source_team: Option<String>,
+    /// Internal persona slug within the team (e.g., "lep", "pip").
     /// Used by ACP's `resolve_persona_by_name()` to find the right persona.
     /// Validated: `[a-zA-Z0-9_-]+`, max 64 chars (safe for env vars and paths).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_pack_persona_slug: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "source_pack_persona_slug"
+    )]
+    pub source_team_persona_slug: Option<String>,
     /// Harness-level configuration passed to the agent subprocess as environment variables.
-    /// Opaque to Sprout — keys and values are runtime-specific.
+    /// Opaque to Buzz — keys and values are runtime-specific.
     ///
     /// Stored as a BTreeMap for deterministic on-disk ordering.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -65,6 +78,8 @@ pub struct RelayAgentInfo {
     pub channel_ids: Vec<String>,
     pub capabilities: Vec<String>,
     pub status: String,
+    #[serde(default)]
+    pub respond_to: Option<RespondTo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,7 +123,7 @@ pub struct ManagedAgentRecord {
     /// creation by matching this ID against the fresh session/new response.
     #[serde(default)]
     pub model: Option<String>,
-    /// Comma-separated toolset string forwarded as SPROUT_TOOLSETS to the MCP subprocess.
+    /// Comma-separated toolset string forwarded as BUZZ_TOOLSETS to the MCP subprocess.
     /// When None, the MCP server uses its own default ("default" toolset).
     #[serde(default)]
     pub mcp_toolsets: Option<String>,
@@ -128,19 +143,27 @@ pub struct ManagedAgentRecord {
     pub backend_agent_id: Option<String>,
     #[serde(default)]
     pub provider_binary_path: Option<String>,
-    /// Installed pack path (absolute). Set when agent was created from a pack persona.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub persona_pack_path: Option<PathBuf>,
-    /// Persona name within the pack.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub persona_name_in_pack: Option<String>,
+    /// Installed team directory path (absolute). Set when agent was created from a team persona.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "persona_pack_path"
+    )]
+    pub persona_team_dir: Option<PathBuf>,
+    /// Persona name within the team.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "persona_name_in_pack"
+    )]
+    pub persona_name_in_team: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub last_started_at: Option<String>,
     pub last_stopped_at: Option<String>,
     pub last_exit_code: Option<i32>,
     pub last_error: Option<String>,
-    /// Inbound author gate mode. Translates to `SPROUT_ACP_RESPOND_TO`.
+    /// Inbound author gate mode. Translates to `BUZZ_ACP_RESPOND_TO`.
     #[serde(default)]
     pub respond_to: RespondTo,
     /// Allowlist used when `respond_to == Allowlist`. Stored normalized
@@ -149,7 +172,7 @@ pub struct ManagedAgentRecord {
     #[serde(default)]
     pub respond_to_allowlist: Vec<String>,
     /// Typed marker for relay-mesh agents. `Some(_)` means this agent runs its
-    /// inference through Sprout's relay-mesh local endpoint; the `model_ref` is
+    /// inference through Buzz's relay-mesh local endpoint; the `model_ref` is
     /// the served model id to route to. `None` is a normal agent.
     ///
     /// This is the source of truth for "is this a mesh agent + which model" —
@@ -279,6 +302,8 @@ pub struct CreatePersonaRequest {
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
     pub name_pool: Vec<String>,
     /// Environment variables for agents created from this persona.
     #[serde(default)]
@@ -296,6 +321,8 @@ pub struct UpdatePersonaRequest {
     pub runtime: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
     #[serde(default)]
     pub name_pool: Vec<String>,
     /// Environment variables for agents created from this persona.
@@ -464,6 +491,18 @@ pub struct TeamRecord {
     pub persona_ids: Vec<String>,
     #[serde(default)]
     pub is_builtin: bool,
+    /// Absolute path to the team's backing directory (if directory-backed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_dir: Option<PathBuf>,
+    /// Whether `source_dir` is a symlink to an external directory.
+    #[serde(default)]
+    pub is_symlink: bool,
+    /// Resolved symlink target path (for display). Only set when `is_symlink` is true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symlink_target: Option<String>,
+    /// Version from the team's `plugin.json` manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -487,9 +526,27 @@ pub struct UpdateTeamRequest {
     pub persona_ids: Vec<String>,
 }
 
-pub const DEFAULT_ACP_COMMAND: &str = "sprout-acp";
+/// Result of syncing a directory-backed team with its backing directory.
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncResult {
+    pub personas_added: Vec<String>,
+    pub personas_removed: Vec<String>,
+    pub personas_updated: Vec<String>,
+    pub metadata_changed: bool,
+}
+
+/// Report from the one-time packs→teams migration.
+#[derive(Debug, Clone, Serialize)]
+pub struct MigrationReport {
+    pub packs_migrated: usize,
+    pub personas_updated: usize,
+    pub agents_updated: usize,
+    pub errors: Vec<String>,
+}
+
+pub const DEFAULT_ACP_COMMAND: &str = "buzz-acp";
 pub const DEFAULT_AGENT_COMMAND: &str = "goose";
-/// ~5 min (320s) — matches the CLI harness default (SPROUT_ACP_IDLE_TIMEOUT).
+/// ~5 min (320s) — matches the CLI harness default (BUZZ_ACP_IDLE_TIMEOUT).
 pub const DEFAULT_AGENT_TURN_TIMEOUT_SECONDS: u64 = 320;
 /// 1 hour — absolute wall-clock safety cap per turn.
 pub const DEFAULT_AGENT_MAX_TURN_DURATION_SECONDS: u64 = 3600;
@@ -509,10 +566,10 @@ fn default_record_active() -> bool {
 
 // ── Inbound author gate ──────────────────────────────────────────────────────
 //
-// Mirrors `sprout-acp`'s `--respond-to` CLI flag and the related
+// Mirrors `buzz-acp`'s `--respond-to` CLI flag and the related
 // `--respond-to-allowlist` option. Persisted per agent so the desktop can
-// translate the user's choice into `SPROUT_ACP_RESPOND_TO` /
-// `SPROUT_ACP_RESPOND_TO_ALLOWLIST` env vars at spawn time.
+// translate the user's choice into `BUZZ_ACP_RESPOND_TO` /
+// `BUZZ_ACP_RESPOND_TO_ALLOWLIST` env vars at spawn time.
 //
 // Wire format is kebab-case (`owner-only`, `allowlist`, `anyone`) to match
 // the harness CLI vocabulary and the strings the GUI emits.
@@ -532,7 +589,7 @@ pub enum RespondTo {
 }
 
 impl RespondTo {
-    /// CLI/env wire string (matches `sprout-acp`'s `--respond-to`).
+    /// CLI/env wire string (matches `buzz-acp`'s `--respond-to`).
     pub fn as_str(self) -> &'static str {
         match self {
             Self::OwnerOnly => "owner-only",
@@ -544,7 +601,7 @@ impl RespondTo {
 
 /// Validate and normalize a respond-to allowlist.
 ///
-/// Rules mirror `sprout-acp/src/config.rs::validate_allowlist`:
+/// Rules mirror `buzz-acp/src/config.rs::validate_allowlist`:
 /// - Each entry is exactly 64 hex chars (any case in, lowercase out).
 /// - Duplicates removed, insertion order preserved.
 ///
@@ -572,13 +629,14 @@ pub fn validate_respond_to_allowlist(input: &[String]) -> Result<Vec<String>, St
 #[cfg(test)]
 mod tests {
     use super::{ManagedAgentRecord, PersonaRecord};
+    use std::path::PathBuf;
 
     #[test]
     fn persona_record_defaults_active_when_field_is_missing() {
         let record: PersonaRecord = serde_json::from_str(
             r#"{
-                "id": "builtin:solo",
-                "display_name": "Solo",
+                "id": "builtin:fizz",
+                "display_name": "Fizz",
                 "avatar_url": null,
                 "system_prompt": "Prompt",
                 "created_at": "2026-03-19T00:00:00Z",
@@ -604,7 +662,7 @@ mod tests {
                 "name": "test-agent",
                 "private_key_nsec": "nsec1fake",
                 "relay_url": "wss://localhost:3000",
-                "acp_command": "sprout-acp",
+                "acp_command": "buzz-acp",
                 "agent_command": "goose",
                 "agent_args": [],
                 "mcp_command": "",
@@ -634,7 +692,7 @@ mod tests {
             "private_key_nsec": "nsec1fake",
             "auth_tag": "[\"auth\",\"deadbeef\",\"\",\"cafebabe\"]",
             "relay_url": "wss://localhost:3000",
-            "acp_command": "sprout-acp",
+            "acp_command": "buzz-acp",
             "agent_command": "goose",
             "agent_args": [],
             "mcp_command": "",
@@ -712,7 +770,7 @@ mod tests {
                 "name": "legacy-agent",
                 "private_key_nsec": "nsec1fake",
                 "relay_url": "wss://localhost:3000",
-                "acp_command": "sprout-acp",
+                "acp_command": "buzz-acp",
                 "agent_command": "goose",
                 "agent_args": [],
                 "mcp_command": "",
@@ -817,5 +875,106 @@ mod tests {
         assert_eq!(json, r#"{"model_ref":"Qwen3"}"#);
         let back: RelayMeshConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back, config);
+    }
+
+    // ── Packs → Teams serde alias backward compatibility ────────────────
+
+    #[test]
+    fn persona_record_deserializes_old_source_pack_fields_via_alias() {
+        let record: PersonaRecord = serde_json::from_str(
+            r#"{
+                "id": "persona-1",
+                "display_name": "Test",
+                "avatar_url": null,
+                "system_prompt": "Prompt",
+                "source_pack": "com.example.my-pack",
+                "source_pack_persona_slug": "agent-one",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z"
+            }"#,
+        )
+        .expect("old-format persona with source_pack should deserialize via alias");
+
+        assert_eq!(record.source_team.as_deref(), Some("com.example.my-pack"));
+        assert_eq!(
+            record.source_team_persona_slug.as_deref(),
+            Some("agent-one")
+        );
+    }
+
+    #[test]
+    fn persona_record_serializes_new_field_names() {
+        let record: PersonaRecord = serde_json::from_str(
+            r#"{
+                "id": "persona-1",
+                "display_name": "Test",
+                "avatar_url": null,
+                "system_prompt": "Prompt",
+                "source_team": "com.example.my-team",
+                "source_team_persona_slug": "agent-one",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z"
+            }"#,
+        )
+        .unwrap();
+
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(json.contains("source_team"));
+        assert!(json.contains("source_team_persona_slug"));
+        assert!(!json.contains("source_pack"));
+    }
+
+    #[test]
+    fn managed_agent_record_deserializes_old_pack_path_fields_via_alias() {
+        let record: ManagedAgentRecord = serde_json::from_str(
+            r#"{
+                "pubkey": "abcd1234",
+                "name": "test-agent",
+                "private_key_nsec": "nsec1fake",
+                "relay_url": "wss://localhost:3000",
+                "acp_command": "buzz-acp",
+                "agent_command": "goose",
+                "agent_args": [],
+                "mcp_command": "",
+                "turn_timeout_seconds": 320,
+                "system_prompt": null,
+                "persona_pack_path": "/path/to/agents/packs/my-pack",
+                "persona_name_in_pack": "agent-one",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "last_started_at": null,
+                "last_stopped_at": null,
+                "last_exit_code": null,
+                "last_error": null
+            }"#,
+        )
+        .expect("old-format agent with persona_pack_path should deserialize via alias");
+
+        assert_eq!(
+            record.persona_team_dir,
+            Some(PathBuf::from("/path/to/agents/packs/my-pack"))
+        );
+        assert_eq!(record.persona_name_in_team.as_deref(), Some("agent-one"));
+    }
+
+    #[test]
+    fn team_record_deserializes_without_new_fields() {
+        let record: super::TeamRecord = serde_json::from_str(
+            r#"{
+                "id": "team-1",
+                "name": "My Team",
+                "description": null,
+                "persona_ids": ["p1", "p2"],
+                "is_builtin": false,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z"
+            }"#,
+        )
+        .expect("team record without new fields should deserialize with defaults");
+
+        assert_eq!(record.source_dir, None);
+        assert!(!record.is_symlink);
+        assert_eq!(record.symlink_target, None);
+        assert_eq!(record.version, None);
     }
 }

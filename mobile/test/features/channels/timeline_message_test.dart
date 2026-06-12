@@ -1,8 +1,8 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sprout_mobile/features/channels/timeline_message.dart';
-import 'package:sprout_mobile/shared/relay/relay.dart';
+import 'package:buzz/features/channels/timeline_message.dart';
+import 'package:buzz/shared/relay/relay.dart';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -80,6 +80,23 @@ NostrEvent _deletion({
   pubkey: 'alice',
   createdAt: createdAt,
   kind: EventKind.deletion,
+  tags: [
+    ['h', 'ch1'],
+    for (final t in targets) ['e', t],
+  ],
+  content: '',
+  sig: '',
+);
+
+NostrEvent _nip29Deletion({
+  required String id,
+  required List<String> targets,
+  int createdAt = 2000,
+}) => NostrEvent(
+  id: id,
+  pubkey: 'alice',
+  createdAt: createdAt,
+  kind: EventKind.nip29DeleteEvent,
   tags: [
     ['h', 'ch1'],
     for (final t in targets) ['e', t],
@@ -304,6 +321,21 @@ void main() {
         _textMsg(id: 'a', content: 'keep'),
         _textMsg(id: 'b', content: 'delete', createdAt: 1100),
         _deletion(id: 'd1', targets: ['b']),
+      ];
+
+      final result = formatTimeline(events);
+      expect(result, hasLength(1));
+      expect(result[0].content, 'keep');
+    });
+
+    test('filters messages deleted via kind:9005 (Buzz-native)', () {
+      // Agents emit kind:9005 deletes via the CLI. Mobile must mirror desktop
+      // and treat 9005 as a deletion marker, otherwise agent-deleted messages
+      // stay rendered until manual refresh.
+      final events = [
+        _textMsg(id: 'a', content: 'keep'),
+        _textMsg(id: 'b', content: 'delete', createdAt: 1100),
+        _nip29Deletion(id: 'd1', targets: ['b']),
       ];
 
       final result = formatTimeline(events);

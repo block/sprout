@@ -48,6 +48,7 @@ export type RichTextEditorOptions = {
   onUpdate?: (info: { markdown: string; text: string }) => void;
   editable?: boolean;
   mentionNames?: string[];
+  agentMentionNames?: string[];
   channelNames?: string[];
   /** Known custom-emoji set; used to render `:shortcode:` inline as images. */
   customEmoji?: CustomEmoji[];
@@ -86,6 +87,7 @@ export function useRichTextEditor({
   onUpdate,
   editable = true,
   mentionNames,
+  agentMentionNames,
   channelNames,
   customEmoji,
   onSubmit,
@@ -302,10 +304,10 @@ export function useRichTextEditor({
           openOnClick: false,
           autolink: true,
           linkOnPaste: true,
-          // Allow `sprout://` (used by Copy-link-to-message + sprout://connect)
-          // through TipTap's URL sanitiser. http(s) and mailto are accepted by
-          // default; non-listed protocols are stripped on paste/typed input.
-          protocols: ["sprout"],
+          // Allow Buzz message links through TipTap's URL sanitiser.
+          // http(s) and mailto are accepted by default; non-listed protocols are
+          // stripped on paste/typed input.
+          protocols: ["buzz"],
           HTMLAttributes: {
             class: "text-primary underline underline-offset-4 cursor-pointer",
           },
@@ -424,16 +426,17 @@ export function useRichTextEditor({
     if (!editor) return;
     // biome-ignore lint/suspicious/noExplicitAny: TipTap's Storage type doesn't include dynamic extension keys
     const storage = (editor.storage as any).mentionHighlight as
-      | { names: string[]; channelNames: string[] }
+      | { names: string[]; agentNames: string[]; channelNames: string[] }
       | undefined;
     if (storage) {
       storage.names = mentionNames ?? [];
+      storage.agentNames = agentMentionNames ?? [];
       storage.channelNames = channelNames ?? [];
       // Force the plugin to re-decorate by dispatching a metadata transaction.
       const { tr } = editor.state;
       editor.view.dispatch(tr.setMeta(mentionHighlightKey, true));
     }
-  }, [editor, mentionNames, channelNames]);
+  }, [editor, mentionNames, agentMentionNames, channelNames]);
 
   // Custom-emoji set changes: re-resolve the `src` attr on any existing
   // node in the doc (e.g. an emoji's image was just published).
@@ -589,6 +592,8 @@ export function useRichTextEditor({
     replacePlainTextRange,
   };
 }
+
+export type UseRichTextEditorResult = ReturnType<typeof useRichTextEditor>;
 
 function getMarkdownFromEditor(editor: Editor): string {
   // biome-ignore lint/suspicious/noExplicitAny: tiptap-markdown storage is untyped

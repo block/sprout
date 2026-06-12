@@ -132,7 +132,7 @@ Future<void> deleteForumEvent(
   String? rootEventId,
 }) async {
   final actions = ref.read(channelActionsProvider);
-  await actions.deleteMessage(eventId);
+  await actions.deleteMessage(channelId: channelId, eventId: eventId);
   ref.invalidate(forumPostsProvider(channelId));
   if (rootEventId != null) {
     ref.invalidate(

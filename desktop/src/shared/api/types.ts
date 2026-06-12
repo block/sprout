@@ -37,6 +37,7 @@ export type ChannelDetail = Channel & {
 export type ChannelMember = {
   pubkey: string;
   role: ChannelRole;
+  isAgent: boolean;
   joinedAt: string;
   displayName: string | null;
 };
@@ -119,6 +120,7 @@ export type UserProfileSummary = {
   displayName: string | null;
   avatarUrl: string | null;
   nip05Handle: string | null;
+  isAgent?: boolean;
 };
 
 export type UsersBatchResponse = {
@@ -131,6 +133,7 @@ export type UserSearchResult = {
   displayName: string | null;
   avatarUrl: string | null;
   nip05Handle: string | null;
+  isAgent: boolean;
 };
 
 export type UpdateProfileInput = {
@@ -154,6 +157,8 @@ export type UserStatusLookup = Record<string, UserStatus | null>;
 
 export type RelayEvent = {
   id: string;
+  /** Local-only render identity for optimistic events that are later acknowledged. */
+  localKey?: string;
   pubkey: string;
   created_at: number;
   kind: number;
@@ -256,6 +261,7 @@ export type RelayAgent = {
   channelIds: string[];
   capabilities: string[];
   status: "online" | "away" | "offline";
+  respondTo: RespondToMode | null;
 };
 
 export type ManagedAgentBackend =
@@ -292,7 +298,7 @@ export type ManagedAgent = {
   startOnAppLaunch: boolean;
   backend: ManagedAgentBackend;
   backendAgentId: string | null;
-  /** Who the agent should respond to. Maps to `sprout-acp --respond-to`. */
+  /** Who the agent should respond to. Maps to `buzz-acp --respond-to`. */
   respondTo: RespondToMode;
   /**
    * Normalized 64-char lowercase hex pubkeys. Used only when `respondTo` is
@@ -302,7 +308,7 @@ export type ManagedAgent = {
 };
 
 /**
- * Inbound author gate mode. Mirrors `sprout-acp`'s `--respond-to` CLI flag.
+ * Inbound author gate mode. Mirrors `buzz-acp`'s `--respond-to` CLI flag.
  * `"nobody"` is supported by the harness but not surfaced through this API —
  * it's a heartbeat-only mode without a meaningful GUI use case.
  */
@@ -467,13 +473,15 @@ export type AgentPersona = {
   systemPrompt: string;
   /** Preferred ACP runtime ID (e.g. "goose", "claude"). */
   runtime: string | null;
-  /** Opaque, harness-specific model identifier string. Sprout stores and passes through without interpretation. */
+  /** Opaque, harness-specific model identifier string. Buzz stores and passes through without interpretation. */
   model: string | null;
+  /** LLM inference provider (e.g. "databricks", "anthropic"). Injected as the runtime's provider env var at spawn time. */
+  provider: string | null;
   namePool: string[];
   isBuiltIn: boolean;
   isActive: boolean;
-  /** Pack ID if this persona was imported from a persona pack. Pack personas are non-editable. */
-  sourcePack?: string | null;
+  /** Team ID if this persona was imported from a team directory. Team personas are non-editable. */
+  sourceTeam?: string | null;
   /** Environment variables injected for agents created from this persona.
    * Layered as: desktop parent env < persona envVars < agent envVars. */
   envVars: Record<string, string>;
@@ -487,6 +495,7 @@ export type CreatePersonaInput = {
   systemPrompt: string;
   runtime?: string;
   model?: string;
+  provider?: string;
   namePool?: string[];
   envVars?: Record<string, string>;
 };
@@ -498,6 +507,7 @@ export type UpdatePersonaInput = {
   systemPrompt: string;
   runtime?: string;
   model?: string;
+  provider?: string;
   namePool?: string[];
   envVars?: Record<string, string>;
 };
@@ -509,6 +519,14 @@ export type AgentTeam = {
   description: string | null;
   personaIds: string[];
   isBuiltin: boolean;
+  /** Absolute path to the team's backing directory (if directory-backed). */
+  sourceDir: string | null;
+  /** Whether sourceDir is a symlink to an external directory. */
+  isSymlink: boolean;
+  /** Resolved symlink target path (for display). Only set when isSymlink is true. */
+  symlinkTarget: string | null;
+  /** Version from the team's plugin.json manifest. */
+  version: string | null;
   createdAt: string;
   updatedAt: string;
 };

@@ -160,6 +160,7 @@ void showMessageActions({
                   _confirmDelete(
                     context: context,
                     ref: ref,
+                    channelId: channelId,
                     messageId: message.id,
                   );
                 },
@@ -242,6 +243,7 @@ void _showEditSheet({
 void _confirmDelete({
   required BuildContext context,
   required WidgetRef ref,
+  required String channelId,
   required String messageId,
 }) {
   showDialog<void>(
@@ -257,7 +259,9 @@ void _confirmDelete({
         FilledButton(
           onPressed: () {
             Navigator.of(dialogContext).pop();
-            ref.read(channelActionsProvider).deleteMessage(messageId);
+            ref
+                .read(channelActionsProvider)
+                .deleteMessage(channelId: channelId, eventId: messageId);
           },
           style: FilledButton.styleFrom(
             backgroundColor: Theme.of(dialogContext).colorScheme.error,

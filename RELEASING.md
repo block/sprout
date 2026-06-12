@@ -1,4 +1,4 @@
-# Releasing Sprout Desktop
+# Releasing Buzz Desktop
 
 ## Quick Start
 
@@ -18,11 +18,13 @@ just release 1.0.0
 
 This creates a `version-bump/<version>` PR that bumps all version manifests, regenerates lockfiles, and appends a changelog entry. Merge the PR to trigger the build automatically.
 
+Re-running `just release` with the same version is safe — it detects the existing branch and PR, resets to current `main`, regenerates the changelog with any new commits, and updates the PR in place.
+
 ---
 
 ## How It Works
 
-1. **`just release`** runs locally on `main` — computes the next version, creates a `version-bump/<version>` branch, bumps versions in all manifests, regenerates lockfiles, generates a changelog entry, commits, pushes, and opens a PR.
+1. **`just release`** runs locally on `main` — computes the next version, creates (or reuses) a `version-bump/<version>` branch, bumps versions in all manifests, regenerates lockfiles, generates a changelog entry, commits, pushes, and opens (or updates) a PR.
 
 2. **Merge the PR** — the `auto-tag-on-release-pr-merge` workflow detects the `version-bump/*` branch merge and pushes a `v<version>` tag.
 
@@ -82,7 +84,7 @@ Each release produces two GitHub releases:
 1. **`v<version>`** — the user-facing release with the `.dmg` installer
    (macOS).
 
-2. **`sprout-desktop-latest`** — a rolling pre-release for the Tauri
+2. **`buzz-desktop-latest`** — a rolling pre-release for the Tauri
    auto-updater containing `latest.json`, the signed `.tar.gz` archive,
    and its `.sig` signature.
 
@@ -106,7 +108,7 @@ the same `v<version>` release. Intel users download the `_x64.dmg`.
 
   | Secret | Purpose |
   |--------|---------|
-  | `SPROUT_UPDATER_PUBLIC_KEY` | Tauri updater public key (minisign) |
+  | `BUZZ_UPDATER_PUBLIC_KEY` | Tauri updater public key (minisign) |
   | `TAURI_SIGNING_PRIVATE_KEY` | Tauri updater private key |
   | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the private key |
 
@@ -120,11 +122,14 @@ Switch to `main` and pull latest before running `just release`.
 ### `just release` fails with "working tree is dirty"
 Commit or stash your changes before running `just release`.
 
+### New commits merged after creating the release PR
+Re-run `just release` from an up-to-date `main`. It resets the branch to current `main`, regenerates the changelog and PR body to include the new commits, and force-pushes the updated branch.
+
 ### Build fails at "Validate version"
 The version string must be valid semver: `MAJOR.MINOR.PATCH` with an optional pre-release suffix. Do not include a `v` prefix.
 
 ### Auto-updater reports "no update available"
-Verify that the `sprout-desktop-latest` release exists and contains a
+Verify that the `buzz-desktop-latest` release exists and contains a
 valid `latest.json`. The auto-updater manifest currently lists
 `darwin-aarch64` only, so Intel and Linux users do not yet receive
 auto-updates — they download new versions manually from the release

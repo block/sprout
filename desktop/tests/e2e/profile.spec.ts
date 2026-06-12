@@ -1,6 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { installMockBridge } from "../helpers/bridge";
+import {
+  createMockAgentMemoryListing,
+  installMockBridge,
+} from "../helpers/bridge";
 import { openProfileMenu, openSettings } from "../helpers/settings";
 
 async function expectHomeView(page: import("@playwright/test").Page) {
@@ -49,6 +52,60 @@ async function waitForReactEffects(page: Page) {
         });
       }),
   );
+}
+
+async function addGenericAgent(
+  page: Page,
+  channelName: string,
+  agentName: string,
+) {
+  await page.getByTestId(`channel-${channelName}`).click();
+  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+  await page.getByTestId("channel-add-bot-trigger").click();
+  await expect(page.getByRole("heading", { name: "Add agents" })).toBeVisible();
+  await page.getByRole("button", { name: "Generic" }).click();
+  await page.locator("#channel-generic-name").fill(agentName);
+  await page
+    .locator("#channel-generic-prompt")
+    .fill("Watch the channel and help when asked.");
+  await page.getByRole("button", { name: "Add agent" }).click();
+  await expect(page.getByRole("heading", { name: "Add agents" })).toHaveCount(
+    0,
+  );
+}
+
+async function getManagedAgentPubkey(page: Page, agentName: string) {
+  await page.getByTestId("open-agents-view").click();
+  const managedAgentRow = page
+    .locator('[data-testid^="managed-agent-"]')
+    .filter({ hasText: agentName });
+  await expect(managedAgentRow).toHaveCount(1);
+  const managedAgentTestId = await managedAgentRow
+    .first()
+    .getAttribute("data-testid");
+  if (!managedAgentTestId) {
+    throw new Error("Managed agent row test id missing.");
+  }
+
+  return managedAgentTestId.replace("managed-agent-", "");
+}
+
+async function waitForMockLiveSubscription(page: Page, channelName: string) {
+  await expect
+    .poll(async () => {
+      return page.evaluate((channelName) => {
+        return (
+          (
+            window as Window & {
+              __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+                channelName: string;
+              }) => boolean;
+            }
+          ).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({ channelName }) ?? false
+        );
+      }, channelName);
+    })
+    .toBe(true);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -320,7 +377,7 @@ test("uploads local profile avatar files before saving", async ({ page }) => {
   await expect(page.getByTestId("profile-avatar-url")).toHaveValue("");
 
   const pastedAvatarUrl = await page.evaluate(
-    () => new URL("/sprout.svg", window.location.href).href,
+    () => new URL("/buzz.svg", window.location.href).href,
   );
   await page.getByTestId("profile-avatar-url").click();
   await page.keyboard.insertText(pastedAvatarUrl);
@@ -348,8 +405,8 @@ test("uploads local profile avatar files before saving", async ({ page }) => {
     .poll(() =>
       page.evaluate(
         () =>
-          (window as Window & { __SPROUT_E2E_COMMANDS__?: string[] })
-            .__SPROUT_E2E_COMMANDS__ ?? [],
+          (window as Window & { __BUZZ_E2E_COMMANDS__?: string[] })
+            .__BUZZ_E2E_COMMANDS__ ?? [],
       ),
     )
     .toEqual(expect.arrayContaining(["upload_media_bytes", "update_profile"]));
@@ -371,7 +428,7 @@ test("renders emoji avatars with a static background layer", async ({
     "background-color",
     "rgb(255, 231, 92)",
   );
-  await expect(avatarPreview).not.toHaveClass(/sprout-avatar-squish/);
+  await expect(avatarPreview).not.toHaveClass(/buzz-avatar-squish/);
   await expect(page.getByTestId("profile-avatar-preview-emoji")).toHaveText(
     "😀",
   );
@@ -497,6 +554,67 @@ test("updates presence from the profile menu", async ({ page }) => {
   ).toContainText("Offline");
 });
 
+test("renders agent memories seeded through the Playwright mock bridge", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    agentMemory: createMockAgentMemoryListing(),
+  });
+  await page.goto("/");
+
+  await addGenericAgent(page, "general", "Memory Bot");
+  const agentPubkey = await getManagedAgentPubkey(page, "Memory Bot");
+
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await waitForMockLiveSubscription(page, "general");
+
+  await page.evaluate(
+    ({ pubkey }) => {
+      const emit = (
+        window as Window & {
+          __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+            channelName: string;
+            content: string;
+            pubkey: string;
+          }) => unknown;
+        }
+      ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+      if (!emit) {
+        throw new Error("Mock message emitter is unavailable.");
+      }
+      emit({
+        channelName: "general",
+        content: "Memory bot check-in",
+        pubkey,
+      });
+    },
+    { pubkey: agentPubkey },
+  );
+
+  const messageRow = page
+    .getByTestId("message-row")
+    .filter({ hasText: "Memory bot check-in" });
+  await expect(messageRow).toBeVisible();
+  await messageRow.locator("button").first().click();
+
+  await expect(page.getByTestId("user-profile-panel")).toBeVisible();
+  const memoriesIngress = page.getByTestId("user-profile-memories-ingress");
+  await expect(memoriesIngress).toContainText("Memories");
+  await expect(memoriesIngress).toContainText("9");
+  await memoriesIngress.click();
+
+  await expect(page.getByTestId("agent-memory-section")).toBeVisible();
+  await expect(page.getByTestId("agent-memory-list")).toContainText(
+    "ui-density",
+  );
+  await expect(page.getByTestId("agent-memory-truncated")).toContainText(
+    "View all (9)",
+  );
+  await page.getByTestId("agent-memory-truncated").click();
+  await expect(page.getByTestId("agent-memory-list")).toContainText("orphan");
+});
+
 test("renders settings in the app shell with a back button", async ({
   page,
 }) => {
@@ -544,10 +662,10 @@ test("notification settings drive the Home badge and desktop alerts", async ({
   async function getAppBadgeCount() {
     return page.evaluate(() => {
       const win = window as Window & {
-        __SPROUT_E2E_APP_BADGE_COUNT__?: number;
+        __BUZZ_E2E_APP_BADGE_COUNT__?: number;
       };
 
-      return win.__SPROUT_E2E_APP_BADGE_COUNT__ ?? 0;
+      return win.__BUZZ_E2E_APP_BADGE_COUNT__ ?? 0;
     });
   }
 
@@ -571,7 +689,7 @@ test("notification settings drive the Home badge and desktop alerts", async ({
 
   await page.evaluate(() => {
     const win = window as Window & {
-      __SPROUT_E2E_PUSH_MOCK_FEED_ITEM__?: (item: {
+      __BUZZ_E2E_PUSH_MOCK_FEED_ITEM__?: (item: {
         category: "mention" | "needs_action" | "activity" | "agent_activity";
         channel_id: string | null;
         channel_name: string;
@@ -584,7 +702,7 @@ test("notification settings drive the Home badge and desktop alerts", async ({
       }) => unknown;
     };
 
-    win.__SPROUT_E2E_PUSH_MOCK_FEED_ITEM__?.({
+    win.__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__?.({
       category: "mention",
       channel_id: "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9",
       channel_name: "engineering",
@@ -611,26 +729,26 @@ test("notification settings drive the Home badge and desktop alerts", async ({
     .poll(() =>
       page.evaluate(() => {
         const win = window as Window & {
-          __SPROUT_E2E_NOTIFICATIONS__?: Array<{
+          __BUZZ_E2E_NOTIFICATIONS__?: Array<{
             body: string | null;
             title: string;
           }>;
         };
 
-        return win.__SPROUT_E2E_NOTIFICATIONS__?.length ?? 0;
+        return win.__BUZZ_E2E_NOTIFICATIONS__?.length ?? 0;
       }),
     )
     .toBe(1);
 
   const notifications = await page.evaluate(() => {
     const win = window as Window & {
-      __SPROUT_E2E_NOTIFICATIONS__?: Array<{
+      __BUZZ_E2E_NOTIFICATIONS__?: Array<{
         body: string | null;
         title: string;
       }>;
     };
 
-    return win.__SPROUT_E2E_NOTIFICATIONS__ ?? [];
+    return win.__BUZZ_E2E_NOTIFICATIONS__ ?? [];
   });
 
   expect(notifications).toEqual([
@@ -642,10 +760,10 @@ test("notification settings drive the Home badge and desktop alerts", async ({
 
   const clickedNotification = await page.evaluate(() => {
     const win = window as Window & {
-      __SPROUT_E2E_CLICK_NOTIFICATION__?: (index: number) => boolean;
+      __BUZZ_E2E_CLICK_NOTIFICATION__?: (index: number) => boolean;
     };
 
-    return win.__SPROUT_E2E_CLICK_NOTIFICATION__?.(0) ?? false;
+    return win.__BUZZ_E2E_CLICK_NOTIFICATION__?.(0) ?? false;
   });
   expect(clickedNotification).toBe(true);
 
@@ -687,7 +805,7 @@ test("desktop notification clicks open the matching forum thread", async ({
 
   await page.evaluate(() => {
     const win = window as Window & {
-      __SPROUT_E2E_PUSH_MOCK_FEED_ITEM__?: (item: {
+      __BUZZ_E2E_PUSH_MOCK_FEED_ITEM__?: (item: {
         category: "mention" | "needs_action" | "activity" | "agent_activity";
         channel_id: string | null;
         channel_name: string;
@@ -700,7 +818,7 @@ test("desktop notification clicks open the matching forum thread", async ({
       }) => unknown;
     };
 
-    win.__SPROUT_E2E_PUSH_MOCK_FEED_ITEM__?.({
+    win.__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__?.({
       category: "mention",
       channel_id: "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11",
       channel_name: "watercooler",
@@ -718,23 +836,23 @@ test("desktop notification clicks open the matching forum thread", async ({
     .poll(() =>
       page.evaluate(() => {
         const win = window as Window & {
-          __SPROUT_E2E_NOTIFICATIONS__?: Array<{
+          __BUZZ_E2E_NOTIFICATIONS__?: Array<{
             body: string | null;
             title: string;
           }>;
         };
 
-        return win.__SPROUT_E2E_NOTIFICATIONS__?.length ?? 0;
+        return win.__BUZZ_E2E_NOTIFICATIONS__?.length ?? 0;
       }),
     )
     .toBe(1);
 
   const clickedNotification = await page.evaluate(() => {
     const win = window as Window & {
-      __SPROUT_E2E_CLICK_NOTIFICATION__?: (index: number) => boolean;
+      __BUZZ_E2E_CLICK_NOTIFICATION__?: (index: number) => boolean;
     };
 
-    return win.__SPROUT_E2E_CLICK_NOTIFICATION__?.(0) ?? false;
+    return win.__BUZZ_E2E_CLICK_NOTIFICATION__?.(0) ?? false;
   });
   expect(clickedNotification).toBe(true);
 
@@ -803,7 +921,7 @@ test("opens settings with the keyboard shortcut and updates theme", async ({
 
   // Theme name persists in localStorage
   await expect
-    .poll(() => page.evaluate(() => localStorage.getItem("sprout-theme")))
+    .poll(() => page.evaluate(() => localStorage.getItem("buzz-theme")))
     .toBe("github-light");
 
   // Switch back to a dark theme — verifies light→dark transition
@@ -816,7 +934,7 @@ test("opens settings with the keyboard shortcut and updates theme", async ({
     .toBe(true);
 
   await expect
-    .poll(() => page.evaluate(() => localStorage.getItem("sprout-theme")))
+    .poll(() => page.evaluate(() => localStorage.getItem("buzz-theme")))
     .toBe("dracula");
 
   // Close settings with keyboard shortcut
@@ -834,8 +952,8 @@ test("supports webview zoom keyboard shortcuts", async ({ page }) => {
   const getTextScaleState = () =>
     page.evaluate(() => ({
       fontSize: getComputedStyle(document.documentElement).fontSize,
-      storedScale: localStorage.getItem("sprout:text-scale"),
-      webviewZoom: window.__SPROUT_E2E_WEBVIEW_ZOOM__,
+      storedScale: localStorage.getItem("buzz:text-scale"),
+      webviewZoom: window.__BUZZ_E2E_WEBVIEW_ZOOM__,
     }));
   const dispatchPrimaryShortcut = (
     key: string,
@@ -894,7 +1012,7 @@ test("supports webview zoom keyboard shortcuts", async ({ page }) => {
   });
 });
 
-test("shows doctor checks for local sprout tooling", async ({ page }) => {
+test("shows doctor checks for local CLI tooling", async ({ page }) => {
   await page.goto("/");
 
   await openSettings(page, "doctor");

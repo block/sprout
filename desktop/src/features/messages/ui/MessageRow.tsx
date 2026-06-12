@@ -7,15 +7,18 @@ import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { parseImetaTags } from "@/features/messages/lib/parseImeta";
 import { customEmojiFromTags } from "@/shared/api/customEmoji";
+import { isEmojiOnlyMessage } from "@/shared/lib/emojiOnly";
 import {
   resolveMentionNames,
   resolveMentionPubkeysByName,
 } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
+import type { VideoReviewContext } from "@/shared/ui/VideoPlayer";
 import { MessageActionBar } from "./MessageActionBar";
 import { MessageTimestamp } from "./MessageTimestamp";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
@@ -43,7 +46,10 @@ export const MessageRow = React.memo(
     onUnfollowThread,
     profiles,
     searchQuery,
+    agentPubkeys,
+    videoReviewContext,
   }: {
+    agentPubkeys?: ReadonlySet<string>;
     channelId?: string | null;
     highlighted?: boolean;
     hoverBackground?: boolean;
@@ -63,6 +69,7 @@ export const MessageRow = React.memo(
     onUnfollowThread?: (message: TimelineMessage) => void;
     profiles?: UserProfileLookup;
     searchQuery?: string;
+    videoReviewContext?: VideoReviewContext;
   }) {
     const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
       null,
@@ -85,6 +92,31 @@ export const MessageRow = React.memo(
       () => resolveMentionPubkeysByName(message.tags, profiles),
       [profiles, message.tags],
     );
+    const resolvedAgentPubkeys = React.useMemo(() => {
+      const pubkeys = new Set(agentPubkeys ?? []);
+
+      for (const [pubkey, profile] of Object.entries(profiles ?? {})) {
+        if (profile.isAgent) {
+          pubkeys.add(normalizePubkey(pubkey));
+        }
+      }
+
+      return pubkeys;
+    }, [agentPubkeys, profiles]);
+    const agentMentionPubkeysByName = React.useMemo(() => {
+      if (!mentionPubkeysByName) {
+        return undefined;
+      }
+
+      const values: Record<string, string> = {};
+      for (const [name, pubkey] of Object.entries(mentionPubkeysByName)) {
+        if (resolvedAgentPubkeys.has(normalizePubkey(pubkey))) {
+          values[name] = pubkey;
+        }
+      }
+
+      return Object.keys(values).length > 0 ? values : undefined;
+    }, [resolvedAgentPubkeys, mentionPubkeysByName]);
 
     const imetaByUrl = React.useMemo(
       () => (message.tags ? parseImetaTags(message.tags) : undefined),
@@ -94,6 +126,10 @@ export const MessageRow = React.memo(
     const customEmoji = React.useMemo(
       () => (message.tags ? customEmojiFromTags(message.tags) : undefined),
       [message.tags],
+    );
+    const emojiOnly = React.useMemo(
+      () => isEmojiOnlyMessage(message.body, customEmoji),
+      [message.body, customEmoji],
     );
 
     const { channels } = useChannelNavigation();
@@ -151,14 +187,20 @@ export const MessageRow = React.memo(
           return (
             <Markdown
               channelNames={channelNames}
-              className="max-w-full text-[15px] leading-6"
+              className={cn(
+                "max-w-full text-[15px] leading-6",
+                emojiOnly &&
+                  "text-4xl leading-tight [&_img[data-custom-emoji]]:h-[1.45em] [&_img[data-custom-emoji]]:align-middle [&_button:has(img[data-custom-emoji])]:align-middle",
+              )}
               content={message.body}
               customEmoji={customEmoji}
               imetaByUrl={imetaByUrl}
+              agentMentionPubkeysByName={agentMentionPubkeysByName}
               mentionNames={mentionNames}
               mentionPubkeysByName={mentionPubkeysByName}
               searchQuery={searchQuery}
               tight
+              videoReviewContext={videoReviewContext}
             />
           );
       }
@@ -167,7 +209,7 @@ export const MessageRow = React.memo(
     const isThreadReplyLayout = layoutVariant === "thread-reply";
     const guideBleedPx = isThreadReplyLayout ? 4 : 0;
     const avatarSizeClass = "!h-9 !w-9";
-    const avatarButtonRadiusClass = "rounded-xl";
+    const avatarButtonRadiusClass = "rounded-full";
 
     const respondToDotColor =
       message.respondTo === "anyone"
@@ -466,7 +508,8 @@ export const MessageRow = React.memo(
     prev.isFollowingThread === next.isFollowingThread &&
     prev.layoutVariant === next.layoutVariant &&
     prev.profiles === next.profiles &&
-    prev.searchQuery === next.searchQuery,
+    prev.searchQuery === next.searchQuery &&
+    prev.videoReviewContext === next.videoReviewContext,
 );
 
 MessageRow.displayName = "MessageRow";

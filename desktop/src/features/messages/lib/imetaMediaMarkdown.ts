@@ -97,11 +97,7 @@ export function buildImetaTags(
     ...(d.thumb ? [`thumb ${d.thumb}`] : []),
     ...(d.duration != null ? [`duration ${d.duration}`] : []),
     ...(d.image ? [`image ${d.image}`] : []),
-    ...(!d.type.startsWith("image/") &&
-    !d.type.startsWith("video/") &&
-    d.filename
-      ? [`filename ${d.filename}`]
-      : []),
+    ...(d.filename ? [`filename ${d.filename}`] : []),
   ]);
 }
 
@@ -208,24 +204,28 @@ export function mergeOutgoingTags(
 
 /**
  * Inverse of `mergeOutgoingTags`: split a merged outgoing tag set back into
- * imeta media tags vs NIP-30 `["emoji", ...]` tags, so the send path can route
- * each to its own validated Tauri arg. Emoji tags must never ride the
- * imeta-only `media` channel (its guard rejects any non-imeta prefix). Any
- * other prefix stays with `mediaTags` — the imeta guard will reject it, which
- * is the intended injection defense.
+ * imeta media tags, NIP-30 `["emoji", ...]` tags, and reference-only mention
+ * tags, so the send path can route each to its own validated Tauri arg. Emoji
+ * and mention tags must never ride the imeta-only `media` channel (its guard
+ * rejects any non-imeta prefix). Any other prefix stays with `mediaTags` — the
+ * imeta guard will reject it, which is the intended injection defense.
  */
 export function splitOutgoingTags(tags: string[][] | undefined): {
   mediaTags: string[][];
   emojiTags: string[][];
+  mentionTags: string[][];
 } {
   const mediaTags: string[][] = [];
   const emojiTags: string[][] = [];
+  const mentionTags: string[][] = [];
   for (const tag of tags ?? []) {
     if (tag[0] === "emoji") {
       emojiTags.push(tag);
+    } else if (tag[0] === "mention") {
+      mentionTags.push(tag);
     } else {
       mediaTags.push(tag);
     }
   }
-  return { mediaTags, emojiTags };
+  return { mediaTags, emojiTags, mentionTags };
 }

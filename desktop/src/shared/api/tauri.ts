@@ -62,6 +62,7 @@ type RawUserProfileSummary = {
   display_name: string | null;
   avatar_url: string | null;
   nip05_handle: string | null;
+  is_agent?: boolean;
 };
 
 type RawUsersBatchResponse = {
@@ -74,6 +75,7 @@ type RawUserSearchResult = {
   display_name: string | null;
   avatar_url: string | null;
   nip05_handle: string | null;
+  is_agent?: boolean;
 };
 
 type RawSearchUsersResponse = {
@@ -117,6 +119,7 @@ type RawChannelDetail = RawChannel & {
 type RawChannelMember = {
   pubkey: string;
   role: ChannelMember["role"];
+  is_agent?: boolean;
   joined_at: string;
   display_name: string | null;
 };
@@ -193,6 +196,7 @@ type RawRelayAgent = {
   channel_ids: string[];
   capabilities: string[];
   status: RelayAgent["status"];
+  respond_to?: RelayAgent["respondTo"];
 };
 
 export type RawManagedAgent = {
@@ -381,6 +385,7 @@ function fromRawChannelMember(member: RawChannelMember): ChannelMember {
   return {
     pubkey: member.pubkey,
     role: member.role,
+    isAgent: member.is_agent ?? false,
     joinedAt: member.joined_at,
     displayName: member.display_name,
   };
@@ -431,6 +436,7 @@ function fromRawUserProfileSummary(
     displayName: profile.display_name,
     avatarUrl: profile.avatar_url,
     nip05Handle: profile.nip05_handle,
+    isAgent: profile.is_agent ?? false,
   };
 }
 
@@ -440,6 +446,7 @@ function fromRawUserSearchResult(user: RawUserSearchResult): UserSearchResult {
     displayName: user.display_name,
     avatarUrl: user.avatar_url,
     nip05Handle: user.nip05_handle,
+    isAgent: user.is_agent ?? false,
   };
 }
 
@@ -710,6 +717,7 @@ export async function sendChannelMessage(
   mentionPubkeys?: string[],
   kind?: number,
   emojiTags?: string[][],
+  mentionTags?: string[][],
 ): Promise<SendChannelMessageResult> {
   const response = await invokeTauri<RawSendChannelMessageResult>(
     "send_channel_message",
@@ -719,6 +727,7 @@ export async function sendChannelMessage(
       parentEventId,
       mediaTags: mediaTags ?? null,
       emojiTags: emojiTags ?? null,
+      mentionTags: mentionTags ?? null,
       mentionPubkeys: mentionPubkeys ?? null,
       kind: kind ?? null,
     },
@@ -765,8 +774,14 @@ export async function pickAndUploadMedia(): Promise<BlobDescriptor[]> {
 export async function uploadMediaBytes(
   data: number[],
   filename?: string,
+  /** Correlation id for `media-upload-progress` events from the Rust side. */
+  progressId?: string,
 ): Promise<BlobDescriptor> {
-  return invokeTauri<BlobDescriptor>("upload_media_bytes", { data, filename });
+  return invokeTauri<BlobDescriptor>("upload_media_bytes", {
+    data,
+    filename,
+    progressId,
+  });
 }
 
 export async function editMessage(
@@ -785,8 +800,11 @@ export async function editMessage(
   });
 }
 
-export async function deleteMessage(eventId: string): Promise<void> {
-  await invokeTauri("delete_message", { eventId });
+export async function deleteMessage(
+  channelId: string,
+  eventId: string,
+): Promise<void> {
+  await invokeTauri("delete_message", { channelId, eventId });
 }
 
 export async function addReaction(
@@ -831,6 +849,7 @@ function fromRawRelayAgent(agent: RawRelayAgent): RelayAgent {
     channelIds: agent.channel_ids ?? [],
     capabilities: agent.capabilities,
     status: agent.status,
+    respondTo: agent.respond_to ?? null,
   };
 }
 

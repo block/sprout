@@ -211,10 +211,14 @@ List<TimelineMessage> formatTimeline(
   List<NostrEvent> events, {
   String? currentPubkey,
 }) {
-  // 1. Collect deletion targets.
+  // 1. Collect deletion targets. Both kind:5 (NIP-09) and kind:9005
+  // (Buzz-native) are deletion markers; mirror desktop's behavior.
   final deletedIds = <String>{};
   for (final event in events) {
-    if (event.kind != EventKind.deletion) continue;
+    if (event.kind != EventKind.deletion &&
+        event.kind != EventKind.nip29DeleteEvent) {
+      continue;
+    }
     for (final tag in event.tags) {
       if (tag.length >= 2 && tag[0] == 'e') {
         deletedIds.add(tag[1]);

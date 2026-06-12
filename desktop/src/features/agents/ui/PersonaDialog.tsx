@@ -66,6 +66,7 @@ export function PersonaDialog({
   const [systemPrompt, setSystemPrompt] = React.useState("");
   const [runtime, setRuntime] = React.useState("");
   const [model, setModel] = React.useState("");
+  const [provider, setProvider] = React.useState("");
   const [namePoolText, setNamePoolText] = React.useState("");
   const [envVars, setEnvVars] = React.useState<EnvVarsValue>({});
   const [isImportingUpdate, setIsImportingUpdate] = React.useState(false);
@@ -90,6 +91,7 @@ export function PersonaDialog({
     setSystemPrompt(initialValues.systemPrompt);
     setRuntime(initialValues.runtime ?? "");
     setModel(initialValues.model ?? "");
+    setProvider(initialValues.provider ?? "");
     setNamePoolText(
       ("namePool" in initialValues
         ? (initialValues as { namePool?: string[] }).namePool
@@ -216,6 +218,7 @@ export function PersonaDialog({
       setSystemPrompt("");
       setRuntime("");
       setModel("");
+      setProvider("");
       setNamePoolText("");
       setImportErrorMessage(null);
       setIsImportingUpdate(false);
@@ -240,6 +243,7 @@ export function PersonaDialog({
       systemPrompt,
       runtime: runtime.trim() || undefined,
       model: model.trim() || undefined,
+      provider: provider.trim() || undefined,
       namePool: namePool.length > 0 ? namePool : undefined,
       envVars,
     };
@@ -402,6 +406,27 @@ export function PersonaDialog({
               <p className="text-xs text-muted-foreground">
                 Optional. Passed to the agent at creation time. Leave blank to
                 use the runtime default.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="persona-provider">
+                LLM Provider
+              </label>
+              <Input
+                autoCapitalize="none"
+                autoCorrect="off"
+                disabled={isPending}
+                id="persona-provider"
+                onChange={(event) => setProvider(event.target.value)}
+                placeholder="e.g. databricks, anthropic, openai"
+                spellCheck={false}
+                value={provider}
+              />
+              <p className="text-xs text-muted-foreground">
+                Optional. Injected as the runtime's provider env var at agent
+                creation time. Leave blank for auto-detection or provider-locked
+                runtimes.
               </p>
             </div>
 
