@@ -52,9 +52,9 @@ pub struct TaskMeta {
     pub channel_id: Option<Uuid>,
     /// Clone of batch for Queue mode panic recovery.
     pub recoverable_batch: Option<FlushBatch>,
-    /// Cancel signal for the in-flight prompt task.
-    /// `None` for heartbeat tasks (not cancellable) and after signal is consumed.
-    pub cancel_tx: Option<tokio::sync::oneshot::Sender<CancelMode>>,
+    /// Control signal for the in-flight prompt task.
+    /// `None` for heartbeat tasks (not controllable) and after signal is consumed.
+    pub control_tx: Option<tokio::sync::oneshot::Sender<ControlSignal>>,
 }
 
 /// Agent-level model capabilities. Populated on first session creation.
@@ -117,6 +117,13 @@ impl SessionState {
         self.heartbeat_turn_count = 0;
         self.core_sections.clear();
     }
+
+    #[cfg(test)]
+    fn has_channel_state(&self, channel_id: &Uuid) -> bool {
+        self.sessions.contains_key(channel_id)
+            || self.turn_counts.contains_key(channel_id)
+            || self.core_sections.contains_key(channel_id)
+    }
 }
 
 /// An agent with its session state, owned by the pool or a running task.
@@ -159,13 +166,30 @@ pub enum PromptSource {
     Heartbeat,
 }
 
-/// How an in-flight channel turn should be cancelled.
+/// Apply state effects for Race 1, where a control signal arrives just after the
+/// prompt completed naturally. The prompt result has already been consumed by
+/// `select!`, so the harness must synthesize a successful result while still
+/// honoring any load-bearing control signal semantics.
+fn apply_completed_before_control_signal(
+    state: &mut SessionState,
+    source: &PromptSource,
+    control_signal: ControlSignal,
+) {
+    if control_signal == ControlSignal::Rotate {
+        state.invalidate(source);
+    }
+}
+
+/// Control signal for an in-flight channel turn.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CancelMode {
+pub enum ControlSignal {
     /// Stop the current turn and drop its triggering batch.
-    Stop,
+    Cancel,
     /// Stop the current turn and requeue its triggering batch for a merged re-prompt.
     Interrupt,
+    /// Stop the current turn and drop its triggering batch. The session is
+    /// invalidated just like cancel; the next turn creates a fresh session.
+    Rotate,
 }
 
 /// Outcome of a prompt task.
@@ -609,7 +633,7 @@ pub async fn run_prompt_task(
     prompt_text: Option<String>,
     ctx: Arc<PromptContext>,
     result_tx: mpsc::UnboundedSender<PromptResult>,
-    cancel_rx: Option<tokio::sync::oneshot::Receiver<CancelMode>>,
+    control_rx: Option<tokio::sync::oneshot::Receiver<ControlSignal>>,
 ) {
     // ── Determine source and resolve/create session ───────────────────────
 
@@ -652,6 +676,16 @@ pub async fn run_prompt_task(
         .map(|b| b.events.iter().map(|be| be.event.id.to_hex()).collect())
         .unwrap_or_default();
     let _reaction_guard = ReactionGuard::new(ctx.rest_client.clone(), reaction_ids.clone());
+
+    // ── Turn completion guard ─────────────────────────────────────────────
+    // Emits `turn_completed` on any exit path. Captures observer handle and
+    // metadata now, before the agent is moved into PromptResult.
+    let _turn_guard = TurnCompletionGuard::new(
+        agent.acp.observer_handle(),
+        agent.acp.observer_agent_index(),
+        observer_channel_id,
+        turn_id.clone(),
+    );
 
     let (session_id, is_new_session) = match &source {
         PromptSource::Channel(cid) => {
@@ -1008,11 +1042,11 @@ pub async fn run_prompt_task(
         None => vec![prompt_text.as_str()],
     };
 
-    // ── Cancel-aware prompt dispatch ──────────────────────────────────────
-    // When cancel_rx is Some (channel tasks), wrap the prompt in select! so
-    // the main loop can interrupt it. Heartbeats (cancel_rx=None) take the
-    // simple await path — they are not cancellable.
-    let prompt_result = match cancel_rx {
+    // ── Control-aware prompt dispatch ─────────────────────────────────────
+    // When control_rx is Some (channel tasks), wrap the prompt in select! so
+    // the main loop can cancel, interrupt, or rotate it. Heartbeats
+    // (control_rx=None) take the simple await path — they are not controllable.
+    let prompt_result = match control_rx {
         None => {
             // Heartbeat / non-cancellable path.
             agent
@@ -1035,8 +1069,8 @@ pub async fn run_prompt_task(
                     ctx.max_turn_duration,
                 ) => result,
                 mode = rx => {
-                    let cancel_mode = mode.unwrap_or(CancelMode::Stop);
-                    // Cancel signal received. Guard against Race 1: the turn may
+                    let control_signal = mode.unwrap_or(ControlSignal::Cancel);
+                    // Control signal received. Guard against Race 1: the turn may
                     // have completed naturally just as cancel fired.
                     if agent.acp.has_in_flight_prompt() {
                         // Prompt is genuinely in-flight — cancel it.
@@ -1051,9 +1085,9 @@ pub async fn run_prompt_task(
                             Ok(stop_reason) => {
                                 log_stop_reason(&source, &stop_reason);
                                 agent.state.invalidate(&source);
-                                let retry_batch = match cancel_mode {
-                                    CancelMode::Interrupt => requeue_batch_if_queue(&ctx, batch),
-                                    CancelMode::Stop => None,
+                                let retry_batch = match control_signal {
+                                    ControlSignal::Interrupt => requeue_batch_if_queue(&ctx, batch),
+                                    ControlSignal::Cancel | ControlSignal::Rotate => None,
                                 };
                                 let _ = result_tx.send(PromptResult {
                                     agent,
@@ -1065,9 +1099,9 @@ pub async fn run_prompt_task(
                             }
                             Err(AcpError::AgentExited) => {
                                 agent.state.invalidate_all();
-                                let retry_batch = match cancel_mode {
-                                    CancelMode::Interrupt => requeue_batch_if_queue(&ctx, batch),
-                                    CancelMode::Stop => None,
+                                let retry_batch = match control_signal {
+                                    ControlSignal::Interrupt => requeue_batch_if_queue(&ctx, batch),
+                                    ControlSignal::Cancel | ControlSignal::Rotate => None,
                                 };
                                 let _ = result_tx.send(PromptResult {
                                     agent,
@@ -1080,9 +1114,9 @@ pub async fn run_prompt_task(
                             Err(AcpError::IdleTimeout(_) | AcpError::HardTimeout) => {
                                 // Cancel drain timed out — agent state uncertain.
                                 agent.state.invalidate(&source);
-                                let retry_batch = match cancel_mode {
-                                    CancelMode::Interrupt => requeue_batch_if_queue(&ctx, batch),
-                                    CancelMode::Stop => None,
+                                let retry_batch = match control_signal {
+                                    ControlSignal::Interrupt => requeue_batch_if_queue(&ctx, batch),
+                                    ControlSignal::Cancel | ControlSignal::Rotate => None,
                                 };
                                 let _ = result_tx.send(PromptResult {
                                     agent,
@@ -1094,9 +1128,9 @@ pub async fn run_prompt_task(
                             }
                             Err(e) => {
                                 agent.state.invalidate(&source);
-                                let retry_batch = match cancel_mode {
-                                    CancelMode::Interrupt => requeue_batch_if_queue(&ctx, batch),
-                                    CancelMode::Stop => None,
+                                let retry_batch = match control_signal {
+                                    ControlSignal::Interrupt => requeue_batch_if_queue(&ctx, batch),
+                                    ControlSignal::Cancel | ControlSignal::Rotate => None,
                                 };
                                 let _ = result_tx.send(PromptResult {
                                     agent,
@@ -1122,9 +1156,21 @@ pub async fn run_prompt_task(
                         // and last_prompt_id was cleared by the success path.
                         //
                         // MUST send a PromptResult or the main loop deadlocks.
-                        tracing::debug!(
-                            target: "pool::prompt",
-                            "cancel signal arrived but turn already completed — treating as success"
+                        if control_signal == ControlSignal::Rotate {
+                            tracing::debug!(
+                                target: "pool::prompt",
+                                "rotate signal arrived but turn already completed — invalidating session"
+                            );
+                        } else {
+                            tracing::debug!(
+                                target: "pool::prompt",
+                                "control signal arrived but turn already completed — treating as success"
+                            );
+                        }
+                        apply_completed_before_control_signal(
+                            &mut agent.state,
+                            &source,
+                            control_signal,
                         );
                         let _ = result_tx.send(PromptResult {
                             agent,
@@ -1929,6 +1975,49 @@ impl Drop for ReactionGuard {
     }
 }
 
+// ── Turn completion scope guard ──────────────────────────────────────────────
+// Emits a `turn_completed` observer event on drop, covering ALL exit paths
+// (success, error, timeout, cancel, panic) from `run_prompt_task`. Captures
+// observer handle and metadata at creation time so it remains valid even after
+// the agent is moved into `PromptResult`.
+
+struct TurnCompletionGuard {
+    observer: Option<observer::ObserverHandle>,
+    agent_index: Option<usize>,
+    channel_id: Option<uuid::Uuid>,
+    turn_id: String,
+}
+
+impl TurnCompletionGuard {
+    fn new(
+        observer: Option<observer::ObserverHandle>,
+        agent_index: Option<usize>,
+        channel_id: Option<uuid::Uuid>,
+        turn_id: String,
+    ) -> Self {
+        Self {
+            observer,
+            agent_index,
+            channel_id,
+            turn_id,
+        }
+    }
+}
+
+impl Drop for TurnCompletionGuard {
+    fn drop(&mut self) {
+        if let Some(observer) = self.observer.take() {
+            let context = observer::context_for(self.channel_id, None, Some(self.turn_id.clone()));
+            observer.emit(
+                "turn_completed",
+                self.agent_index,
+                &context,
+                serde_json::json!({}),
+            );
+        }
+    }
+}
+
 const REACTION_SEEN: &str = "👀";
 const REACTION_WORKING: &str = "💬";
 
@@ -2473,9 +2562,48 @@ mod tests {
         s.sessions.insert(ch_b, "sess-b".into());
         s.turn_counts.insert(ch_a, 5);
         s.turn_counts.insert(ch_b, 3);
+        s.core_sections.insert(ch_a, "core-a".into());
+        s.core_sections.insert(ch_b, "core-b".into());
         s.heartbeat_session = Some("sess-hb".into());
         s.heartbeat_turn_count = 7;
         (s, ch_a, ch_b)
+    }
+
+    #[test]
+    fn test_rotate_after_natural_completion_invalidates_channel_state() {
+        let (mut s, ch_a, ch_b) = make_state();
+
+        apply_completed_before_control_signal(
+            &mut s,
+            &PromptSource::Channel(ch_a),
+            ControlSignal::Rotate,
+        );
+
+        assert!(!s.sessions.contains_key(&ch_a));
+        assert!(!s.turn_counts.contains_key(&ch_a));
+        assert!(!s.core_sections.contains_key(&ch_a));
+        assert!(!s.has_channel_state(&ch_a));
+        assert_eq!(s.sessions.get(&ch_b).unwrap(), "sess-b");
+        assert_eq!(*s.turn_counts.get(&ch_b).unwrap(), 3);
+        assert_eq!(s.core_sections.get(&ch_b).unwrap(), "core-b");
+        assert_eq!(s.heartbeat_session.as_deref(), Some("sess-hb"));
+        assert_eq!(s.heartbeat_turn_count, 7);
+    }
+
+    #[test]
+    fn test_cancel_after_natural_completion_preserves_channel_state() {
+        let (mut s, ch_a, ch_b) = make_state();
+
+        apply_completed_before_control_signal(
+            &mut s,
+            &PromptSource::Channel(ch_a),
+            ControlSignal::Cancel,
+        );
+
+        assert_eq!(s.sessions.get(&ch_a).unwrap(), "sess-a");
+        assert_eq!(*s.turn_counts.get(&ch_a).unwrap(), 5);
+        assert_eq!(s.core_sections.get(&ch_a).unwrap(), "core-a");
+        assert_eq!(s.sessions.get(&ch_b).unwrap(), "sess-b");
     }
 
     #[test]
@@ -2485,9 +2613,12 @@ mod tests {
 
         assert!(!s.sessions.contains_key(&ch_a));
         assert!(!s.turn_counts.contains_key(&ch_a));
+        assert!(!s.core_sections.contains_key(&ch_a));
+        assert!(!s.has_channel_state(&ch_a));
         // ch_b untouched
         assert_eq!(s.sessions.get(&ch_b).unwrap(), "sess-b");
         assert_eq!(*s.turn_counts.get(&ch_b).unwrap(), 3);
+        assert_eq!(s.core_sections.get(&ch_b).unwrap(), "core-b");
         // heartbeat untouched
         assert_eq!(s.heartbeat_session.as_deref(), Some("sess-hb"));
         assert_eq!(s.heartbeat_turn_count, 7);
@@ -2504,6 +2635,8 @@ mod tests {
         assert_eq!(s.sessions.len(), 2);
         assert_eq!(*s.turn_counts.get(&ch_a).unwrap(), 5);
         assert_eq!(*s.turn_counts.get(&ch_b).unwrap(), 3);
+        assert_eq!(s.core_sections.get(&ch_a).unwrap(), "core-a");
+        assert_eq!(s.core_sections.get(&ch_b).unwrap(), "core-b");
     }
 
     #[test]
@@ -2513,6 +2646,7 @@ mod tests {
 
         assert!(s.sessions.is_empty());
         assert!(s.turn_counts.is_empty());
+        assert!(s.core_sections.is_empty());
         assert!(s.heartbeat_session.is_none());
         assert_eq!(s.heartbeat_turn_count, 0);
     }
@@ -2528,6 +2662,8 @@ mod tests {
         assert_eq!(s.turn_counts.len(), 2);
         assert_eq!(*s.turn_counts.get(&ch_a).unwrap(), 5);
         assert_eq!(*s.turn_counts.get(&ch_b).unwrap(), 3);
+        assert_eq!(s.core_sections.get(&ch_a).unwrap(), "core-a");
+        assert_eq!(s.core_sections.get(&ch_b).unwrap(), "core-b");
     }
 
     #[test]
@@ -2536,6 +2672,7 @@ mod tests {
         s.invalidate_all(); // should not panic
         assert!(s.sessions.is_empty());
         assert!(s.turn_counts.is_empty());
+        assert!(s.core_sections.is_empty());
     }
 
     #[test]
@@ -2544,9 +2681,12 @@ mod tests {
         assert!(s.invalidate_channel(&ch_a));
         assert!(!s.sessions.contains_key(&ch_a));
         assert!(!s.turn_counts.contains_key(&ch_a));
+        assert!(!s.core_sections.contains_key(&ch_a));
+        assert!(!s.has_channel_state(&ch_a));
         // ch_b untouched
         assert_eq!(s.sessions.get(&ch_b).unwrap(), "sess-b");
         assert_eq!(*s.turn_counts.get(&ch_b).unwrap(), 3);
+        assert_eq!(s.core_sections.get(&ch_b).unwrap(), "core-b");
         // heartbeat untouched
         assert_eq!(s.heartbeat_session.as_deref(), Some("sess-hb"));
         assert_eq!(s.heartbeat_turn_count, 7);
@@ -2573,7 +2713,10 @@ mod tests {
         }
         assert!(!s.sessions.contains_key(&ch_a));
         assert!(!s.turn_counts.contains_key(&ch_a));
+        assert!(!s.core_sections.contains_key(&ch_a));
+        assert!(!s.has_channel_state(&ch_a));
         assert_eq!(s.sessions.get(&ch_b).unwrap(), "sess-b");
         assert_eq!(*s.turn_counts.get(&ch_b).unwrap(), 3);
+        assert_eq!(s.core_sections.get(&ch_b).unwrap(), "core-b");
     }
 }
