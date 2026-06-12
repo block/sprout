@@ -888,58 +888,30 @@ fn sentence_append_buffer_is_one_contiguous_source() {
     );
 }
 
-// ── apply_playback_gain tests ─────────────────────────────────────────────
+// ── clamp_to_full_scale tests ─────────────────────────────────────────────
 
-/// Typical Pocket output (peak ≈ 0.076) lands at ≈ −3 dBFS after the
-/// fixed gain — the level the per-sentence normalization used to target.
+/// In-range speech audio passes through bit-exact — no gain is applied.
+/// (Pocket output is already at speech level; see the fn doc-comment for
+/// the history of the two gain-stage regressions this replaced.)
 #[test]
-fn apply_playback_gain_lands_typical_peak_near_minus_3_dbfs() {
-    let input = vec![0.076_f32, -0.076, 0.02];
-    let out = apply_playback_gain(input);
-    let peak = out.iter().fold(0.0_f32, |a, &s| a.max(s.abs()));
-    let expected = 0.076 * PLAYBACK_GAIN; // ≈ 0.707
-    assert!(
-        (peak - expected).abs() < 1e-4,
-        "expected peak ~{expected}, got {peak}"
-    );
+fn clamp_to_full_scale_passes_speech_audio_unchanged() {
+    let input = vec![0.42_f32, -0.97, 0.076, 0.0];
+    let out = clamp_to_full_scale(input.clone());
+    assert_eq!(out, input);
 }
 
-/// Gain is text-invariant: two buffers with different peaks get the SAME
-/// gain, so their relative loudness is preserved. (This is the property
-/// per-sentence peak normalization violated — level pumping.)
+/// Outlier transients beyond full scale are hard-clamped to ±1.0 rather
+/// than wrapping.
 #[test]
-fn apply_playback_gain_preserves_relative_loudness() {
-    let quiet = apply_playback_gain(vec![0.02_f32]);
-    let loud = apply_playback_gain(vec![0.08_f32]);
-    let ratio = loud[0] / quiet[0];
-    assert!(
-        (ratio - 4.0).abs() < 1e-4,
-        "expected 4x ratio preserved, got {ratio}"
-    );
-}
-
-/// Pure silence stays pure silence — gain has no floor effect.
-#[test]
-fn apply_playback_gain_silence_is_unchanged() {
-    let out = apply_playback_gain(vec![0.0_f32; 16]);
-    assert!(out.iter().all(|&s| s == 0.0));
-    assert_eq!(out.len(), 16);
+fn clamp_to_full_scale_clamps_outliers() {
+    let input = vec![1.5_f32, -2.0, 0.5];
+    let out = clamp_to_full_scale(input);
+    assert_eq!(out, vec![1.0, -1.0, 0.5]);
 }
 
 /// Empty input round-trips to empty output.
 #[test]
-fn apply_playback_gain_empty_buffer() {
-    let out = apply_playback_gain(Vec::new());
+fn clamp_to_full_scale_empty_buffer() {
+    let out = clamp_to_full_scale(Vec::new());
     assert!(out.is_empty());
-}
-
-/// Outlier transients that would exceed full scale after gain are
-/// hard-clamped to ±1.0 rather than wrapping.
-#[test]
-fn apply_playback_gain_clamps_to_full_scale() {
-    let input = vec![0.5_f32, -0.5]; // 0.5 × 9.3 = 4.65 → clamps
-    let out = apply_playback_gain(input);
-    assert!(out.iter().all(|&s| s.abs() <= 1.0));
-    assert_eq!(out[0], 1.0);
-    assert_eq!(out[1], -1.0);
 }

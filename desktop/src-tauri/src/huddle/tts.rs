@@ -9,7 +9,7 @@
 //!       1. Preprocess text
 //!       2. Split into sentences
 //!       3. Synthesize each sentence individually → f32 PCM
-//!       4. Apply volume boost + fade out to each sentence
+//!       4. Clamp to full scale + fade out each sentence
 //!       5. Append each buffer to the persistent rodio Player (gapless)
 //!       6. While audio is draining, keep pulling queued text items and
 //!          synthesizing ahead — playback of item N overlaps synthesis of
@@ -71,22 +71,6 @@ const SYNTH_STEPS: usize = 1;
 
 /// Synthesis speed multiplier. Slightly faster than natural speech.
 const SYNTH_SPEED: f32 = 1.05;
-
-/// Fixed playback gain applied to every synthesized sentence, in linear scale.
-///
-/// Pocket TTS reference-voice output measured ~7.6% peak on a 75-character
-/// utterance (`examples/pocket_bench`); 9.3 × 0.076 ≈ 0.71 lands a typical
-/// peak at the Tyler-approved −3 dBFS loudness. The `clamp(±1.0)` in
-/// [`apply_playback_gain`] is the safety net for outlier transients.
-///
-/// Why a *fixed* gain rather than per-sentence peak normalization (which this
-/// replaced): normalizing each sentence to its own peak makes loudness a
-/// function of that sentence's loudest transient — a sentence with one sharp
-/// consonant gets less gain than its neighbors, producing audible level
-/// pumping between consecutive sentences. The kyutai reference pipeline
-/// applies no normalization at all; a fixed gain is the minimal deviation
-/// that keeps the desired output level while making loudness text-invariant.
-const PLAYBACK_GAIN: f32 = 9.3;
 
 /// Fade-out length in samples (8 ms at 24 kHz ≈ 192 samples).
 ///
@@ -523,11 +507,11 @@ fn tts_worker(
 
             match engine.synth_chunk(text, "en", &style, SYNTH_STEPS, SYNTH_SPEED) {
                 Ok(samples) if !samples.is_empty() => {
-                    let mut boosted = apply_playback_gain(samples);
+                    let mut audio = clamp_to_full_scale(samples);
                     // Fade-out only — fading-in would attenuate the consonant
                     // onset (see `apply_fade_out` docstring + the
                     // 2026-05-18 "first little sound is missing" regression).
-                    apply_fade_out(&mut boosted);
+                    apply_fade_out(&mut audio);
 
                     // Build one contiguous buffer per synthesized sentence:
                     // lead-in cushion + audio + trailing gap. Keeping this as
@@ -535,7 +519,7 @@ fn tts_worker(
                     // semantics (one append per sentence) while still giving
                     // every chunk a quiet device warm-up window.
                     let buf =
-                        build_sentence_append_buffer(&mut first_append, boosted, silence_buf_len);
+                        build_sentence_append_buffer(&mut first_append, audio, silence_buf_len);
 
                     // Check-and-append under `player_ops`, serialized with
                     // the monitor: a barge-in may have arrived during
@@ -644,18 +628,19 @@ fn lock_player_ops(ops: &Mutex<()>) -> MutexGuard<'_, ()> {
     ops.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Apply the fixed playback gain ([`PLAYBACK_GAIN`]), hard-clamped to ±1.0.
+/// Hard-clamp samples to ±1.0 full scale.
 ///
-/// Replaces the earlier per-sentence peak normalization — see the
-/// [`PLAYBACK_GAIN`] doc-comment for why fixed gain wins (level pumping
-/// between consecutive sentences). The clamp is the only nonlinearity and is
-/// expected to be inert for typical Pocket output (peak ≈ 0.076 × 9.3 ≈
-/// 0.71); it exists to catch outlier transients before they wrap.
-fn apply_playback_gain(samples: Vec<f32>) -> Vec<f32> {
-    samples
-        .into_iter()
-        .map(|s| (s * PLAYBACK_GAIN).clamp(-1.0, 1.0))
-        .collect()
+/// No gain is applied: Pocket TTS already emits speech-level audio
+/// (peaks 0.4–0.97, RMS ≈ −20 dBFS across varied sentences — measured by
+/// `examples/pocket_clip_probe`), matching the kyutai reference pipeline,
+/// which applies no output scaling. Two earlier gain stages were both
+/// regressions against that baseline: per-sentence peak normalization caused
+/// level pumping between sentences, and the fixed 9.3× gain that replaced it
+/// was calibrated on a single anomalously-quiet bench utterance (peak 0.076)
+/// and clipped 13–34% of samples on real speech ("blown out", 2026-06-12).
+/// The clamp alone remains as the safety net against outlier transients.
+fn clamp_to_full_scale(samples: Vec<f32>) -> Vec<f32> {
+    samples.into_iter().map(|s| s.clamp(-1.0, 1.0)).collect()
 }
 
 /// Apply a short linear fade-out at the *end* of `samples`.
@@ -711,7 +696,7 @@ fn apply_fade_out(samples: &mut [f32]) {
 /// which controls when `tts_active` is released and the lead-in re-armed.
 fn build_sentence_append_buffer(
     first_append: &mut bool,
-    boosted: Vec<f32>,
+    audio: Vec<f32>,
     silence_buf_len: usize,
 ) -> Vec<f32> {
     if *first_append {
@@ -719,10 +704,9 @@ fn build_sentence_append_buffer(
     }
 
     let trailing_silence_len = silence_buf_len.saturating_sub(SENTENCE_LEAD_IN_SAMPLES);
-    let mut buf =
-        Vec::with_capacity(SENTENCE_LEAD_IN_SAMPLES + boosted.len() + trailing_silence_len);
+    let mut buf = Vec::with_capacity(SENTENCE_LEAD_IN_SAMPLES + audio.len() + trailing_silence_len);
     buf.extend(std::iter::repeat_n(0.0_f32, SENTENCE_LEAD_IN_SAMPLES));
-    buf.extend(boosted);
+    buf.extend(audio);
     buf.extend(std::iter::repeat_n(0.0_f32, trailing_silence_len));
     buf
 }
