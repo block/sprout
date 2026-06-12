@@ -2356,15 +2356,8 @@ fn dispatch_heartbeat(
         .unwrap_or_else(default_heartbeat_prompt);
     // For legacy agents (protocol_version < 2), prepend base_prompt to the
     // heartbeat user message since they don't receive it via session/new.
-    let prompt_text = if agent.protocol_version < 2 {
-        if let Some(bp) = ctx.base_prompt {
-            format!("{}\n\n{prompt_text}", crate::queue::base_section(bp))
-        } else {
-            prompt_text
-        }
-    } else {
-        prompt_text
-    };
+    let prompt_text =
+        pool::prepend_base_for_legacy(agent.protocol_version, ctx.base_prompt, &prompt_text);
     let result_tx = pool.result_tx();
     let ctx_clone = Arc::clone(ctx);
     let agent_index = agent.index;
@@ -2696,6 +2689,38 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod heartbeat_base_prompt_tests {
+    use super::*;
+
+    // Pins the heartbeat dispatch path (dispatch_heartbeat, ~line 2359): a
+    // legacy agent WITH a base_prompt must get [Base] prepended to the
+    // heartbeat user message, composed as `[Base]\n{bp}\n\n{prompt}`. This is
+    // the second half of the round-2 regression (the first being initial_message).
+
+    #[test]
+    fn test_heartbeat_legacy_agent_gets_base_prepended() {
+        // protocol_version 1 + Some(base_prompt): heartbeat prompt is prefixed
+        // with the [Base] section exactly as the legacy session/new path would.
+        let prompt = "[System: Heartbeat]\nrun feed get";
+        let composed = pool::prepend_base_for_legacy(1, Some("you are a helpful agent"), prompt);
+        assert_eq!(
+            composed,
+            "[Base]\nyou are a helpful agent\n\n[System: Heartbeat]\nrun feed get"
+        );
+        assert!(composed.starts_with("[Base]\nyou are a helpful agent\n\n"));
+    }
+
+    #[test]
+    fn test_heartbeat_modern_agent_omits_base() {
+        // protocol_version 2 gets base_prompt via session/new; the heartbeat
+        // prompt is sent verbatim.
+        let prompt = "[System: Heartbeat]\nrun feed get";
+        let composed = pool::prepend_base_for_legacy(2, Some("you are a helpful agent"), prompt);
+        assert_eq!(composed, prompt);
+    }
+}
 
 #[cfg(test)]
 mod owner_cache_tests {

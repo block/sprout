@@ -612,6 +612,26 @@ async fn apply_permission_mode(
     Ok(())
 }
 
+/// Prepend the `[Base]` section to a user-message body for legacy agents.
+///
+/// Legacy agents (`protocol_version < 2`) don't receive `base_prompt` via the
+/// system role in `session/new`, so it must ride along in the user message.
+/// Agents with `protocol_version >= 2`, or any agent without a `base_prompt`,
+/// get `body` unchanged. The gate lives here so the heartbeat and
+/// initial-message dispatch paths can't drift apart again.
+pub(crate) fn prepend_base_for_legacy(
+    protocol_version: u32,
+    base_prompt: Option<&str>,
+    body: &str,
+) -> String {
+    match base_prompt {
+        Some(bp) if protocol_version < 2 => {
+            format!("{}\n\n{body}", crate::queue::base_section(bp))
+        }
+        _ => body.to_string(),
+    }
+}
+
 /// Core async function spawned for each prompt.
 ///
 /// Lifecycle:
@@ -835,15 +855,8 @@ pub async fn run_prompt_task(
             // For agents with systemPrompt support (protocol_version >= 2),
             // base_prompt is delivered via the system role in session/new.
             // Legacy agents receive it via [Base] in the user message instead.
-            let init_msg = if agent.protocol_version < 2 {
-                if let Some(bp) = ctx.base_prompt {
-                    format!("{}\n\n{}", crate::queue::base_section(bp), initial_msg)
-                } else {
-                    initial_msg.to_string()
-                }
-            } else {
-                initial_msg.to_string()
-            };
+            let init_msg =
+                prepend_base_for_legacy(agent.protocol_version, ctx.base_prompt, initial_msg);
             let init_result = agent
                 .acp
                 .session_prompt_with_idle_timeout(
@@ -2138,6 +2151,35 @@ mod tests {
     use super::*;
     use nostr::{EventBuilder, Keys, Kind, Tag};
     use serde_json::json;
+
+    // ── prepend_base_for_legacy regression tests ─────────────────────────────
+    // These pin the initial_message dispatch path (run_prompt_task, ~line 855):
+    // a legacy agent WITH a base_prompt must get [Base] prepended to the user
+    // message. This is the exact regression that shipped in the round-2 bug.
+
+    #[test]
+    fn test_initial_message_legacy_agent_gets_base_prepended() {
+        // protocol_version 1 + Some(base_prompt): [Base] rides along in the
+        // user message, composed as `[Base]\n{bp}\n\n{initial_msg}`.
+        let composed = prepend_base_for_legacy(1, Some("you are a helpful agent"), "hello channel");
+        assert_eq!(composed, "[Base]\nyou are a helpful agent\n\nhello channel");
+        assert!(composed.starts_with("[Base]\nyou are a helpful agent\n\n"));
+    }
+
+    #[test]
+    fn test_initial_message_modern_agent_omits_base() {
+        // protocol_version 2 receives base_prompt via session/new, so the user
+        // message is left untouched even when a base_prompt is present.
+        let composed = prepend_base_for_legacy(2, Some("you are a helpful agent"), "hello channel");
+        assert_eq!(composed, "hello channel");
+    }
+
+    #[test]
+    fn test_initial_message_legacy_agent_without_base_is_unchanged() {
+        // No base_prompt configured: nothing to prepend regardless of version.
+        let composed = prepend_base_for_legacy(1, None, "hello channel");
+        assert_eq!(composed, "hello channel");
+    }
 
     // ── parse_thread_response tests ──────────────────────────────────────────
 
