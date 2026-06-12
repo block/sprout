@@ -25,7 +25,7 @@ This NIP defines a minimal, privacy-preserving protocol for propagating read sta
 ## Non-Goals
 
 This NIP does not define a durable log of all read messages — blobs are best-effort recent activity hints bounded by a time horizon.
-This NIP does not define cross-client interoperability on context ID format — context identifiers are opaque by default and meaningful only within a single client family, with the single exception of the OPTIONAL well-known `thread:<root-event-id>` scheme defined under Thread Read Contexts, which is provided for cross-client thread-read interoperability.
+This NIP does not define cross-client interoperability on context ID format — context identifiers are opaque by default and meaningful only within a single client family, except for OPTIONAL well-known schemes defined in this NIP (currently only `thread:<root-event-id>`, defined under Thread Read Contexts), which are provided for cross-client thread-read interoperability.
 This NIP does not define mark-as-unread — the merge rule is monotonic by design.
 This NIP does not guarantee ordering of read events across devices.
 This NIP does not require relay-side logic.
@@ -128,6 +128,11 @@ of the thread's root event. A bare channel identifier (e.g., the NIP-28 channel
 event ID) remains the channel context, exactly as before — this is grandfathered
 existing behavior and is unchanged.
 
+Keys beginning with `thread:` whose remainder does not match `^[0-9a-f]{64}$`
+MUST be treated as ordinary opaque contexts, not as thread contexts. This
+protects an existing client family that may already use a `thread:`-prefixed
+convention from being misinterpreted under this scheme.
+
 The relationship between a thread and its parent channel is DERIVED from the
 Nostr event graph at evaluation time (the root event's channel reference, e.g.
 its `h` tag) and MUST NOT be serialized into the blob. The blob remains a flat
@@ -157,13 +162,21 @@ required. Marking a channel read therefore clears unread state on all of its
 threads for free, since each thread's effective frontier inherits the channel
 term.
 
+If the thread root event (and therefore its parent channel) cannot be resolved
+from the event graph, `effective(thread:<root>)` degrades to
+`merged[thread:<root>]` alone.
+
 ##### Write Discipline
 
 Marking a thread read MUST advance only its own `thread:<root>` context. It MUST
 NOT advance the parent channel context. Otherwise, reading a single thread would
 silently mark later top-level channel messages as read. Marking a channel read
 advances only the channel context (which the hierarchical rule then propagates
-to threads at read time).
+to threads at read time). Because the channel frontier is the parent term for
+every thread, marking a channel read SHOULD advance the channel context to the
+maximum `created_at` across all messages in the channel, including thread
+replies — otherwise threads whose `latestReplyAt` exceeds the newest top-level
+message remain unread and the channel read does not clear them.
 
 ##### Eviction
 
@@ -183,6 +196,15 @@ treat thread-context eviction as a companion to the existing time-horizon
 pruning, not as a standalone guarantee that the context count or blob size will
 shrink immediately.
 
+To avoid a re-publish loop with peers that still carry an evicted key, an
+incoming context entry whose value is `<= effective(parent(ctx))` MUST NOT by
+itself trigger a re-publish. Clients SHOULD evaluate the Live Subscription
+re-publish trigger and the suppression comparison (Live Subscription and
+Convergence rules 2–3) AFTER applying their eviction policy, so that re-merging
+a dominated key a peer still carries does not force a write that changes nothing
+semantically. This is backwards-safe: it only suppresses writes with no semantic
+effect.
+
 ##### Backwards Compatibility
 
 A client that does not implement this scheme treats a `thread:<root>` key as an
@@ -191,6 +213,31 @@ required by the Merge Rule) and simply computes no thread-level unread state.
 There is no validation change and no interop break: an unaware client and an
 aware client can share a blob and both produce correct results for the contexts
 they understand.
+
+##### Example
+
+Two blobs merge to the following effective state for a thread `X` and its parent
+channel:
+
+```json
+{
+  "thread:X": 100,
+  "<channelId>": 150
+}
+```
+
+The thread's effective frontier is computed through the channel parent term:
+
+```
+effective(thread:X) = max(merged[thread:X], merged[<channelId>])
+                    = max(100, 150) = 150
+```
+
+A thread reply with `created_at = 140` is `<= 150`, so it reads as **read** (the
+channel frontier already covers it). A reply with `created_at = 160` is `> 150`,
+so the thread reads as **unread**. The thread's own entry (`100`) is dominated by
+the channel frontier (`150`) and is therefore inert — a client MAY evict it
+before publishing.
 
 #### Timestamp Accuracy
 
