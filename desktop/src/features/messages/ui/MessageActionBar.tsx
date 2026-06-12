@@ -316,6 +316,10 @@ function QuickReactionButton({
   );
 }
 
+function isCustomEmojiShortcode(emoji: string) {
+  return emoji.startsWith(":") && emoji.endsWith(":");
+}
+
 export function MessageActionBar({
   channelId,
   message,
@@ -351,6 +355,18 @@ export function MessageActionBar({
   const [isDropdownOpen, setIsDropdownOpen] = React.useState(false);
   const customEmoji = useCustomEmoji();
   const quickReactionEmojis = useQuickReactionEmojis(4);
+  const quickReactionItems = React.useMemo(
+    () =>
+      quickReactionEmojis
+        .map((emoji) => ({
+          customEmojiUrl: reactionEmojiUrl(emoji, customEmoji),
+          emoji,
+        }))
+        .filter(
+          (item) => !isCustomEmojiShortcode(item.emoji) || item.customEmojiUrl,
+        ),
+    [customEmoji, quickReactionEmojis],
+  );
   const hasReplyAction = Boolean(onReply);
   const hasReactionAction = Boolean(onReactionSelect);
 
@@ -420,13 +436,13 @@ export function MessageActionBar({
     >
       <div className="overflow-hidden rounded-full border border-border/70 bg-background/95 shadow-xs backdrop-blur-sm supports-[backdrop-filter]:bg-background/85">
         <div className="flex items-center gap-0.5 p-1">
-          {hasReactionAction && quickReactionEmojis.length > 0 ? (
+          {hasReactionAction && quickReactionItems.length > 0 ? (
             <>
               <div className="hidden items-center gap-0.5 sm:flex">
-                {quickReactionEmojis.map((emoji) => (
+                {quickReactionItems.map(({ customEmojiUrl, emoji }) => (
                   <QuickReactionButton
                     active={selectedReactionEmojis.has(emoji)}
-                    customEmojiUrl={reactionEmojiUrl(emoji, customEmoji)}
+                    customEmojiUrl={customEmojiUrl}
                     emoji={emoji}
                     key={emoji}
                     onSelect={handleReactionSelection}
