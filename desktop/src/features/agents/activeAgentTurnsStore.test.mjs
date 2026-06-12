@@ -40,7 +40,7 @@ describe("activeAgentTurnsStore", () => {
       assert.ok(channels.has("c1"));
     });
 
-    it("skips events with seq <= lastProcessedSeq", () => {
+    it("skips events at or below the watermark", () => {
       syncAgentTurnsFromEvents(AGENT, [
         makeEvent({ seq: 5, turnId: "t1", channelId: "c1" }),
       ]);
@@ -68,39 +68,66 @@ describe("activeAgentTurnsStore", () => {
   });
 
   describe("seq restart detection", () => {
-    it("resets lastProcessedSeq when seq regresses (agent restart)", () => {
-      // Process events up to seq 50
+    it("processes post-restart events whose timestamp climbs past the watermark", () => {
+      // Process events up to seq 50.
       syncAgentTurnsFromEvents(AGENT, [
-        makeEvent({ seq: 50, turnId: "t1", channelId: "c1" }),
+        makeEvent({
+          seq: 50,
+          turnId: "t1",
+          channelId: "c1",
+          timestamp: "2024-01-01T00:00:00Z",
+        }),
       ]);
       assert.equal(getActiveChannelsForAgent(AGENT).size, 1);
 
-      // Agent restarts — seq goes back to 1. This should be accepted.
+      // Agent restarts — seq resets to 1, but wall-clock timestamp keeps
+      // climbing. The composite watermark accepts it on timestamp alone.
       syncAgentTurnsFromEvents(AGENT, [
-        makeEvent({ seq: 1, turnId: "t2", channelId: "c2" }),
+        makeEvent({
+          seq: 1,
+          turnId: "t2",
+          channelId: "c2",
+          timestamp: "2024-01-01T00:01:00Z",
+        }),
       ]);
       const channels = getActiveChannelsForAgent(AGENT);
       assert.ok(channels.has("c2"), "post-restart event should be processed");
     });
 
-    it("processes subsequent events after restart detection", () => {
+    it("processes subsequent events after restart", () => {
       syncAgentTurnsFromEvents(AGENT, [
-        makeEvent({ seq: 100, turnId: "t1", channelId: "c1" }),
+        makeEvent({
+          seq: 100,
+          turnId: "t1",
+          channelId: "c1",
+          timestamp: "2024-01-01T00:00:00Z",
+        }),
       ]);
 
-      // Restart: seq goes to 1, then 2, then 3
+      // Restart: seq goes 1, 2, 3 with climbing timestamps.
       syncAgentTurnsFromEvents(AGENT, [
-        makeEvent({ seq: 1, turnId: "t2", channelId: "c2" }),
-        makeEvent({ seq: 2, turnId: "t3", channelId: "c3" }),
+        makeEvent({
+          seq: 1,
+          turnId: "t2",
+          channelId: "c2",
+          timestamp: "2024-01-01T00:01:00Z",
+        }),
+        makeEvent({
+          seq: 2,
+          turnId: "t3",
+          channelId: "c3",
+          timestamp: "2024-01-01T00:01:01Z",
+        }),
         makeEvent({
           seq: 3,
           kind: "turn_completed",
           turnId: "t2",
           channelId: "c2",
+          timestamp: "2024-01-01T00:01:02Z",
         }),
       ]);
       const channels = getActiveChannelsForAgent(AGENT);
-      // t1 still active (not ended), t2 ended, t3 still active
+      // t1 still active (not ended), t2 ended, t3 still active.
       assert.ok(channels.has("c1"));
       assert.ok(!channels.has("c2"));
       assert.ok(channels.has("c3"));
@@ -215,6 +242,90 @@ describe("activeAgentTurnsStore", () => {
       ]);
       assert.ok(called > 0);
       unsub();
+    });
+  });
+
+  describe("replay idempotency", () => {
+    it("replaying the same buffer produces no additional state change or notifications", () => {
+      const buffer = [
+        makeEvent({
+          seq: 1,
+          turnId: "t1",
+          channelId: "c1",
+          timestamp: "2024-01-01T00:00:00Z",
+        }),
+        makeEvent({
+          seq: 2,
+          turnId: "t2",
+          channelId: "c2",
+          timestamp: "2024-01-01T00:00:01Z",
+        }),
+      ];
+
+      // Initial pass.
+      syncAgentTurnsFromEvents(AGENT, buffer);
+      const afterFirst = getActiveChannelsForAgent(AGENT);
+      assert.equal(afterFirst.size, 2);
+
+      // Subscribe, then replay the identical buffer.
+      let notified = 0;
+      const unsub = subscribeActiveAgentTurns(() => {
+        notified++;
+      });
+      syncAgentTurnsFromEvents(AGENT, buffer);
+      unsub();
+
+      assert.equal(notified, 0, "replay must not notify listeners");
+      const afterReplay = getActiveChannelsForAgent(AGENT);
+      assert.equal(
+        afterReplay,
+        afterFirst,
+        "replay must not change turn state (stable reference)",
+      );
+    });
+
+    it("post-restart replay does not reprocess seen events or resurrect evicted turns", () => {
+      // Start a turn, then complete it (turn evicted).
+      syncAgentTurnsFromEvents(AGENT, [
+        makeEvent({
+          seq: 1,
+          turnId: "t1",
+          channelId: "c1",
+          timestamp: "2024-01-01T00:00:00Z",
+        }),
+        makeEvent({
+          seq: 2,
+          kind: "turn_completed",
+          turnId: "t1",
+          channelId: "c1",
+          timestamp: "2024-01-01T00:00:01Z",
+        }),
+      ]);
+      assert.equal(getActiveChannelsForAgent(AGENT).size, 0);
+
+      // Agent restarts. The harness replays its buffer with seq reset to 1,
+      // but the original event timestamps (older than the watermark) are
+      // unchanged. The start event must NOT resurrect the evicted turn.
+      syncAgentTurnsFromEvents(AGENT, [
+        makeEvent({
+          seq: 1,
+          turnId: "t1",
+          channelId: "c1",
+          timestamp: "2024-01-01T00:00:00Z",
+        }),
+        makeEvent({
+          seq: 2,
+          kind: "turn_completed",
+          turnId: "t1",
+          channelId: "c1",
+          timestamp: "2024-01-01T00:00:01Z",
+        }),
+      ]);
+      assert.equal(
+        getActiveChannelsForAgent(AGENT).size,
+        0,
+        "stale replayed start must not resurrect an evicted turn",
+      );
     });
   });
 

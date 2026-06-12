@@ -3,6 +3,7 @@ import * as React from "react";
 import {
   subscribeAgentObserverStore,
   getAgentObserverSnapshot,
+  compareObserverEvents,
 } from "@/features/agents/observerRelayStore";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import type { ObserverEvent } from "./ui/agentSessionTypes";
@@ -29,8 +30,11 @@ const listeners = new Set<() => void>();
 // Only regenerated when the underlying turn map for an agent actually changes.
 const cachedChannelSets = new Map<string, Set<string>>();
 
-// Track which observer events we've already processed (by seq per agent)
-const lastProcessedSeq = new Map<string, number>();
+// Composite watermark per agent: the newest observer event processed, by
+// (timestamp, seq) ordering. An event is processed only if it is strictly
+// newer than this — making full-buffer replays idempotent and post-restart
+// streams (seq resets to 1, timestamp keeps climbing) handled for free.
+const lastProcessed = new Map<string, ObserverEvent>();
 
 let pruneInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -139,22 +143,33 @@ function pruneExpired() {
   }
 }
 
-// INVARIANT: events must be sorted by seq (ascending). syncAgentTurnsFromEvents
-// receives sorted arrays from observerRelayStore. Calling with unsorted events
-// will cause silent data loss.
+// INVARIANT: events must be sorted by (timestamp, seq) ascending.
+// syncAgentTurnsFromEvents receives sorted arrays from observerRelayStore.
+// Calling with unsorted events will cause silent data loss.
 function processEvent(agentPubkey: string, event: ObserverEvent) {
   const key = normalizePubkey(agentPubkey);
-  const lastSeq = lastProcessedSeq.get(key) ?? 0;
 
-  // Detect agent restart: harness always starts seq at 1, so seeing seq=1
-  // after processing higher values means the agent restarted.
-  if (event.seq === 1 && lastSeq > 1) {
-    lastProcessedSeq.set(key, 0);
-  } else if (event.seq <= lastSeq) {
+  // turn_completed / turn_error / agent_panic must evict unconditionally —
+  // gating eviction on the watermark would let a replay resurrect a dead turn.
+  // Eviction is idempotent (deleting an absent turn is a no-op), so replays
+  // stay safe.
+  const isEviction =
+    event.kind === "turn_completed" ||
+    event.kind === "turn_error" ||
+    event.kind === "agent_panic";
+
+  // New-turn creation and activity refresh are gated on the watermark: only
+  // process events strictly newer than the last one seen for this agent.
+  const last = lastProcessed.get(key);
+  if (!isEviction && last && compareObserverEvents(event, last) <= 0) {
     return;
   }
 
-  lastProcessedSeq.set(key, event.seq);
+  // Advance the watermark only for strictly-newer events so out-of-order
+  // evictions don't move it backwards.
+  if (!last || compareObserverEvents(event, last) > 0) {
+    lastProcessed.set(key, event);
+  }
 
   switch (event.kind) {
     case "turn_started":
@@ -278,7 +293,7 @@ export function useActiveAgentTurnsBridge(
 
 export function resetActiveAgentTurnsStore() {
   activeTurnsByAgent.clear();
-  lastProcessedSeq.clear();
+  lastProcessed.clear();
   cachedChannelSets.clear();
   notifyListeners();
 }
