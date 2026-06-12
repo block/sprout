@@ -206,16 +206,18 @@ impl Llm {
 
         // A 401 can mean the local expiry clock disagreed with the server
         // (skew, revocation, a node that never saw the token). On the first
-        // such rejection, force a refresh and retry once. The guard is local
-        // to this call so an earlier turn's 401 can never suppress a later
-        // turn's legitimate retry.
+        // such rejection, force a refresh keyed off the rejected bearer and
+        // retry once. The guard is local to this call so an earlier turn's 401
+        // can never suppress a later turn's legitimate retry. (A 403 is an
+        // authorization verdict — a refresh can't fix it — so `post` maps it
+        // to a plain `Llm` error that this loop propagates without retrying.)
         let mut bearer = self.auth.bearer().await?;
         let mut refreshed = false;
         loop {
             match post(&self.http, &url, body_ref, |r| r.bearer_auth(&bearer)).await {
                 Err(AgentError::LlmAuth(_)) if !refreshed => {
                     refreshed = true;
-                    bearer = self.auth.refresh_now().await?;
+                    bearer = self.auth.refresh_now(&bearer).await?;
                 }
                 result => return result,
             }
@@ -818,7 +820,11 @@ where
             }
         };
         let status = resp.status();
-        if status == 401 || status == 403 {
+        // 401 is refreshable (stale/rejected token); the caller's retry loop
+        // keys off `LlmAuth`. 403 is an authorization verdict (scope, quota,
+        // entitlement) that a token refresh can't fix, so surface it as a
+        // terminal `Llm` error and don't tempt a pointless refresh + retry.
+        if status == 401 {
             return Err(AgentError::LlmAuth(read_error_body(resp).await));
         }
         if (status.is_server_error() || status == 429) && attempt + 1 < MAX_RETRIES {
@@ -1492,7 +1498,7 @@ mod tests {
         async fn bearer(&self) -> Result<String, AgentError> {
             Ok("stale".into())
         }
-        async fn refresh_now(&self) -> Result<String, AgentError> {
+        async fn refresh_now(&self, _rejected: &str) -> Result<String, AgentError> {
             self.refreshes
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok("fresh".into())
@@ -1622,6 +1628,6 @@ mod tests {
     #[tokio::test]
     async fn static_token_source_refresh_now_returns_static_token() {
         let src = StaticTokenSource::new("static-key");
-        assert_eq!(src.refresh_now().await.unwrap(), "static-key");
+        assert_eq!(src.refresh_now("rejected").await.unwrap(), "static-key");
     }
 }

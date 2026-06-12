@@ -46,15 +46,19 @@ pub trait TokenSource: Send + Sync {
 
     /// Force a fresh bearer after the server rejected the current one (401).
     ///
-    /// Unlike [`bearer`](Self::bearer), which trusts the local expiry clock,
-    /// this is driven by the server's verdict: the cached token looked valid
-    /// to us but the provider rejected it (clock skew, server-side revocation,
-    /// or a load-balancer node that never saw it). Implementations must obtain
-    /// a new token without any interactive step, so a headless harness never
-    /// hangs. The default returns the existing bearer — correct for sources
-    /// that can't refresh (a static key); the caller's retry then fails
-    /// terminally rather than looping.
-    async fn refresh_now(&self) -> Result<String, AgentError> {
+    /// `rejected` is the exact access token that just got the 401. Unlike
+    /// [`bearer`](Self::bearer), which trusts the local expiry clock, this is
+    /// driven by the server's verdict: the cached token looked valid to us
+    /// (well within its local expiry) but the provider rejected it — clock
+    /// skew, server-side revocation, or a node that never saw it. The clock
+    /// therefore can't decide whether to refresh; the caller passes the
+    /// rejected token so the impl can refresh unless a concurrent caller has
+    /// *already* replaced it. Implementations must obtain a new token without
+    /// any interactive step, so a headless harness never hangs. The default
+    /// returns the existing bearer — correct for sources that can't refresh
+    /// (a static key); the caller's retry then fails terminally rather than
+    /// looping.
+    async fn refresh_now(&self, _rejected: &str) -> Result<String, AgentError> {
         self.bearer().await
     }
 }
@@ -249,7 +253,9 @@ impl TokenSource for PkceOAuthTokenSource {
             }
         }
 
-        // 3. Try refresh if we have a refresh token.
+        // 3. Try refresh if we have a refresh token. Discover endpoints once
+        //    here — deliberately hoisted above the refresh-token check so the
+        //    browser flow at step 5 (which also needs them) reuses this call.
         let endpoints = self.endpoints().await?;
         let refresh = state.as_ref().and_then(|t| t.refresh_token.clone());
         if let Some(rt) = refresh {
@@ -283,33 +289,40 @@ impl TokenSource for PkceOAuthTokenSource {
 
     /// Force-refresh after a 401, never touching the browser flow.
     ///
-    /// Holds the lock for the whole check→refresh→save sequence so concurrent
-    /// callers coalesce: the first refreshes; the rest see the fresh token on
-    /// the re-check and return it without a second grant. On any failure the
-    /// refresh token is preserved (never nulled) and the error is terminal
-    /// `LlmAuth` — no browser, no hang.
-    async fn refresh_now(&self) -> Result<String, AgentError> {
+    /// `rejected` is the access token the server just 401'd. Coalescing keys
+    /// off token *identity*, not the expiry clock: a 401 means the token was
+    /// rejected while it still looked locally fresh, so `is_expired()` would
+    /// say "keep it" and no grant would ever run. Instead, under the lock we
+    /// compare the current cached token to `rejected` — if they differ, a
+    /// concurrent caller (this process or a sibling) already refreshed, so we
+    /// return the new token without burning a second grant. If they still
+    /// match, this is the rejected token and we run the refresh-token grant
+    /// unconditionally. The whole check→refresh→save runs under one lock hold
+    /// so concurrent callers serialize. On any failure the refresh token is
+    /// preserved (never nulled) and the error is terminal `LlmAuth` — no
+    /// browser, no hang.
+    async fn refresh_now(&self, rejected: &str) -> Result<String, AgentError> {
         let mut state = self.state.lock().await;
 
-        // 1. A concurrent caller (this process or a sibling) may have already
-        //    refreshed between our 401 and acquiring the lock. Trust a fresh
-        //    in-memory or on-disk token rather than burning another grant.
+        // 1. Coalesce by identity: if the cached token (in-memory, then disk)
+        //    is no longer the one the server rejected, someone already
+        //    refreshed it. Return that instead of grabbing another grant.
         if let Some(tok) = state.as_ref() {
-            if !is_expired(tok) {
+            if tok.access_token != rejected {
                 return Ok(tok.access_token.clone());
             }
         }
         if let Some(disk_tok) = read_cache(&self.cache_path) {
-            if !is_expired(&disk_tok) {
+            if disk_tok.access_token != rejected {
                 let bearer = disk_tok.access_token.clone();
                 *state = Some(disk_tok);
                 return Ok(bearer);
             }
         }
 
-        // 2. Run the refresh-token grant. A 401 means the cached token was
-        //    rejected before its local expiry, so the in-memory copy can look
-        //    "fresh" here; read the refresh token straight off it regardless.
+        // 2. The cached token is still the rejected one. Run the refresh-token
+        //    grant unconditionally — the expiry clock can't be trusted here, a
+        //    locally-fresh token is exactly what got 401'd.
         let refresh = state.as_ref().and_then(|t| t.refresh_token.clone());
         let Some(rt) = refresh else {
             return Err(AgentError::LlmAuth(

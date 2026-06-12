@@ -209,7 +209,7 @@ async fn refreshed_token_is_persisted_to_disk() {
 }
 
 #[tokio::test]
-async fn refresh_now_runs_grant_and_keeps_refresh_token() {
+async fn refresh_now_runs_grant_on_unexpired_rejected_token() {
     let tmp = TempDir::new().unwrap();
 
     let (base, refresh_counter) = spawn_oidc().await;
@@ -221,23 +221,31 @@ async fn refresh_now_runs_grant_and_keeps_refresh_token() {
         cache_dir_override: Some(tmp.path().to_path_buf()),
     };
 
-    // A token the server has rejected (401). It's past local expiry too, so
-    // the freshness re-check can't short-circuit; the refresh-token grant
-    // must run. The stub never serves a browser flow, so a fresh token here
-    // proves refresh_now() took the grant path, not the interactive one.
+    // The exact 401 case this whole change exists to fix: a token that is
+    // still locally *unexpired* but the server rejected it (skew, revocation,
+    // a node that never saw it). is_expired() says "keep it", so a clock-based
+    // gate would no-op and the agent would die. refresh_now() must instead key
+    // off identity — the cached token equals the rejected one — and run the
+    // grant anyway. The stub never serves a browser flow, so a fresh token
+    // here proves the refresh-token grant ran, not the interactive path.
+    let future = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 3600;
     let path = cache_path_for(tmp.path(), &cfg);
     seed_cache(
         &path,
         json!({
             "access_token": "rejected",
             "refresh_token": "valid-refresh",
-            "expires_at": 1u64,
+            "expires_at": future,
         }),
     );
 
     let src = PkceOAuthTokenSource::new(cfg).unwrap();
-    let bearer = src.refresh_now().await.unwrap();
-    assert_eq!(bearer, "fresh-token-1");
+    let bearer = src.refresh_now("rejected").await.unwrap();
+    assert_eq!(bearer, "fresh-token-1", "grant ran despite local freshness");
     assert_eq!(refresh_counter.load(Ordering::SeqCst), 1, "grant ran once");
 
     // The refresh token was preserved (rotated, not discarded): the saved
@@ -250,7 +258,7 @@ async fn refresh_now_runs_grant_and_keeps_refresh_token() {
 }
 
 #[tokio::test]
-async fn refresh_now_coalesces_when_token_already_fresh() {
+async fn refresh_now_coalesces_when_another_caller_already_refreshed() {
     let tmp = TempDir::new().unwrap();
 
     let (base, refresh_counter) = spawn_oidc().await;
@@ -262,9 +270,12 @@ async fn refresh_now_coalesces_when_token_already_fresh() {
         cache_dir_override: Some(tmp.path().to_path_buf()),
     };
 
-    // A concurrent caller already refreshed: the cached token is unexpired.
-    // refresh_now() must return it without burning another grant, so N
-    // concurrent 401s collapse onto one refresh.
+    // A concurrent caller already replaced the rejected token: the cached
+    // token differs from the one we hold. Coalesce by identity — return the
+    // new token without burning a second grant, so N concurrent 401s on the
+    // same stale token collapse onto one refresh. Note the cached token is
+    // *unexpired* here too, so this proves coalescing keys off identity, not
+    // the clock (which agrees with both the old and new token).
     let future = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -274,19 +285,19 @@ async fn refresh_now_coalesces_when_token_already_fresh() {
     seed_cache(
         &path,
         json!({
-            "access_token": "already-fresh",
+            "access_token": "already-refreshed",
             "refresh_token": "rt",
             "expires_at": future,
         }),
     );
 
     let src = PkceOAuthTokenSource::new(cfg).unwrap();
-    let bearer = src.refresh_now().await.unwrap();
-    assert_eq!(bearer, "already-fresh");
+    let bearer = src.refresh_now("the-rejected-one").await.unwrap();
+    assert_eq!(bearer, "already-refreshed");
     assert_eq!(
         refresh_counter.load(Ordering::SeqCst),
         0,
-        "no grant when a fresh token is already cached"
+        "no grant when a sibling already refreshed the rejected token"
     );
 }
 
@@ -303,9 +314,10 @@ async fn refresh_now_without_refresh_token_is_terminal() {
         cache_dir_override: Some(tmp.path().to_path_buf()),
     };
 
-    // Expired token, no refresh token to fall back on. refresh_now() must
-    // fail terminally (LlmAuth) rather than open a browser — the headless
-    // hang this whole change exists to prevent.
+    // The rejected token is still the cached one and there's no refresh token
+    // to fall back on. refresh_now() must fail terminally (LlmAuth) rather
+    // than open a browser — the headless hang this whole change exists to
+    // prevent.
     let path = cache_path_for(tmp.path(), &cfg);
     seed_cache(
         &path,
@@ -317,7 +329,7 @@ async fn refresh_now_without_refresh_token_is_terminal() {
     );
 
     let src = PkceOAuthTokenSource::new(cfg).unwrap();
-    let err = src.refresh_now().await.unwrap_err();
+    let err = src.refresh_now("rejected").await.unwrap_err();
     // `types::AgentError` isn't a public path; match on its Display, which
     // prefixes `LlmAuth` variants with "llm auth:". A terminal LlmAuth (not
     // a browser hang) is the whole point of this path.
