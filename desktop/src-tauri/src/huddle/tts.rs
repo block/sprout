@@ -15,7 +15,10 @@
 //!          synthesizing ahead — playback of item N overlaps synthesis of
 //!          item N+1
 //!   → tts_active = true while audio is queued/playing, false when idle
-//!   → cancel flag: player.clear() + drain queue + player.play() (un-pause)
+//!   → cancel flag: a 10 ms barge-in monitor thread silences the player and
+//!     releases tts_active on the flag's rising edge (~15 ms flag-to-silence,
+//!     even mid-sentence while the worker is blocked in synth_chunk); the
+//!     worker then consumes the flag — drain queue + clear + play (un-pause)
 //! ```
 //!
 //! Lookahead pipelining spans *items*, not just sentences within one item:
@@ -52,6 +55,13 @@ const TEXT_QUEUE_DEPTH: usize = 8;
 
 /// How long the worker waits on the text channel before checking the shutdown flag.
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
+
+/// Poll interval of the barge-in monitor thread. Bounds flag-to-silence
+/// latency: a cancel is noticed within one tick, and rodio's internal
+/// `periodic_access` wrapper stops the in-flight source within a further
+/// ~5 ms — so playing audio dies ~15 ms after the flag is set, even while
+/// the worker is blocked inside `synth_chunk`.
+const MONITOR_TICK: Duration = Duration::from_millis(10);
 
 /// Pocket TTS is a one-step consistency model, not diffusion. Kept for API compat.
 const SYNTH_STEPS: usize = 1;
@@ -323,7 +333,10 @@ fn tts_worker(
     // buffers from all text items append here, and rodio plays them gaplessly.
     // Persistence is what enables cross-item pipelining: the worker never
     // waits for one item to drain before synthesizing the next.
-    let player = Player::connect_new(sink_handle.mixer());
+    //
+    // Shared (Arc) with the barge-in monitor thread below, which needs to
+    // silence it while this thread is blocked inside `synth_chunk`.
+    let player = Arc::new(Player::connect_new(sink_handle.mixer()));
 
     // Prime the audio output stream with a short silent buffer.
     // On macOS, CoreAudio initializes the output device lazily on first use.
@@ -338,6 +351,45 @@ fn tts_worker(
         while !player.empty() {
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    // ── 3b. Barge-in monitor thread ───────────────────────────────────────────
+    //
+    // The worker loop only observes `cancel` between sentences — while it is
+    // blocked inside `synth_chunk` (hundreds of ms for a long sentence),
+    // nothing would silence the audio that is already playing. The monitor
+    // closes that gap: every MONITOR_TICK it checks the flag and, while set,
+    // silences the player and releases the mic gate. It does NOT consume the
+    // flag — the worker still owns that (drain queue, reset lead-in), so the
+    // monitor keeps re-clearing until the worker catches up, which also
+    // covers a sentence appended in the race window after the worker's own
+    // post-synthesis cancel check.
+    let monitor_stop = Arc::new(AtomicBool::new(false));
+    let monitor = {
+        let player = Arc::clone(&player);
+        let cancel = Arc::clone(&cancel);
+        let tts_active = Arc::clone(&tts_active);
+        let stop = Arc::clone(&monitor_stop);
+        thread::Builder::new()
+            .name("tts-barge-in-monitor".into())
+            .spawn(move || {
+                while !stop.load(Ordering::Acquire) {
+                    if cancel.load(Ordering::Acquire) {
+                        // clear() pauses the persistent player; play() un-pauses
+                        // (see handle_cancel_or_shutdown). Idempotent — safe to
+                        // repeat every tick until the worker consumes the flag.
+                        player.clear();
+                        player.play();
+                        tts_active.store(false, Ordering::Release);
+                    }
+                    thread::sleep(MONITOR_TICK);
+                }
+            })
+    };
+    if let Err(ref e) = monitor {
+        // Degraded but functional: barge-in still works between sentences
+        // via the worker's own checks, just not mid-synthesis.
+        eprintln!("buzz-desktop: TTS barge-in monitor failed to spawn: {e}");
     }
 
     // ── 4. Main loop ──────────────────────────────────────────────────────────
@@ -431,6 +483,16 @@ fn tts_worker(
 
             match engine.synth_chunk(text, "en", &style, SYNTH_STEPS, SYNTH_SPEED) {
                 Ok(samples) if !samples.is_empty() => {
+                    // A barge-in may have arrived during synthesis (the
+                    // blocking window the monitor thread exists for). Don't
+                    // append the now-stale sentence — the human interrupted;
+                    // speaking it anyway would talk over them. The flag is
+                    // deliberately NOT consumed here: the loop-top
+                    // handle_cancel_or_shutdown does the full consume
+                    // (drain queue, reset lead-in) on the next iteration.
+                    if cancel.load(Ordering::Acquire) {
+                        break;
+                    }
                     let mut boosted = apply_playback_gain(samples);
                     // Fade-out only — fading-in would attenuate the consonant
                     // onset (see `apply_fade_out` docstring + the
@@ -462,6 +524,13 @@ fn tts_worker(
         if shutdown.load(Ordering::Acquire) {
             break;
         }
+    }
+
+    // Stop the barge-in monitor before exiting — it holds a Player clone,
+    // and an orphaned monitor would keep ticking against a dead pipeline.
+    monitor_stop.store(true, Ordering::Release);
+    if let Ok(handle) = monitor {
+        let _ = handle.join();
     }
 
     tts_active.store(false, Ordering::Release);

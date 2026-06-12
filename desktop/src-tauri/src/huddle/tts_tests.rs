@@ -464,6 +464,64 @@ fn on_receipt_check_releases_mic_gate_before_synthesis() {
     );
 }
 
+// ── Barge-in monitor ──────────────────────────────────────────────────────
+//
+// Models one tick of the tts-barge-in-monitor thread in `tts_worker`. The
+// contract (must match production):
+//   - cancel set   → silence player + release tts_active, flag NOT consumed
+//     (the worker owns consumption: queue drain + lead-in reset)
+//   - cancel clear → no-op
+// Not consuming the flag is what makes the monitor idempotent across ticks
+// and closes the race where the worker appends a sentence after the
+// monitor's clear but before consuming the flag.
+
+/// Test-side model of one monitor tick. `player_cleared` stands in for the
+/// `clear()+play()` pair on the real Player.
+fn simulate_monitor_tick(cancel: &AtomicBool, tts_active: &AtomicBool, player_cleared: &mut bool) {
+    if cancel.load(Ordering::Acquire) {
+        *player_cleared = true;
+        tts_active.store(false, Ordering::Release);
+    }
+}
+
+/// Cancel set → monitor silences playback and releases the mic gate, but
+/// leaves the flag for the worker to consume.
+#[test]
+fn monitor_tick_silences_and_releases_without_consuming_cancel() {
+    let cancel = AtomicBool::new(true);
+    let tts_active = AtomicBool::new(true);
+    let mut player_cleared = false;
+
+    simulate_monitor_tick(&cancel, &tts_active, &mut player_cleared);
+
+    assert!(player_cleared, "monitor must silence in-flight audio");
+    assert!(
+        !tts_active.load(Ordering::Acquire),
+        "monitor must release the mic gate immediately on barge-in",
+    );
+    assert!(
+        cancel.load(Ordering::Acquire),
+        "monitor must NOT consume the cancel flag — the worker owns \
+         queue drain and lead-in reset",
+    );
+}
+
+/// No cancel → monitor is a pure no-op.
+#[test]
+fn monitor_tick_noop_without_cancel() {
+    let cancel = AtomicBool::new(false);
+    let tts_active = AtomicBool::new(true);
+    let mut player_cleared = false;
+
+    simulate_monitor_tick(&cancel, &tts_active, &mut player_cleared);
+
+    assert!(!player_cleared);
+    assert!(
+        tts_active.load(Ordering::Acquire),
+        "monitor must not touch the mic gate while no barge-in is pending",
+    );
+}
+
 /// Full cycle: remote speech → cancel → TTS consumption → new TTS → cancel again.
 /// Validates the cancel mechanism is reusable across TTS sessions.
 /// The false→true transition on tts_active auto-clears counters — no
