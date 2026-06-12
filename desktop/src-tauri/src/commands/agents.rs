@@ -156,18 +156,27 @@ fn build_deploy_payload(
         crate::managed_agents::resolve_persona_env(app, record.persona_id.as_deref())?;
     let merged_env = crate::managed_agents::merged_user_env(&persona_env, &record.env_vars);
 
-    // Resolve effective model/provider from the persona's structured fields.
-    // Agent record's model takes precedence (user override via UI).
-    let (effective_model, effective_provider) = if let Some(ref pid) = record.persona_id {
+    // Resolve the persona's structured provider/model so the remote provider
+    // receives the same authoritative values that local spawn derives from
+    // `runtime_metadata_env_vars`. Without this, remote deploy would rely on
+    // stale derived env copies in `env_vars` (or have no provider at all for
+    // imported personas whose derived keys were filtered at import time).
+    //
+    // Precedence mirrors local spawn: persona structured model is authoritative
+    // when present; the agent record's `model` is a fallback for personas that
+    // don't specify one (or when no persona is linked).
+    let (effective_model, effective_provider) = if let Some(pid) = record.persona_id.as_deref() {
         let personas = load_personas(app).map_err(|e| {
-            format!("failed to load personas for deploy payload model resolution: {e}")
+            format!(
+                "failed to load personas while building deploy payload for persona `{pid}`: {e}"
+            )
         })?;
-        let persona = personas.iter().find(|p| p.id == *pid);
-        let model = record
-            .model
-            .clone()
-            .or_else(|| persona.and_then(|p| p.model.clone()));
-        let provider = persona.and_then(|p| p.provider.clone());
+        let persona = personas
+            .into_iter()
+            .find(|p| p.id == pid)
+            .ok_or_else(|| format!("persona `{pid}` not found while building deploy payload"))?;
+        let model = persona.model.clone().or(record.model.clone());
+        let provider = persona.provider;
         (model, provider)
     } else {
         (record.model.clone(), None)
@@ -182,6 +191,9 @@ fn build_deploy_payload(
         "agent_args": &record.agent_args,
         "system_prompt": &record.system_prompt,
         "model": effective_model,
+        // Structured provider from the persona record. Providers that don't
+        // yet read this field will fall back to env_vars or their own default
+        // — no protocol break.
         "provider": effective_provider,
         "turn_timeout_seconds": record.turn_timeout_seconds,
         "idle_timeout_seconds": record.idle_timeout_seconds,
@@ -1033,6 +1045,7 @@ pub fn stop_managed_agent(
         }
         stop_managed_agent_process(&app, record, &mut runtimes)?;
     }
+    state.clear_session_cache(&pubkey);
     save_managed_agents(&app, &records)?;
     let record = records
         .iter()
@@ -1082,10 +1095,9 @@ pub fn delete_managed_agent(
         }
 
         if let Some(record) = records.iter_mut().find(|record| record.pubkey == pubkey) {
-            // For local agents: kills the process. For remote agents: no-op (the frontend
-            // sends !shutdown via WebSocket before calling delete). Either way, safe.
             stop_managed_agent_process(&app, record, &mut runtimes)?;
         }
+        state.clear_session_cache(&pubkey);
         let initial_len = records.len();
         records.retain(|record| record.pubkey != pubkey);
         if records.len() == initial_len {

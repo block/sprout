@@ -350,8 +350,10 @@ jobs:
           wait_healthy "Redis" "buzz-redis"
           wait_healthy "Typesense" "buzz-typesense"
           wait_healthy "MinIO" "buzz-minio"
+      - name: Create pgschema plan database
+        run: PGPASSWORD=buzz_dev createdb -h localhost -p 5432 -U buzz pgschema_plan
       - name: Apply database schema
-        run: ./bin/pgschema apply --file schema/schema.sql --auto-approve
+        run: ./bin/pgschema apply --file schema/schema.sql --auto-approve --plan-host localhost --plan-port 5432 --plan-user buzz --plan-password buzz_dev --plan-db pgschema_plan
         env:
           PGHOST: localhost
           PGPORT: "5432"
