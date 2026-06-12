@@ -232,10 +232,15 @@ jobs:
           if [[ -z "$NOTES" ]]; then
             NOTES="Buzz Desktop v${VERSION}"
           fi
+          PRERELEASE_FLAGS=()
+          if [[ "$VERSION" =~ -(test|alpha|beta|rc)([.-]|$) ]]; then
+            PRERELEASE_FLAGS=(--prerelease --latest=false)
+          fi
           gh release create "v${VERSION}" \
             --target "$RELEASE_SHA" \
             --title "Buzz Desktop v${VERSION}" \
             --notes "$NOTES" \
+            "${PRERELEASE_FLAGS[@]}" \
             "$DMG_PATH"
 
       - name: Upload updater archive to rolling release
