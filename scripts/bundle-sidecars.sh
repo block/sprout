@@ -14,9 +14,16 @@ else
     SRC_DIR="target/${TARGET}/release"
 fi
 
+# MSVC emits <name>.exe; Tauri's externalBin then expects binaries/<name>-<triple>.exe.
+if [[ "$TARGET" == *windows* ]]; then
+    EXE=".exe"
+else
+    EXE=""
+fi
+
 missing=()
 for bin in "${SIDECARS[@]}"; do
-    [[ -f "$SRC_DIR/$bin" ]] || missing+=("$bin")
+    [[ -f "$SRC_DIR/${bin}${EXE}" ]] || missing+=("${bin}${EXE}")
 done
 if [[ ${#missing[@]} -gt 0 ]]; then
     echo "Error: missing release binaries in $SRC_DIR: ${missing[*]}" >&2
@@ -26,6 +33,6 @@ fi
 
 mkdir -p "$BINARIES_DIR"
 for bin in "${SIDECARS[@]}"; do
-    cp "$SRC_DIR/$bin" "$BINARIES_DIR/${bin}-${TARGET}"
+    cp "$SRC_DIR/${bin}${EXE}" "$BINARIES_DIR/${bin}-${TARGET}${EXE}"
 done
 echo "Sidecars bundled for $TARGET"
