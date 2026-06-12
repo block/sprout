@@ -3,8 +3,16 @@ import { ChevronDown } from "lucide-react";
 import { Spinner } from "@/shared/ui/spinner";
 import React from "react";
 
-import type { AgentModelsResponse, ManagedAgent } from "@/shared/api/types";
-import { getAgentModels, updateManagedAgent } from "@/shared/api/tauri";
+import type {
+  AgentModelsResponse,
+  ManagedAgent,
+  RuntimeConfigSurface,
+} from "@/shared/api/types";
+import {
+  getAgentConfigSurface,
+  getAgentModels,
+  updateManagedAgent,
+} from "@/shared/api/tauri";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -23,6 +31,8 @@ export function ModelPicker({
 }) {
   const [modelsData, setModelsData] =
     React.useState<AgentModelsResponse | null>(null);
+  const [configSurface, setConfigSurface] =
+    React.useState<RuntimeConfigSurface | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
@@ -49,9 +59,21 @@ export function ModelPicker({
       }
 
       setHasRequestedModels(true);
+      // Fetch config surface for model provenance data alongside the model list.
+      // The config surface call is best-effort — a failure doesn't block model
+      // selection, it just means we won't show the origin badge.
+      void getAgentConfigSurface(agent.pubkey)
+        .then((surface) => {
+          if (!surface.isPreSpawn) {
+            setConfigSurface(surface);
+          }
+        })
+        .catch(() => {
+          // Intentionally swallowed — provenance badge is informational only.
+        });
       void fetchModels();
     },
-    [fetchModels, loading, modelsData],
+    [agent.pubkey, fetchModels, loading, modelsData],
   );
 
   const currentValue = agent.model ?? modelsData?.agentDefaultModel ?? "";
@@ -62,6 +84,22 @@ export function ModelPicker({
       : hasRequestedModels && loading
         ? "Loading..."
         : "Auto");
+
+  // Provenance label shown only for post-spawn agents where the model origin
+  // is known from the config surface and the source is not a user-explicit
+  // Buzz setting (which is already self-evident from the picker state).
+  const modelOriginLabel = React.useMemo(() => {
+    const origin = configSurface?.normalized.model?.origin;
+    if (!origin || origin === "buzzExplicit") return null;
+    const labels: Record<string, string> = {
+      acpNativeRead: "from ACP",
+      acpConfigOption: "from ACP config",
+      envVar: "from env",
+      configFile: "from config file",
+      personaDefault: "persona default",
+    };
+    return labels[origin] ?? null;
+  }, [configSurface]);
 
   const handleModelChange = async (modelId: string) => {
     setSaving(true);
@@ -93,6 +131,11 @@ export function ModelPicker({
             variant="ghost"
           >
             <span className="truncate">{displayLabel}</span>
+            {modelOriginLabel ? (
+              <span className="shrink-0 text-[10px] text-muted-foreground/70">
+                ({modelOriginLabel})
+              </span>
+            ) : null}
             <ChevronDown className="h-3 w-3 text-muted-foreground" />
           </Button>
         </DropdownMenuTrigger>
