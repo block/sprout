@@ -142,7 +142,9 @@ fn patch_json_records(
     }
     if changed {
         if let Ok(bytes) = serde_json::to_vec_pretty(&records) {
-            let _ = std::fs::write(path, bytes);
+            if let Err(e) = crate::managed_agents::atomic_write_json(path, &bytes) {
+                eprintln!("buzz-desktop: patch-json-records: {e}");
+            }
         }
     }
 }
@@ -496,15 +498,12 @@ pub fn migrate_packs_to_teams(app: &tauri::AppHandle) {
     let Ok(current_dir) = app.path().app_data_dir() else {
         return;
     };
-    let canonical_dir = match canonical_dev_data_dir(&current_dir) {
-        Some(dir) if dir.exists() => dir,
-        _ => current_dir,
-    };
+    let target_dir = reconcile_target_dir(&current_dir);
 
-    let packs_dir = canonical_dir.join("agents/packs");
-    let teams_dir = canonical_dir.join("agents/teams");
-    let personas_path = canonical_dir.join("agents/personas.json");
-    let agents_path = canonical_dir.join("agents/managed-agents.json");
+    let packs_dir = target_dir.join("agents/packs");
+    let teams_dir = target_dir.join("agents/teams");
+    let personas_path = target_dir.join("agents/personas.json");
+    let agents_path = target_dir.join("agents/managed-agents.json");
 
     // Check if migration is needed: packs dir exists OR agents JSON has old field names
     let packs_dir_exists = packs_dir.exists() && !packs_dir.is_symlink();

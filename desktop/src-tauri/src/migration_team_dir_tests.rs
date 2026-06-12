@@ -299,6 +299,40 @@ fn team_dir_reconcile_skips_dangling_candidate_symlink() {
     assert_eq!(records[0]["persona_pack_path"], stale_path);
 }
 
+#[test]
+fn team_dir_reconcile_through_symlink_preserves_symlink() {
+    // Dev worktree instances reach the canonical store through a symlinked
+    // managed-agents.json — the patched write must land in the canonical
+    // file and leave the symlink in place.
+    let parent = tempfile::tempdir().unwrap();
+    let canonical = parent.path().join(CANONICAL_DEV_IDENTIFIER);
+    let worktree = parent
+        .path()
+        .join("xyz.block.buzz.app.dev.worktree-my-branch");
+    std::fs::create_dir_all(canonical.join("agents/teams/com.example.team")).unwrap();
+    std::fs::create_dir_all(worktree.join("agents")).unwrap();
+
+    let stale_path = format!("{}/agents/packs/com.example.team", worktree.display());
+    let expected_path = format!("{}/agents/teams/com.example.team", canonical.display());
+
+    write_agents_json(
+        &canonical,
+        &serde_json::json!([{
+            "name": "Paul",
+            "persona_pack_path": stale_path
+        }]),
+    );
+    let canonical_store = canonical.join("agents/managed-agents.json");
+    let worktree_store = worktree.join("agents/managed-agents.json");
+    std::os::unix::fs::symlink(&canonical_store, &worktree_store).unwrap();
+
+    reconcile_team_dirs_in_file(&worktree_store, &canonical);
+
+    assert!(worktree_store.is_symlink());
+    let records = read_agents_json(&canonical);
+    assert_eq!(records[0]["persona_team_dir"], expected_path);
+}
+
 // ── reconcile_target_dir tests ───────────────────────────────────────
 
 #[test]
