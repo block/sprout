@@ -24,6 +24,8 @@ jobs:
       id-token: write # required by block/apple-codesign-action for OIDC
     outputs:
       version: ${{ steps.version.outputs.version }}
+      archive_name: ${{ steps.artifacts.outputs.archive_name }}
+      sig: ${{ steps.read-sig.outputs.sig }}
     steps:
       - name: Determine version
         id: version
@@ -68,7 +70,7 @@ jobs:
         run: cd desktop && node scripts/build-release-config.mjs
         env:
           BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
-          BUZZ_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/buzz-desktop-latest/latest.json
+          BUZZ_UPDATER_ENDPOINT: https://github.com/block/buzz/releases/download/buzz-desktop-latest/latest.json
 
       - name: Build sidecars
         run: |
@@ -119,7 +121,7 @@ jobs:
         run: cd desktop && pnpm tauri build --verbose --no-sign --config src-tauri/tauri.release.conf.json
         env:
           BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
-          BUZZ_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/buzz-desktop-latest/latest.json
+          BUZZ_UPDATER_ENDPOINT: https://github.com/block/buzz/releases/download/buzz-desktop-latest/latest.json
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
@@ -209,18 +211,11 @@ jobs:
           echo "archive_name=$(basename "$ARCHIVE")" >> "$GITHUB_OUTPUT"
           echo "sig=$SIG" >> "$GITHUB_OUTPUT"
 
-      - name: Generate latest.json
-        run: |
-          bash desktop/scripts/generate-oss-latest-json.sh \
-            "$VERSION" \
-            "$SIG_PATH" \
-            "https://github.com/block/sprout/releases/download/buzz-desktop-latest/$ARCHIVE_NAME" \
-            > latest.json
-          cat latest.json
+      - name: Read updater signature
+        id: read-sig
+        run: echo "sig=$(cat "$SIG_PATH")" >> "$GITHUB_OUTPUT"
         env:
-          VERSION: ${{ steps.version.outputs.version }}
           SIG_PATH: ${{ steps.artifacts.outputs.sig }}
-          ARCHIVE_NAME: ${{ steps.artifacts.outputs.archive_name }}
 
       - name: Create versioned GitHub release
         env:
@@ -242,7 +237,7 @@ jobs:
             --notes "$NOTES" \
             "$DMG_PATH"
 
-      - name: Update rolling release for auto-updater
+      - name: Upload updater archive to rolling release
         run: |
           gh release create buzz-desktop-latest \
             --prerelease \
@@ -250,7 +245,6 @@ jobs:
             --notes "Rolling release for the Tauri auto-updater. Do not download manually — use the versioned release instead." \
             2>/dev/null || true
           gh release upload buzz-desktop-latest \
-            latest.json \
             "$ARCHIVE_PATH" \
             "$SIG_PATH" \
             --clobber
@@ -267,6 +261,9 @@ jobs:
     permissions:
       contents: write
       id-token: write # required by block/apple-codesign-action for OIDC
+    outputs:
+      archive_name: ${{ steps.artifacts.outputs.archive_name }}
+      sig: ${{ steps.read-sig.outputs.sig }}
     env:
       VERSION: ${{ needs.release.outputs.version }}
       TARGET: x86_64-apple-darwin
@@ -293,7 +290,7 @@ jobs:
         run: cd desktop && node scripts/build-release-config.mjs
         env:
           BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
-          BUZZ_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/buzz-desktop-latest/latest.json
+          BUZZ_UPDATER_ENDPOINT: https://github.com/block/buzz/releases/download/buzz-desktop-latest/latest.json
 
       - name: Build sidecars
         run: |
@@ -304,7 +301,7 @@ jobs:
         run: cd desktop && pnpm tauri build --verbose --no-sign --target "$TARGET" --config src-tauri/tauri.release.conf.json
         env:
           BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
-          BUZZ_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/buzz-desktop-latest/latest.json
+          BUZZ_UPDATER_ENDPOINT: https://github.com/block/buzz/releases/download/buzz-desktop-latest/latest.json
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
@@ -332,11 +329,13 @@ jobs:
           entitlements-plist-path: desktop/src-tauri/Entitlements.plist
           artifact-name: buzz-${{ github.sha }}-${{ github.run_id }}-x64
 
-      - name: Replace DMG and signed .app
+      - name: Replace DMG and rebuild updater archive
         env:
           SIGNED_DMG: ${{ steps.codesign.outputs.signed-dmg-path }}
           SIGNED_APP_ZIP: ${{ steps.codesign.outputs.signed-artifact-path }}
           UNSIGNED_DMG: ${{ steps.unsigned.outputs.dmg }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           APP_DIR="desktop/src-tauri/target/${TARGET}/release/bundle/macos"
@@ -344,13 +343,18 @@ jobs:
           # Replace the unsigned DMG with the signed/notarized one.
           cp "$SIGNED_DMG" "$UNSIGNED_DMG"
 
-          # Swap the unsigned .app for the signed .app from the action's zip,
-          # so the verify step below checks the signed bundle (matches arm64).
+          # Swap the unsigned .app for the signed .app from the action's zip.
           EXTRACT_DIR="${RUNNER_TEMP}/signed-app-extract-x64"
           rm -rf "$EXTRACT_DIR" && mkdir -p "$EXTRACT_DIR"
           ditto -x -k "$SIGNED_APP_ZIP" "$EXTRACT_DIR"
           rm -rf "${APP_DIR}/Buzz.app"
           cp -R "${EXTRACT_DIR}/Buzz.app" "${APP_DIR}/Buzz.app"
+
+          # Rebuild the updater archive from the signed .app and re-sign with the Tauri updater key.
+          rm -f "${APP_DIR}/Buzz.app.tar.gz" "${APP_DIR}/Buzz.app.tar.gz.sig"
+          (cd "$APP_DIR" && tar -czf Buzz.app.tar.gz Buzz.app)
+          TARBALL_ABS="$(pwd)/${APP_DIR}/Buzz.app.tar.gz"
+          (cd desktop && pnpm tauri signer sign "$TARBALL_ABS")
 
       - name: Verify code signature
         run: |
@@ -358,11 +362,43 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP_DIR"
           spctl --assess --type execute --verbose=4 "$APP_DIR"
 
+      - name: Locate updater archive
+        id: artifacts
+        run: |
+          BUNDLE_DIR="desktop/src-tauri/target/${TARGET}/release/bundle"
+
+          ARCHIVE=$(find "$BUNDLE_DIR/macos" -name '*.tar.gz' ! -name '*.sig' -type f | head -1)
+          SIG="${ARCHIVE}.sig"
+          if [[ -z "$ARCHIVE" || ! -f "$SIG" ]]; then
+            echo "::error::Updater archive or signature not found in $BUNDLE_DIR/macos"
+            exit 1
+          fi
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+          echo "archive_name=$(basename "$ARCHIVE")" >> "$GITHUB_OUTPUT"
+          echo "sig=$SIG" >> "$GITHUB_OUTPUT"
+
+      - name: Read updater signature
+        id: read-sig
+        run: echo "sig=$(cat "$SIG_PATH")" >> "$GITHUB_OUTPUT"
+        env:
+          SIG_PATH: ${{ steps.artifacts.outputs.sig }}
+
       - name: Upload Intel DMG to versioned GitHub release
         run: gh release upload "v${VERSION}" "$DMG_PATH" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DMG_PATH: ${{ steps.unsigned.outputs.dmg }}
+
+      - name: Upload updater archive to rolling release
+        run: |
+          gh release upload buzz-desktop-latest \
+            "$ARCHIVE_PATH" \
+            "$SIG_PATH" \
+            --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCHIVE_PATH: ${{ steps.artifacts.outputs.archive }}
+          SIG_PATH: ${{ steps.artifacts.outputs.sig }}
 
   release-linux:
     name: Release Linux
@@ -371,6 +407,9 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write
+    outputs:
+      archive_name: ${{ steps.linux-artifacts.outputs.archive_name }}
+      sig: ${{ steps.read-sig.outputs.sig }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -425,10 +464,18 @@ jobs:
           cargo build --release -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
           ./scripts/bundle-sidecars.sh
 
+      - name: Generate release config
+        run: cd desktop && node scripts/build-release-config.mjs
+        env:
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
+          BUZZ_UPDATER_ENDPOINT: https://github.com/block/buzz/releases/download/buzz-desktop-latest/latest.json
+
       - name: Build Linux Tauri app
-        run: cd desktop && pnpm tauri build --verbose --ci --bundles deb,appimage
+        run: cd desktop && pnpm tauri build --verbose --ci --bundles deb,appimage --config src-tauri/tauri.release.conf.json
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Locate Linux build artifacts
         id: linux-artifacts
@@ -449,6 +496,24 @@ jobs:
           fi
           echo "appimage=$APPIMAGE" >> "$GITHUB_OUTPUT"
 
+          # Updater archive: Tauri emits <name>.AppImage.tar.gz + .sig when signing is enabled
+          ARCHIVE=$(find "$BUNDLE_DIR/appimage" -name '*.AppImage.tar.gz' ! -name '*.sig' -type f | head -1)
+          SIG="${ARCHIVE}.sig"
+          if [[ -z "$ARCHIVE" || ! -f "$SIG" ]]; then
+            echo "::error::AppImage updater archive or signature not found in $BUNDLE_DIR/appimage"
+            exit 1
+          fi
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+          echo "archive_name=$(basename "$ARCHIVE")" >> "$GITHUB_OUTPUT"
+          echo "sig=$SIG" >> "$GITHUB_OUTPUT"
+
+      - name: Read updater signature
+        id: read-sig
+        run: echo "sig=$(cat "$SIG_PATH")" >> "$GITHUB_OUTPUT"
+        env:
+          SIG_PATH: ${{ steps.linux-artifacts.outputs.sig }}
+
+      # NOTE: .deb is NOT auto-updatable (Tauri updater constraint — only AppImage supports it on Linux)
       - name: Upload Linux artifacts to versioned GitHub release
         env:
           VERSION: ${{ needs.release.outputs.version }}
@@ -460,3 +525,125 @@ jobs:
             "$DEB_PATH" \
             "$APPIMAGE_PATH" \
             --clobber
+
+      - name: Upload updater archive to rolling release
+        run: |
+          gh release upload buzz-desktop-latest \
+            "$ARCHIVE_PATH" \
+            "$SIG_PATH" \
+            --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCHIVE_PATH: ${{ steps.linux-artifacts.outputs.archive }}
+          SIG_PATH: ${{ steps.linux-artifacts.outputs.sig }}
+
+  release-windows:
+    name: Release Windows
+    runs-on: windows-latest
+    needs: release
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    outputs:
+      archive_name: ${{ steps.artifacts.outputs.archive_name }}
+      sig: ${{ steps.read-sig.outputs.sig }}
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+      TARGET: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref || inputs.ref }}
+          persist-credentials: false
+
+      - uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
+
+      - name: Install desktop dependencies
+        run: just desktop-install-ci
+
+      - name: Add Rust target
+        run: rustup target add "$env:TARGET"
+
+      - name: Patch version
+        shell: bash
+        run: |
+          cd desktop && node scripts/set-version-from-tag.mjs "$VERSION"
+          cd src-tauri && cargo update --workspace
+
+      - name: Generate release config
+        shell: bash
+        run: cd desktop && node scripts/build-release-config.mjs
+        env:
+          BUZZ_UPDATER_PUBLIC_KEY: ${{ secrets.BUZZ_UPDATER_PUBLIC_KEY || secrets.SPROUT_UPDATER_PUBLIC_KEY }}
+          BUZZ_UPDATER_ENDPOINT: https://github.com/block/buzz/releases/download/buzz-desktop-latest/latest.json
+
+      - name: Build sidecars
+        shell: bash
+        run: |
+          cargo build --release --target "$TARGET" -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli
+          ./scripts/bundle-sidecars.sh "$TARGET"
+
+      - name: Build Windows NSIS installer (unsigned)
+        shell: bash
+        run: cd desktop && pnpm tauri build --verbose --target "$TARGET" --bundles nsis --config src-tauri/tauri.release.conf.json
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
+      - name: Locate Windows build artifacts
+        id: artifacts
+        shell: bash
+        run: |
+          BUNDLE_DIR="desktop/src-tauri/target/${TARGET}/release/bundle"
+
+          # Find the NSIS installer .exe
+          EXE=$(find "$BUNDLE_DIR/nsis" -name '*.exe' -type f | head -1)
+          if [[ -z "$EXE" ]]; then
+            echo "::error::No NSIS installer found in $BUNDLE_DIR/nsis"
+            exit 1
+          fi
+
+          # Rename with _alpha-unsigned marker
+          EXE_DIR=$(dirname "$EXE")
+          EXE_BASE=$(basename "$EXE" .exe)
+          MARKED_EXE="${EXE_DIR}/${EXE_BASE}_alpha-unsigned.exe"
+          mv "$EXE" "$MARKED_EXE"
+          echo "exe=$MARKED_EXE" >> "$GITHUB_OUTPUT"
+
+          # Find the updater .nsis.zip and .sig
+          ARCHIVE=$(find "$BUNDLE_DIR/nsis" -name '*.nsis.zip' ! -name '*.sig' -type f | head -1)
+          SIG="${ARCHIVE}.sig"
+          if [[ -z "$ARCHIVE" || ! -f "$SIG" ]]; then
+            echo "::error::NSIS updater archive or signature not found in $BUNDLE_DIR/nsis"
+            exit 1
+          fi
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+          echo "archive_name=$(basename "$ARCHIVE")" >> "$GITHUB_OUTPUT"
+          echo "sig=$SIG" >> "$GITHUB_OUTPUT"
+
+      - name: Read updater signature
+        id: read-sig
+        shell: bash
+        run: echo "sig=$(cat "$SIG_PATH")" >> "$GITHUB_OUTPUT"
+        env:
+          SIG_PATH: ${{ steps.artifacts.outputs.sig }}
+
+      - name: Upload Windows installer to versioned GitHub release
+        shell: bash
+        run: gh release upload "v${VERSION}" "$EXE_PATH" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXE_PATH: ${{ steps.artifacts.outputs.exe }}
+
+      - name: Upload updater archive to rolling release
+        shell: bash
+        run: |
+          gh release upload buzz-desktop-latest \
+            "$ARCHIVE_PATH" \
+            "$SIG_PATH" \
+            --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCHIVE_PATH: ${{ steps.artifacts.outputs.archive }}
+          SIG_PATH: ${{ steps.artifacts.outputs.sig }}
