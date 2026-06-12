@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
 import { Badge } from "@/shared/ui/badge";
 import { AgentStatusBadge } from "@/features/agents/ui/AgentStatusBadge";
@@ -59,7 +60,7 @@ export function ManagedAgentRow({
 }: {
   agent: ManagedAgent;
   channelIdToName: Record<string, string>;
-  channelNames: string[];
+  channelNames: { id: string; name: string }[];
   isActionPending: boolean;
   isLogSelected: boolean;
   logContent: string | null;
@@ -86,7 +87,9 @@ export function ManagedAgentRow({
   const activeChannelIds = useActiveAgentTurns(agent.pubkey);
   const activeWorkingChannels = React.useMemo(
     () =>
-      [...activeChannelIds].map((id) => channelIdToName[id] ?? id).slice(0, 3),
+      [...activeChannelIds]
+        .map((id) => ({ id, name: channelIdToName[id] ?? id }))
+        .slice(0, 3),
     [activeChannelIds, channelIdToName],
   );
   const isWorking = activeWorkingChannels.length > 0;
@@ -213,14 +216,16 @@ function AgentSummary({
   personaLabel,
   presenceStatus,
 }: {
-  activeWorkingChannels: string[];
+  activeWorkingChannels: { id: string; name: string }[];
   agent: ManagedAgent;
-  channelNames: string[];
+  channelNames: { id: string; name: string }[];
   isExpandable: boolean;
   isLogSelected: boolean;
   personaLabel: string | null;
   presenceStatus: PresenceStatus | undefined;
 }) {
+  const { goChannel } = useAppNavigation();
+
   return (
     <div className="min-w-0">
       <div className="flex items-start gap-3">
@@ -258,26 +263,34 @@ function AgentSummary({
           </div>
           {channelNames.length > 0 ? (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              {channelNames.map((name) => (
+              {channelNames.map((channel) => (
                 <Badge
-                  className="normal-case tracking-normal"
-                  key={name}
+                  className="cursor-pointer normal-case tracking-normal hover:opacity-80"
+                  key={channel.id}
                   variant="outline"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void goChannel(channel.id);
+                  }}
                 >
-                  # {name}
+                  # {channel.name}
                 </Badge>
               ))}
             </div>
           ) : null}
           {activeWorkingChannels.length > 0 ? (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              {activeWorkingChannels.map((name) => (
+              {activeWorkingChannels.map((channel) => (
                 <Badge
-                  className="motion-safe:animate-pulse normal-case tracking-normal"
-                  key={`working-${name}`}
+                  className="cursor-pointer motion-safe:animate-pulse normal-case tracking-normal hover:opacity-80"
+                  key={`working-${channel.id}`}
                   variant="default"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void goChannel(channel.id);
+                  }}
                 >
-                  Working in #{name}
+                  Working in #{channel.name}
                 </Badge>
               ))}
             </div>

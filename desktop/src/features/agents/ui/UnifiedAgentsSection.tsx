@@ -38,7 +38,7 @@ type UnifiedAgentsSectionProps = {
   actionNoticeMessage: string | null;
   agents: ManagedAgent[];
   channelIdToName: Record<string, string>;
-  channelsByPubkey: Record<string, string[]>;
+  channelsByPubkey: Record<string, { id: string; name: string }[]>;
   agentsError: Error | null;
   isActionPending: boolean;
   isAgentsLoading: boolean;

@@ -5,7 +5,7 @@ import { ManagedAgentRow } from "./ManagedAgentRow";
 export type AgentGroupRowsProps = {
   agents: ManagedAgent[];
   channelIdToName: Record<string, string>;
-  channelsByPubkey: Record<string, string[]>;
+  channelsByPubkey: Record<string, { id: string; name: string }[]>;
   isActionPending: boolean;
   logContent: string | null;
   logError: Error | null;
