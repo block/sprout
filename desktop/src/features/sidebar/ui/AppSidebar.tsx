@@ -60,9 +60,9 @@ import {
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSkeleton,
   SidebarRail,
 } from "@/shared/ui/sidebar";
+import { Skeleton } from "@/shared/ui/skeleton";
 
 type CollapsibleSidebarGroup =
   | "starred"
@@ -157,6 +157,304 @@ type AppSidebarProps = {
   onUnstarChannel?: (channelId: string) => void;
 };
 
+const SIDEBAR_SKELETON_CACHE_PREFIX = "buzz-sidebar-skeleton-shape.v1";
+const sidebarLoadingWidthClasses = [
+  "w-14",
+  "w-16",
+  "w-20",
+  "w-24",
+  "w-28",
+  "w-32",
+] as const;
+
+type SidebarLoadingWidthClass = (typeof sidebarLoadingWidthClasses)[number];
+
+type SidebarLoadingRowShape = {
+  avatar?: boolean;
+  key: string;
+  unread?: boolean;
+  widthClass: SidebarLoadingWidthClass;
+};
+
+type SidebarLoadingShape = {
+  channels: SidebarLoadingRowShape[];
+  directMessages: SidebarLoadingRowShape[];
+};
+
+type SidebarLoadingCachePayload = SidebarLoadingShape & {
+  version: 1;
+};
+
+const fallbackSidebarLoadingShape: SidebarLoadingShape = {
+  channels: [
+    { key: "agents", widthClass: "w-20" },
+    { key: "engineering", widthClass: "w-28" },
+    { key: "general", widthClass: "w-20" },
+  ],
+  directMessages: [
+    { key: "alice", widthClass: "w-24" },
+    { key: "bob", widthClass: "w-20" },
+  ],
+};
+
+function isSidebarLoadingWidthClass(
+  value: unknown,
+): value is SidebarLoadingWidthClass {
+  return sidebarLoadingWidthClasses.includes(value as SidebarLoadingWidthClass);
+}
+
+function parseSidebarLoadingRows(
+  rows: unknown,
+  maxRows: number,
+): SidebarLoadingRowShape[] {
+  if (!Array.isArray(rows)) return [];
+
+  return rows
+    .slice(0, maxRows)
+    .filter((row: unknown): row is SidebarLoadingRowShape => {
+      if (typeof row !== "object" || row === null) return false;
+      const record = row as Record<string, unknown>;
+      return (
+        typeof record.key === "string" &&
+        isSidebarLoadingWidthClass(record.widthClass) &&
+        (record.unread === undefined || typeof record.unread === "boolean") &&
+        (record.avatar === undefined || typeof record.avatar === "boolean")
+      );
+    });
+}
+
+function parseSidebarLoadingShape(value: unknown): SidebarLoadingShape | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  if (record.version !== 1) return null;
+
+  const shape = {
+    channels: parseSidebarLoadingRows(record.channels, 3),
+    directMessages: parseSidebarLoadingRows(record.directMessages, 2),
+  };
+
+  return hasSidebarLoadingRows(shape) ? shape : null;
+}
+
+function hasSidebarLoadingRows(shape: SidebarLoadingShape) {
+  return shape.channels.length > 0 || shape.directMessages.length > 0;
+}
+
+function sidebarSkeletonCacheKey(
+  workspaceId: string | null | undefined,
+  pubkey: string | undefined,
+) {
+  if (!workspaceId) return null;
+  return `${SIDEBAR_SKELETON_CACHE_PREFIX}:${workspaceId}:${pubkey ?? "anonymous"}`;
+}
+
+function readSidebarLoadingShape(
+  cacheKey: string | null,
+): SidebarLoadingShape | null {
+  if (!cacheKey || typeof window === "undefined") return null;
+
+  try {
+    const raw = window.localStorage.getItem(cacheKey);
+    return raw ? parseSidebarLoadingShape(JSON.parse(raw)) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSidebarLoadingShape(
+  cacheKey: string | null,
+  shape: SidebarLoadingShape,
+) {
+  if (
+    !cacheKey ||
+    !hasSidebarLoadingRows(shape) ||
+    typeof window === "undefined"
+  ) {
+    return;
+  }
+
+  const payload: SidebarLoadingCachePayload = {
+    channels: shape.channels.slice(0, 3),
+    directMessages: shape.directMessages.slice(0, 2),
+    version: 1,
+  };
+
+  try {
+    window.localStorage.setItem(cacheKey, JSON.stringify(payload));
+  } catch {
+    // localStorage can be unavailable or full in embedded webviews.
+  }
+}
+
+function sidebarWidthClassForText(text: string): SidebarLoadingWidthClass {
+  const length = text.trim().length;
+  if (length >= 20) return "w-32";
+  if (length >= 14) return "w-28";
+  if (length >= 10) return "w-24";
+  if (length >= 6) return "w-20";
+  return "w-16";
+}
+
+function createSidebarLoadingShape({
+  directMessages,
+  dmChannelLabels,
+  streamChannels,
+}: {
+  directMessages: Channel[];
+  dmChannelLabels: Record<string, string>;
+  streamChannels: Channel[];
+}): SidebarLoadingShape {
+  return {
+    channels: streamChannels.slice(0, 3).map((channel) => ({
+      key: channel.id,
+      widthClass: sidebarWidthClassForText(channel.name),
+    })),
+    directMessages: directMessages.slice(0, 2).map((channel) => ({
+      avatar: true,
+      key: channel.id,
+      widthClass: sidebarWidthClassForText(
+        dmChannelLabels[channel.id] ?? channel.name,
+      ),
+    })),
+  };
+}
+
+function useSidebarLoadingShape({
+  activeWorkspaceId,
+  directMessages,
+  dmChannelLabels,
+  isLoading,
+  currentPubkey,
+  streamChannels,
+}: {
+  activeWorkspaceId: string | null | undefined;
+  directMessages: Channel[];
+  dmChannelLabels: Record<string, string>;
+  isLoading: boolean;
+  currentPubkey?: string;
+  streamChannels: Channel[];
+}) {
+  const cacheKey = React.useMemo(
+    () => sidebarSkeletonCacheKey(activeWorkspaceId, currentPubkey),
+    [activeWorkspaceId, currentPubkey],
+  );
+  const liveShape = React.useMemo(
+    () =>
+      createSidebarLoadingShape({
+        directMessages,
+        dmChannelLabels,
+        streamChannels,
+      }),
+    [directMessages, dmChannelLabels, streamChannels],
+  );
+  const cachedShape = React.useMemo(
+    () => readSidebarLoadingShape(cacheKey),
+    [cacheKey],
+  );
+
+  React.useEffect(() => {
+    if (isLoading || !hasSidebarLoadingRows(liveShape)) return;
+    writeSidebarLoadingShape(cacheKey, liveShape);
+  }, [cacheKey, isLoading, liveShape]);
+
+  if (hasSidebarLoadingRows(liveShape)) return liveShape;
+  return cachedShape ?? fallbackSidebarLoadingShape;
+}
+
+function SidebarLoadingRow({
+  avatar = false,
+  widthClass,
+}: {
+  avatar?: boolean;
+  widthClass: string;
+}) {
+  return (
+    <SidebarMenuItem>
+      <div className="flex h-8 items-center gap-2 rounded-md px-2">
+        <Skeleton
+          className={cn(
+            "shrink-0",
+            avatar ? "h-5 w-5 rounded-full" : "h-4 w-4 rounded-sm",
+          )}
+        />
+        <Skeleton className={cn("h-4 min-w-0", widthClass)} />
+      </div>
+    </SidebarMenuItem>
+  );
+}
+
+function SidebarLoadingSection({
+  children,
+  titleWidthClass,
+}: {
+  children: React.ReactNode;
+  titleWidthClass: string;
+}) {
+  return (
+    <SidebarGroup>
+      <div className="group/sidebar-section relative">
+        <SidebarGroupLabel asChild>
+          <div className="flex h-7 w-fit max-w-[calc(100%-3rem)] items-center gap-1">
+            <Skeleton className={cn("h-3.5", titleWidthClass)} />
+          </div>
+        </SidebarGroupLabel>
+      </div>
+      <SidebarGroupContent>
+        <SidebarMenu>{children}</SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
+  );
+}
+
+function SidebarLoadingContent({ shape }: { shape: SidebarLoadingShape }) {
+  return (
+    <div data-testid="sidebar-loading">
+      <SidebarLoadingSection titleWidthClass="w-16">
+        {shape.channels.map((row) => (
+          <SidebarLoadingRow key={row.key} widthClass={row.widthClass} />
+        ))}
+      </SidebarLoadingSection>
+      <SidebarLoadingSection titleWidthClass="w-24">
+        {shape.directMessages.map((row) => (
+          <SidebarLoadingRow avatar key={row.key} widthClass={row.widthClass} />
+        ))}
+      </SidebarLoadingSection>
+    </div>
+  );
+}
+
+function SidebarPrimaryNavLoading() {
+  return (
+    <SidebarMenu data-testid="sidebar-primary-nav-loading">
+      {[
+        { key: "home", widthClass: "w-16" },
+        { key: "agents", widthClass: "w-20" },
+      ].map((row) => (
+        <SidebarMenuItem key={row.key}>
+          <div className="flex h-8 items-center gap-2 rounded-md px-2">
+            <Skeleton className="h-4 w-4 shrink-0 rounded-sm" />
+            <Skeleton className={cn("h-4", row.widthClass)} />
+          </div>
+        </SidebarMenuItem>
+      ))}
+    </SidebarMenu>
+  );
+}
+
+function SidebarProfileLoadingCard() {
+  return (
+    <div className="rounded-xl px-2 py-2" data-testid="sidebar-profile-loading">
+      <div className="flex min-w-0 items-center gap-3">
+        <Skeleton className="h-8 w-8 shrink-0 rounded-full" />
+        <div className="min-w-0 flex-1">
+          <Skeleton className="h-4 w-28 max-w-full" />
+          <Skeleton className="mt-1.5 h-3 w-24 max-w-full" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // AppSidebar
 // ---------------------------------------------------------------------------
@@ -217,7 +515,6 @@ export function AppSidebar({
   onStarChannel,
   onUnstarChannel,
 }: AppSidebarProps) {
-  const skeletonRows = ["first", "second", "third", "fourth", "fifth", "sixth"];
   const [isNewDmOpenInternal, setIsNewDmOpenInternal] = React.useState(false);
   const isNewDmOpen = isNewDmOpenProp ?? isNewDmOpenInternal;
   const setIsNewDmOpen = onNewDmOpenChange ?? setIsNewDmOpenInternal;
@@ -368,6 +665,14 @@ export function AppSidebar({
       fallbackDisplayName,
       profileDisplayName: profile?.displayName,
     });
+  const sidebarLoadingShape = useSidebarLoadingShape({
+    activeWorkspaceId: activeWorkspace?.id,
+    currentPubkey,
+    directMessages,
+    dmChannelLabels,
+    isLoading,
+    streamChannels,
+  });
   const shouldLoadAgentCount = useDeferredLoad({
     immediate: selectedView === "agents",
     timeoutMs: 250,
@@ -424,89 +729,93 @@ export function AppSidebar({
         className="cursor-default select-none pt-11"
         data-tauri-drag-region
       >
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              isActive={selectedView === "home"}
-              onClick={onSelectHome}
-              tooltip="Home"
-              type="button"
-            >
-              <Home className="h-4 w-4" />
-              <span>Home</span>
-            </SidebarMenuButton>
-            {homeBadgeCount > 0 ? (
-              <SidebarMenuBadge
-                className="right-2 rounded-full bg-primary/15 px-1.5 text-[11px] text-primary peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
-                data-testid="sidebar-home-count"
-              >
-                {Math.min(homeBadgeCount, 99)}
-              </SidebarMenuBadge>
-            ) : null}
-          </SidebarMenuItem>
-          <FeatureGate feature="pulse">
+        {isLoading ? (
+          <SidebarPrimaryNavLoading />
+        ) : (
+          <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
-                data-testid="open-pulse-view"
-                isActive={selectedView === "pulse"}
-                onClick={onSelectPulse}
-                tooltip="Pulse"
+                isActive={selectedView === "home"}
+                onClick={onSelectHome}
+                tooltip="Home"
                 type="button"
               >
-                <Activity className="h-4 w-4" />
-                <span>Pulse</span>
+                <Home className="h-4 w-4" />
+                <span>Home</span>
               </SidebarMenuButton>
+              {homeBadgeCount > 0 ? (
+                <SidebarMenuBadge
+                  className="right-2 rounded-full bg-primary/15 px-1.5 text-[11px] text-primary peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
+                  data-testid="sidebar-home-count"
+                >
+                  {Math.min(homeBadgeCount, 99)}
+                </SidebarMenuBadge>
+              ) : null}
             </SidebarMenuItem>
-          </FeatureGate>
-          <FeatureGate feature="projects">
+            <FeatureGate feature="pulse">
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  data-testid="open-pulse-view"
+                  isActive={selectedView === "pulse"}
+                  onClick={onSelectPulse}
+                  tooltip="Pulse"
+                  type="button"
+                >
+                  <Activity className="h-4 w-4" />
+                  <span>Pulse</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </FeatureGate>
+            <FeatureGate feature="projects">
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  data-testid="open-projects-view"
+                  isActive={selectedView === "projects"}
+                  onClick={onSelectProjects}
+                  tooltip="Projects"
+                  type="button"
+                >
+                  <FolderGit2 className="h-4 w-4" />
+                  <span>Projects</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </FeatureGate>
             <SidebarMenuItem>
               <SidebarMenuButton
-                data-testid="open-projects-view"
-                isActive={selectedView === "projects"}
-                onClick={onSelectProjects}
-                tooltip="Projects"
+                data-testid="open-agents-view"
+                isActive={selectedView === "agents"}
+                onClick={onSelectAgents}
+                tooltip="Agents"
                 type="button"
               >
-                <FolderGit2 className="h-4 w-4" />
-                <span>Projects</span>
+                <Bot className="h-4 w-4" />
+                <span>Agents</span>
               </SidebarMenuButton>
+              {shouldShowAgentCount ? (
+                <SidebarMenuBadge
+                  className="right-2 rounded-full bg-sidebar-accent/70 px-1.5 text-[11px] text-sidebar-foreground/75 peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
+                  data-testid="sidebar-agents-count"
+                >
+                  {totalAgentCount}
+                </SidebarMenuBadge>
+              ) : null}
             </SidebarMenuItem>
-          </FeatureGate>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              data-testid="open-agents-view"
-              isActive={selectedView === "agents"}
-              onClick={onSelectAgents}
-              tooltip="Agents"
-              type="button"
-            >
-              <Bot className="h-4 w-4" />
-              <span>Agents</span>
-            </SidebarMenuButton>
-            {shouldShowAgentCount ? (
-              <SidebarMenuBadge
-                className="right-2 rounded-full bg-sidebar-accent/70 px-1.5 text-[11px] text-sidebar-foreground/75 peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
-                data-testid="sidebar-agents-count"
-              >
-                {totalAgentCount}
-              </SidebarMenuBadge>
-            ) : null}
-          </SidebarMenuItem>
-          <FeatureGate feature="workflows">
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                data-testid="open-workflows-view"
-                isActive={selectedView === "workflows"}
-                onClick={onSelectWorkflows}
-                tooltip="Workflows"
-                type="button"
-              >
-                <Zap className="h-4 w-4" />
-                <span>Workflows</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </FeatureGate>
-        </SidebarMenu>
+            <FeatureGate feature="workflows">
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  data-testid="open-workflows-view"
+                  isActive={selectedView === "workflows"}
+                  onClick={onSelectWorkflows}
+                  tooltip="Workflows"
+                  type="button"
+                >
+                  <Zap className="h-4 w-4" />
+                  <span>Workflows</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </FeatureGate>
+          </SidebarMenu>
+        )}
       </SidebarHeader>
 
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -521,16 +830,7 @@ export function AppSidebar({
         ) : null}
         <SidebarContent className="pb-32" ref={scrollRef}>
           {isLoading ? (
-            <SidebarGroup>
-              <SidebarGroupLabel>Channels</SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu data-testid="sidebar-loading">
-                  {skeletonRows.map((row) => (
-                    <SidebarMenuSkeleton key={row} showIcon />
-                  ))}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
+            <SidebarLoadingContent shape={sidebarLoadingShape} />
           ) : null}
 
           {!isLoading ? (
@@ -740,23 +1040,27 @@ export function AppSidebar({
         <SidebarFooter className="absolute inset-x-0 bottom-0 z-30 bg-sidebar/55 backdrop-blur-xl supports-[backdrop-filter]:bg-sidebar/45 dark:bg-sidebar/45 dark:supports-[backdrop-filter]:bg-sidebar/35">
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarProfileCard
-                activeWorkspace={activeWorkspace}
-                isPresencePending={isPresencePending}
-                onOpenAddWorkspace={onOpenAddWorkspace}
-                onOpenSettings={onSelectSettings}
-                onRemoveWorkspace={onRemoveWorkspace}
-                onSetPresenceStatus={onSetPresenceStatus}
-                onSetUserStatus={onSetUserStatus}
-                onClearUserStatus={onClearUserStatus}
-                onSwitchWorkspace={onSwitchWorkspace}
-                onUpdateWorkspace={onUpdateWorkspace}
-                profile={profile}
-                resolvedDisplayName={resolvedDisplayName}
-                selfPresenceStatus={selfPresenceStatus}
-                selfUserStatus={selfUserStatus}
-                workspaces={workspaces}
-              />
+              {isLoading ? (
+                <SidebarProfileLoadingCard />
+              ) : (
+                <SidebarProfileCard
+                  activeWorkspace={activeWorkspace}
+                  isPresencePending={isPresencePending}
+                  onOpenAddWorkspace={onOpenAddWorkspace}
+                  onOpenSettings={onSelectSettings}
+                  onRemoveWorkspace={onRemoveWorkspace}
+                  onSetPresenceStatus={onSetPresenceStatus}
+                  onSetUserStatus={onSetUserStatus}
+                  onClearUserStatus={onClearUserStatus}
+                  onSwitchWorkspace={onSwitchWorkspace}
+                  onUpdateWorkspace={onUpdateWorkspace}
+                  profile={profile}
+                  resolvedDisplayName={resolvedDisplayName}
+                  selfPresenceStatus={selfPresenceStatus}
+                  selfUserStatus={selfUserStatus}
+                  workspaces={workspaces}
+                />
+              )}
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarFooter>
