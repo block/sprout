@@ -580,6 +580,7 @@ declare global {
       kind?: number;
       mentionPubkeys?: string[];
       extraTags?: string[][];
+      createdAt?: number;
     }) => RelayEvent;
     __BUZZ_E2E_EMIT_MOCK_TYPING__?: (input: {
       channelName: string;
@@ -2287,6 +2288,7 @@ function emitMockChannelMessage(
   kind?: number,
   mentionPubkeys?: string[],
   extraTags?: string[][],
+  createdAt?: number,
 ) {
   const eventKind = kind ?? 9;
   if (!parentEventId) {
@@ -2296,7 +2298,7 @@ function emitMockChannelMessage(
       pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey,
     );
     if (extraTags) tags.push(...extraTags);
-    const event = createMockEvent(eventKind, content, tags, pubkey);
+    const event = createMockEvent(eventKind, content, tags, pubkey, createdAt);
     recordMockMessage(channelId, event);
     emitMockLiveEvent(channelId, event);
     return event;
@@ -2321,7 +2323,13 @@ function emitMockChannelMessage(
     mentionPubkeys,
   );
   if (extraTags) tags.push(...extraTags);
-  const event = createMockEvent(eventKind, content, tags, authorPubkey);
+  const event = createMockEvent(
+    eventKind,
+    content,
+    tags,
+    authorPubkey,
+    createdAt,
+  );
   recordMockMessage(channelId, event);
   emitMockLiveEvent(channelId, event);
   return event;
@@ -5807,6 +5815,7 @@ export function maybeInstallE2eTauriMocks() {
     kind,
     mentionPubkeys,
     extraTags,
+    createdAt,
   }) => {
     const channel = mockChannels.find(
       (candidate) => candidate.name === channelName,
@@ -5823,6 +5832,7 @@ export function maybeInstallE2eTauriMocks() {
       kind,
       mentionPubkeys,
       extraTags,
+      createdAt,
     );
   };
   window.__BUZZ_E2E_EMIT_MOCK_TYPING__ = ({ channelName, pubkey }) => {
