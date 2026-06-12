@@ -611,6 +611,36 @@ describe("activeAgentTurnsStore", () => {
         "a turn with no activity past the bound must be pruned",
       );
     });
+
+    it("treats a turn_liveness with a null turnId as a no-op", () => {
+      syncAgentTurnsFromEvents(AGENT, [
+        makeEvent({ seq: 1, turnId: "t1", channelId: "c1", timestamp: at(0) }),
+      ]);
+
+      // A liveness ping with no turnId must refresh nothing (recordActivity
+      // no-ops on null). If it wrongly refreshed, the turn would survive the
+      // bound below — so the prune is the observable proof of the no-op, and
+      // the missing turnId must not throw.
+      mock.timers.tick(20_000);
+      assert.doesNotThrow(() => {
+        syncAgentTurnsFromEvents(AGENT, [
+          makeEvent({
+            seq: 2,
+            kind: "turn_liveness",
+            turnId: null,
+            channelId: "c1",
+            timestamp: at(20_000),
+          }),
+        ]);
+      });
+      mock.timers.tick(REMOVE_AFTER_MS + PRUNE_INTERVAL_MS);
+
+      assert.equal(
+        getActiveTurnsForAgent(AGENT).length,
+        0,
+        "a null-turnId liveness must not refresh activity, so the turn still prunes",
+      );
+    });
   });
 });
 
