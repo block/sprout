@@ -125,7 +125,7 @@ export function ChannelBrowserDialog({
       ? archivedChannels
       : activeTab === "joined"
         ? joinedChannels
-        : currentChannels;
+        : matchingChannels;
 
   const orderedVisibleChannels = React.useMemo(
     () => [
@@ -321,10 +321,10 @@ export function ChannelBrowserDialog({
                 if (
                   event.key === "Enter" &&
                   !event.nativeEvent.isComposing &&
-                  selectedItem
+                  orderedVisibleChannels.length > 0
                 ) {
                   event.preventDefault();
-                  handleSelect(selectedItem);
+                  handleSelect(selectedItem ?? orderedVisibleChannels[0]);
                 }
               }}
               placeholder={searchPlaceholder}
@@ -455,11 +455,14 @@ function ChannelCard({
           ? "group/channel-row flex min-h-16 items-center gap-4 bg-muted/40 px-4 py-3 transition-colors duration-150 ease-out"
           : "group/channel-row flex min-h-16 items-center gap-4 px-4 py-3 transition-colors duration-150 ease-out hover:bg-muted/40"
       }
+      data-testid={`browse-channel-${channel.name}`}
     >
       <button
         className="min-w-0 flex-1 border-0 bg-transparent p-0 text-left text-foreground outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-        data-testid={`browse-channel-${channel.name}`}
-        onClick={onSelect}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect();
+        }}
         type="button"
       >
         <div className="min-w-0">
