@@ -25,7 +25,7 @@ This NIP defines a minimal, privacy-preserving protocol for propagating read sta
 ## Non-Goals
 
 This NIP does not define a durable log of all read messages — blobs are best-effort recent activity hints bounded by a time horizon.
-This NIP does not define cross-client interoperability on context ID format — context identifiers are opaque to this NIP and meaningful only within a single client family.
+This NIP does not define cross-client interoperability on context ID format — context identifiers are opaque by default and meaningful only within a single client family, with the single exception of the OPTIONAL well-known `thread:<root-event-id>` scheme defined under Thread Read Contexts, which is provided for cross-client thread-read interoperability.
 This NIP does not define mark-as-unread — the merge rule is monotonic by design.
 This NIP does not guarantee ordering of read events across devices.
 This NIP does not require relay-side logic.
@@ -111,6 +111,86 @@ After decryption, clients MUST apply the following validation rules:
 #### Context Identifiers
 
 Context identifier format is not prescribed by this NIP. Clients choose identifiers appropriate to their context type (e.g., a NIP-28 channel event ID, a NIP-29 group address, a pubkey for DMs). Interoperability between different client implementations on context ID conventions is outside the scope of this NIP.
+
+#### Thread Read Contexts (Optional)
+
+This subsection defines an OPTIONAL well-known context scheme for tracking read
+state of threads (reply chains) independently from the channel they belong to.
+It is a pure interpretation layer over the flat `contexts` map — it introduces
+no new fields, no nesting, and no change to the merge rule, event structure,
+validation, or fetching. The schema version `v` remains `1`. Clients that do
+not implement this subsection remain fully interoperable (see Backwards
+Compatibility below).
+
+A client implementing this scheme MUST use the context key `thread:<root-event-id>`
+for a thread, where `<root-event-id>` is the 64-character lowercase hex event ID
+of the thread's root event. A bare channel identifier (e.g., the NIP-28 channel
+event ID) remains the channel context, exactly as before — this is grandfathered
+existing behavior and is unchanged.
+
+The relationship between a thread and its parent channel is DERIVED from the
+Nostr event graph at evaluation time (the root event's channel reference, e.g.
+its `h` tag) and MUST NOT be serialized into the blob. The blob remains a flat
+`{<context-id>: <unix-timestamp>}` map.
+
+##### Hierarchical Frontier Rule
+
+The effective read frontier of a context is the maximum of its own merged
+timestamp and the effective frontier of its parent:
+
+```
+effective(ctx) = max(merged[ctx], effective(parent(ctx)))
+```
+
+A channel has no parent, so its effective frontier is simply its own merged
+value. For a thread, the parent is its channel:
+
+```
+effective(thread:<root>) = max(merged[thread:<root>], merged[<channelId>])
+```
+
+A thread is unread iff `latestReplyAt > effective(thread:<root>)`, where
+`latestReplyAt` is the `created_at` of the thread's most recent reply. Because
+this rule is a `max()` over the same grow-only registers defined in the Merge
+Rule, it remains a monotone state-based CvRDT — no change to the merge rule is
+required. Marking a channel read therefore clears unread state on all of its
+threads for free, since each thread's effective frontier inherits the channel
+term.
+
+##### Write Discipline
+
+Marking a thread read MUST advance only its own `thread:<root>` context. It MUST
+NOT advance the parent channel context. Otherwise, reading a single thread would
+silently mark later top-level channel messages as read. Marking a channel read
+advances only the channel context (which the hierarchical rule then propagates
+to threads at read time).
+
+##### Eviction
+
+A `thread:<root>` entry whose value is `<= effective(parent)` is semantically
+inert: the parent (channel) frontier already covers it, so its presence or
+absence does not change the result of `effective(thread:<root>)`. Clients MAY
+drop such dominated entries before publishing to bound blob size, consistent
+with the Debounce and Pruning section.
+
+This eviction is bounded best-effort, NOT a guaranteed garbage-collection or
+per-key tombstone mechanism. Because the merge rule re-merges any context
+present in another instance's blob (see Merge Rule and Live Subscription and
+Convergence), a dropped `thread:<root>` key MAY be re-added by a peer instance
+that still carries it. A dropped key stays gone only once it is dominated on
+every instance or has aged past the time horizon everywhere. Clients SHOULD
+treat thread-context eviction as a companion to the existing time-horizon
+pruning, not as a standalone guarantee that the context count or blob size will
+shrink immediately.
+
+##### Backwards Compatibility
+
+A client that does not implement this scheme treats a `thread:<root>` key as an
+ordinary opaque context. It carries the key through the merge unchanged (already
+required by the Merge Rule) and simply computes no thread-level unread state.
+There is no validation change and no interop break: an unaware client and an
+aware client can share a blob and both produce correct results for the contexts
+they understand.
 
 #### Timestamp Accuracy
 
