@@ -1506,15 +1506,23 @@ mod tests {
         }
     }
 
-    /// Stub that answers 401 to any request carrying `Bearer stale` and 200
-    /// to `Bearer fresh`. When `always_401` is set it 401s unconditionally,
-    /// simulating a token the refresh can never satisfy. Counts requests so
-    /// a test can assert "one retry, not a loop".
-    async fn spawn_auth_stub(always_401: std::sync::Arc<std::sync::atomic::AtomicBool>) -> String {
+    /// Stub that answers `reject_status` to any request carrying `Bearer
+    /// stale` and 200 to `Bearer fresh`. When `always_reject` is set it rejects
+    /// unconditionally, simulating a token the refresh can never satisfy.
+    /// Counts requests so a test can assert "one retry, not a loop".
+    async fn spawn_auth_stub(
+        always_reject: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        reject_status: u16,
+    ) -> String {
         use std::sync::atomic::Ordering;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
+        let reject_line = match reject_status {
+            401 => "401 Unauthorized",
+            403 => "403 Forbidden",
+            other => panic!("unsupported reject_status {other}"),
+        };
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move {
@@ -1523,7 +1531,7 @@ mod tests {
                     Ok(p) => p,
                     Err(_) => return,
                 };
-                let always_401 = always_401.clone();
+                let always_reject = always_reject.clone();
                 tokio::spawn(async move {
                     let mut buf = Vec::new();
                     let mut tmp = [0u8; 4096];
@@ -1535,9 +1543,11 @@ mod tests {
                     }
                     let head = String::from_utf8_lossy(&buf).to_ascii_lowercase();
                     let stale = head.contains("authorization: bearer stale");
-                    let resp = if always_401.load(Ordering::SeqCst) || stale {
-                        "HTTP/1.1 401 Unauthorized\r\nContent-Length: 11\r\nConnection: close\r\n\r\ntoken stale"
-                            .to_string()
+                    let resp = if always_reject.load(Ordering::SeqCst) || stale {
+                        format!(
+                            "HTTP/1.1 {reject_line}\r\nContent-Length: 11\r\n\
+                             Connection: close\r\n\r\ntoken stale"
+                        )
                     } else {
                         let body = "{\"ok\":true}";
                         format!(
@@ -1574,7 +1584,7 @@ mod tests {
         use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
         let always_401 = Arc::new(AtomicBool::new(false));
-        let base = spawn_auth_stub(always_401).await;
+        let base = spawn_auth_stub(always_401, 401).await;
         let auth = Arc::new(CountingAuth {
             refreshes: AtomicU32::new(0),
         });
@@ -1607,7 +1617,7 @@ mod tests {
         use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
         let always_401 = Arc::new(AtomicBool::new(true));
-        let base = spawn_auth_stub(always_401).await;
+        let base = spawn_auth_stub(always_401, 401).await;
         let auth = Arc::new(CountingAuth {
             refreshes: AtomicU32::new(0),
         });
@@ -1621,6 +1631,31 @@ mod tests {
             auth.refreshes.load(Ordering::SeqCst),
             1,
             "exactly one refresh, then propagate"
+        );
+    }
+
+    /// A 403 is treated as refreshable: a persistent 403 forces exactly one
+    /// refresh-and-retry, then propagates as `LlmAuth`. Proves a revoked-token
+    /// 403 takes the same recovery path as a 401, bounded by the per-call guard.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn post_openai_persistent_403_propagates_after_one_retry() {
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+        let always_403 = Arc::new(AtomicBool::new(true));
+        let base = spawn_auth_stub(always_403, 403).await;
+        let auth = Arc::new(CountingAuth {
+            refreshes: AtomicU32::new(0),
+        });
+        let llm = llm_with(auth.clone());
+        let mut c = cfg(Provider::OpenAi);
+        c.base_url = base;
+
+        let err = llm.post_openai(&c, "/v1/x", &json!({})).await.unwrap_err();
+        assert!(matches!(err, AgentError::LlmAuth(_)), "got {err:?}");
+        assert_eq!(
+            auth.refreshes.load(Ordering::SeqCst),
+            1,
+            "403 refreshes exactly once, then propagates"
         );
     }
 
