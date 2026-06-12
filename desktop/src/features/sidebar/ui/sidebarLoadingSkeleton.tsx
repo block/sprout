@@ -281,24 +281,6 @@ export function SidebarLoadingContent({
   );
 }
 
-export function SidebarPrimaryNavLoading() {
-  return (
-    <SidebarMenu data-testid="sidebar-primary-nav-loading">
-      {[
-        { key: "home", widthClass: "w-16" },
-        { key: "agents", widthClass: "w-20" },
-      ].map((row) => (
-        <SidebarMenuItem key={row.key}>
-          <div className="flex h-8 items-center gap-2 rounded-md px-2">
-            <Skeleton className="h-4 w-4 shrink-0 rounded-sm" />
-            <Skeleton className={cn("h-4", row.widthClass)} />
-          </div>
-        </SidebarMenuItem>
-      ))}
-    </SidebarMenu>
-  );
-}
-
 export function SidebarProfileLoadingCard() {
   return (
     <div className="rounded-xl px-2 py-2" data-testid="sidebar-profile-loading">

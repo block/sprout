@@ -429,11 +429,12 @@ export function ChannelScreen({
       setThreadReplyTargetId,
       setThreadScrollTargetId,
     });
+  const hasTimelineData = messagesQuery.data !== undefined;
   const isTimelineLoading =
     activeChannel !== null &&
     activeChannel.channelType !== "forum" &&
-    (messagesQuery.isPending ||
-      (messagesQuery.isFetching && resolvedMessages.length === 0));
+    !hasTimelineData &&
+    messagesQuery.isPending;
   const shouldShowInitialChannelLoading = isTimelineLoading;
   const resetComposerTargets = React.useCallback(
     (_channelId: string | null) => {
