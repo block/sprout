@@ -22,9 +22,30 @@ export function useLoadOlderOnScroll({
   scrollContainerRef,
   sentinelRef,
 }: UseLoadOlderOnScrollOptions) {
+  const [, scheduleRestore] = React.useReducer((count: number) => count + 1, 0);
+  const pendingRestoreRef = React.useRef<{
+    previousHeight: number;
+    previousScrollTop: number;
+  } | null>(null);
   const restoreScrollPositionRef = React.useRef(restoreScrollPosition);
   React.useEffect(() => {
     restoreScrollPositionRef.current = restoreScrollPosition;
+  });
+
+  React.useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    const pendingRestore = pendingRestoreRef.current;
+    if (!container || !pendingRestore) {
+      return;
+    }
+
+    pendingRestoreRef.current = null;
+    const delta = container.scrollHeight - pendingRestore.previousHeight;
+    if (delta > 0) {
+      restoreScrollPositionRef.current(
+        pendingRestore.previousScrollTop + delta,
+      );
+    }
   });
 
   React.useEffect(() => {
@@ -58,16 +79,14 @@ export function useLoadOlderOnScroll({
 
           const previousHeight = container.scrollHeight;
           const previousScrollTop = container.scrollTop;
-          void fetchOlder().then(() => {
+          void fetchOlder().finally(() => {
+            pendingRestoreRef.current = {
+              previousHeight,
+              previousScrollTop,
+            };
+            scheduleRestore();
             requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                const newHeight = container.scrollHeight;
-                const delta = newHeight - previousHeight;
-                if (delta > 0) {
-                  restoreScrollPositionRef.current(previousScrollTop + delta);
-                }
-                observe();
-              });
+              observe();
             });
           });
         },

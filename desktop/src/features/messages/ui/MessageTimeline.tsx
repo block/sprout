@@ -198,7 +198,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div
           className={cn(
-            "absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-contain px-4 pt-1 [overflow-anchor:none] sm:px-6",
+            "absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-contain px-4 pt-1 sm:px-6",
             hasComposerOverlay ? "pb-24" : "pb-4",
           )}
           data-scroll-restoration-id={scrollRestorationId}

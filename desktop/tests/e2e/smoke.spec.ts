@@ -388,6 +388,158 @@ test("supports multiline drafts with Ctrl+Enter and sends with Enter", async ({
   );
 });
 
+test("keeps viewport anchored when older messages load above", async ({
+  page,
+}) => {
+  const baseTimestamp = Math.floor(Date.now() / 1000) - 10_000;
+
+  await page.goto("/");
+  await page.evaluate((base) => {
+    const emit = (
+      window as Window & {
+        __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+          channelName: string;
+          content: string;
+          createdAt?: number;
+          emitLive?: boolean;
+          id?: string;
+        }) => void;
+      }
+    ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+
+    if (!emit) {
+      throw new Error("Mock message emitter is unavailable.");
+    }
+
+    for (let index = 0; index < 260; index += 1) {
+      emit({
+        channelName: "general",
+        content: `Paged history seed ${index.toString().padStart(3, "0")}`,
+        createdAt: base + index,
+        emitLive: false,
+        id: `paged-history-${index.toString().padStart(3, "0")}`,
+      });
+    }
+  }, baseTimestamp);
+
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await expect(page.getByText("Paged history seed 259")).toBeVisible();
+
+  const timeline = page.getByTestId("message-timeline");
+  await expect(timeline).not.toContainText("Paged history seed 000");
+  const result = await timeline.evaluate(async (element) => {
+    const scrollContainer = element as HTMLDivElement;
+    scrollContainer.scrollTop = 1;
+    scrollContainer.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    const findAnchorAtViewportTop = () => {
+      const containerRect = scrollContainer.getBoundingClientRect();
+      const rows = Array.from(
+        scrollContainer.querySelectorAll<HTMLElement>("[data-message-id]"),
+      );
+      return rows.find((row) => {
+        const rowRect = row.getBoundingClientRect();
+        return (
+          rowRect.bottom > containerRect.top + 8 &&
+          rowRect.top < containerRect.bottom
+        );
+      });
+    };
+
+    const anchor = findAnchorAtViewportTop();
+    if (!anchor?.dataset.messageId) {
+      throw new Error("Visible anchor message was not rendered.");
+    }
+
+    const anchorMessageId = anchor.dataset.messageId;
+    const beforeLoadedMessageCount =
+      scrollContainer.querySelectorAll("[data-message-id]").length;
+    const findAnchor = () =>
+      scrollContainer.querySelector<HTMLElement>(
+        `[data-message-id="${anchorMessageId}"]`,
+      );
+
+    const beforeAnchorTop = anchor.getBoundingClientRect().top;
+    const beforeScrollTop = scrollContainer.scrollTop;
+    let maxAnchorDelta = 0;
+    let sampledMutationFrame = false;
+    let measuredLoadedMessageDelta = 0;
+
+    const waitForOlderMessage = new Promise<void>((resolve, reject) => {
+      const timeout = window.setTimeout(() => {
+        observer.disconnect();
+        reject(new Error("Timed out waiting for older messages to render."));
+      }, 3000);
+
+      const sampleAnchorDelta = () => {
+        const currentAnchor = findAnchor();
+        if (currentAnchor) {
+          maxAnchorDelta = Math.max(
+            maxAnchorDelta,
+            Math.abs(
+              currentAnchor.getBoundingClientRect().top - beforeAnchorTop,
+            ),
+          );
+        }
+      };
+
+      const observer = new MutationObserver(() => {
+        sampleAnchorDelta();
+        requestAnimationFrame(() => {
+          sampleAnchorDelta();
+          sampledMutationFrame = true;
+          measuredLoadedMessageDelta = Math.max(
+            measuredLoadedMessageDelta,
+            scrollContainer.querySelectorAll("[data-message-id]").length -
+              beforeLoadedMessageCount,
+          );
+
+          if (scrollContainer.textContent?.includes("Paged history seed 000")) {
+            window.clearTimeout(timeout);
+            observer.disconnect();
+            resolve();
+          }
+        });
+      });
+
+      observer.observe(scrollContainer, { childList: true, subtree: true });
+    });
+
+    await waitForOlderMessage;
+
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(resolve);
+      });
+    });
+
+    const afterAnchor = findAnchor();
+    if (!afterAnchor) {
+      throw new Error("Anchor message was not rendered after loading older.");
+    }
+
+    return {
+      afterAnchorTop: afterAnchor.getBoundingClientRect().top,
+      afterScrollTop: scrollContainer.scrollTop,
+      beforeAnchorTop,
+      beforeScrollTop,
+      maxAnchorDelta,
+      measuredLoadedMessageDelta,
+      sampledMutationFrame,
+    };
+  });
+
+  expect(result.beforeScrollTop).toBe(1);
+  expect(result.afterScrollTop).toBeGreaterThan(result.beforeScrollTop);
+  expect(result.sampledMutationFrame).toBe(true);
+  expect(result.measuredLoadedMessageDelta).toBeGreaterThan(10);
+  expect(result.maxAnchorDelta).toBeLessThanOrEqual(2);
+  expect(
+    Math.abs(result.afterAnchorTop - result.beforeAnchorTop),
+  ).toBeLessThanOrEqual(2);
+});
+
 test("does not shift the timeline when the composer grows", async ({
   page,
 }) => {
