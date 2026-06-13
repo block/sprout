@@ -12,6 +12,7 @@ import {
   useManagedAgentsQuery,
 } from "@/features/agents/hooks";
 import { useActiveAgentTurnsBridge } from "@/features/agents/activeAgentTurnsStore";
+import { useManagedAgentObserverBridge } from "@/features/agents/observerRelayStore";
 import { EditAgentDialog } from "@/features/agents/ui/EditAgentDialog";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
@@ -188,6 +189,7 @@ export function UserProfilePanel({
     [managedAgent],
   );
   useActiveAgentTurnsBridge(bridgeAgents);
+  useManagedAgentObserverBridge(bridgeAgents);
   const canEditAgent = isOwner === true && managedAgent !== undefined;
   const memoryQuery = useAgentMemoryQuery(pubkey, {
     enabled: isOwner === true,
