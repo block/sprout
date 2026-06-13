@@ -388,6 +388,115 @@ test("supports multiline drafts with Ctrl+Enter and sends with Enter", async ({
   );
 });
 
+test("keeps viewport anchored when older messages load above", async ({
+  page,
+}) => {
+  const baseTimestamp = Math.floor(Date.now() / 1000) - 10_000;
+
+  await page.goto("/");
+  await page.evaluate((base) => {
+    const emit = (
+      window as Window & {
+        __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
+          channelName: string;
+          content: string;
+          createdAt?: number;
+          emitLive?: boolean;
+          id?: string;
+        }) => void;
+      }
+    ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+
+    if (!emit) {
+      throw new Error("Mock message emitter is unavailable.");
+    }
+
+    for (let index = 0; index < 260; index += 1) {
+      emit({
+        channelName: "general",
+        content: `Paged history seed ${index.toString().padStart(3, "0")}`,
+        createdAt: base + index,
+        emitLive: false,
+        id: `paged-history-${index.toString().padStart(3, "0")}`,
+      });
+    }
+  }, baseTimestamp);
+
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await expect(page.getByText("Paged history seed 259")).toBeVisible();
+
+  const timeline = page.getByTestId("message-timeline");
+  await expect(timeline).not.toContainText("Paged history seed 000");
+  const flickerMaxDelta = await timeline.evaluate(async (element) => {
+    const scrollContainer = element as HTMLDivElement;
+    const anchor = scrollContainer.querySelector<HTMLElement>(
+      '[data-message-id="paged-history-160"]',
+    );
+    if (!anchor) {
+      throw new Error("Oldest loaded message was not rendered.");
+    }
+
+    scrollContainer.scrollTop = 0;
+    scrollContainer.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    const startTop = anchor.getBoundingClientRect().top;
+    let maxDelta = 0;
+    let pendingFrame = false;
+    const sampleAnchor = () => {
+      pendingFrame = false;
+      const currentAnchor = scrollContainer.querySelector<HTMLElement>(
+        '[data-message-id="paged-history-160"]',
+      );
+      if (!currentAnchor) {
+        return;
+      }
+      const top = currentAnchor.getBoundingClientRect().top;
+      maxDelta = Math.max(maxDelta, Math.abs(top - startTop));
+    };
+    const observer = new MutationObserver(() => {
+      if (pendingFrame) {
+        return;
+      }
+      pendingFrame = true;
+      requestAnimationFrame(sampleAnchor);
+    });
+    observer.observe(scrollContainer, { childList: true, subtree: true });
+
+    await new Promise<void>((resolve) => {
+      const deadline = performance.now() + 1_000;
+      const waitForOlderHistory = () => {
+        if (
+          scrollContainer.textContent?.includes("Paged history seed 000") ||
+          performance.now() >= deadline
+        ) {
+          resolve();
+          return;
+        }
+        requestAnimationFrame(waitForOlderHistory);
+      };
+      requestAnimationFrame(waitForOlderHistory);
+    });
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve()),
+    );
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve()),
+    );
+    observer.disconnect();
+
+    return {
+      maxDelta,
+      scrollTop: scrollContainer.scrollTop,
+    };
+  });
+
+  await expect(timeline).toContainText("Paged history seed 000");
+
+  expect(flickerMaxDelta.scrollTop).toBeGreaterThan(0);
+  expect(flickerMaxDelta.maxDelta).toBeLessThanOrEqual(2);
+});
+
 test("does not shift the timeline when the composer grows", async ({
   page,
 }) => {

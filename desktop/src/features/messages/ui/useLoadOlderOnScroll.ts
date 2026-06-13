@@ -4,7 +4,6 @@ type UseLoadOlderOnScrollOptions = {
   fetchOlder?: () => Promise<void>;
   hasOlderMessages: boolean;
   isLoading: boolean;
-  restoreScrollPosition: (scrollTop: number) => void;
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
   sentinelRef: React.RefObject<HTMLDivElement | null>;
 };
@@ -18,13 +17,39 @@ export function useLoadOlderOnScroll({
   fetchOlder,
   hasOlderMessages,
   isLoading,
-  restoreScrollPosition,
   scrollContainerRef,
   sentinelRef,
 }: UseLoadOlderOnScrollOptions) {
-  const restoreScrollPositionRef = React.useRef(restoreScrollPosition);
-  React.useEffect(() => {
-    restoreScrollPositionRef.current = restoreScrollPosition;
+  const [, scheduleRestore] = React.useReducer((count: number) => count + 1, 0);
+  const pendingRestoreRef = React.useRef<{
+    messageId: string;
+    top: number;
+  } | null>(null);
+
+  React.useLayoutEffect(() => {
+    const pendingRestore = pendingRestoreRef.current;
+    const container = scrollContainerRef.current;
+    if (!pendingRestore || !container) {
+      return;
+    }
+
+    pendingRestoreRef.current = null;
+    const anchor = container.querySelector<HTMLElement>(
+      `[data-message-id="${pendingRestore.messageId}"]`,
+    );
+    if (!anchor) {
+      return;
+    }
+
+    const delta = anchor.getBoundingClientRect().top - pendingRestore.top;
+    if (delta !== 0) {
+      // Single synchronous pre-paint write. We deliberately do NOT route this
+      // through useTimelineScrollManager.restoreScrollPosition: that helper
+      // schedules a 2-rAF locked-write loop (correct for ResizeObserver-driven
+      // resizes that may settle across frames, wrong for prepend), which
+      // fights live wheel input for 2–3 frames after every fetchOlder.
+      container.scrollTop = container.scrollTop + delta;
+    }
   });
 
   React.useEffect(() => {
@@ -56,20 +81,20 @@ export function useLoadOlderOnScroll({
 
           currentObserver?.disconnect();
 
-          const previousHeight = container.scrollHeight;
-          const previousScrollTop = container.scrollTop;
-          void fetchOlder().then(() => {
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                const newHeight = container.scrollHeight;
-                const delta = newHeight - previousHeight;
-                if (delta > 0) {
-                  restoreScrollPositionRef.current(previousScrollTop + delta);
-                }
-                observe();
-              });
+          const anchor =
+            container.querySelector<HTMLElement>("[data-message-id]");
+          const messageId = anchor?.dataset.messageId;
+          const top = anchor?.getBoundingClientRect().top;
+          void fetchOlder()
+            .then(() => {
+              if (messageId && top !== undefined) {
+                pendingRestoreRef.current = { messageId, top };
+                scheduleRestore();
+              }
+            })
+            .finally(() => {
+              observe();
             });
-          });
         },
         { root: container, rootMargin: "200px 0px 0px 0px" },
       );
