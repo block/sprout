@@ -75,6 +75,8 @@ type MessageThreadPanelProps = {
   scrollTargetId: string | null;
   threadHead: TimelineMessage | null;
   threadReplies: MainTimelineEntry[];
+  /** Subtree unread counts for collapsed summary rows, keyed by reply id. */
+  threadReplyUnreadCounts?: ReadonlyMap<string, number>;
   threadTypingPubkeys: string[];
   toolbarExtraActions?: React.ReactNode;
   widthPx: number;
@@ -127,6 +129,7 @@ export function MessageThreadPanel({
   scrollTargetId,
   threadHead,
   threadReplies,
+  threadReplyUnreadCounts,
   threadTypingPubkeys,
   toolbarExtraActions,
   widthPx,
@@ -266,6 +269,9 @@ export function MessageThreadPanel({
                         message={entry.message}
                         onOpenThread={onExpandReplies}
                         summary={entry.summary}
+                        unreadCount={threadReplyUnreadCounts?.get(
+                          entry.message.id,
+                        )}
                       />
                     ) : null}
                   </div>

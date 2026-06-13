@@ -133,6 +133,8 @@ type ChannelPaneProps = {
   threadScrollTargetId: string | null;
   /** Per-thread unread counts keyed by thread root id. */
   threadUnreadCounts?: ReadonlyMap<string, number>;
+  /** Subtree unread counts for in-panel summary rows, keyed by reply id. */
+  threadReplyUnreadCounts?: ReadonlyMap<string, number>;
   /** Event id of the first unread reply in the open thread panel. */
   threadFirstUnreadReplyId?: string | null;
   targetMessageId: string | null;
@@ -261,6 +263,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   threadTypingPubkeys,
   threadReplyTargetMessage,
   threadUnreadCounts,
+  threadReplyUnreadCounts,
   threadFirstUnreadReplyId,
   typingPubkeys,
 }: ChannelPaneProps) {
@@ -840,6 +843,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                 threadHead={threadHeadMessage}
                 widthPx={threadPanelWidthPx}
                 threadReplies={threadMessages}
+                threadReplyUnreadCounts={threadReplyUnreadCounts}
                 threadTypingPubkeys={threadTypingPubkeys}
                 toolbarExtraActions={
                   hasThreadComposerBotActivity ? (
