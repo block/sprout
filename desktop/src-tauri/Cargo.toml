@@ -79,7 +79,7 @@ png = "0.18"
 zip = "8"
 sherpa-onnx = "1.12"
 regex = "1"
-rusqlite = "0.37"
+rusqlite = { version = "0.37", features = ["bundled"] }
 axum = "0.8"
 rodio = "0.22"
 earshot = "1.0"
