@@ -15,18 +15,19 @@ on:
         required: true
 
 jobs:
-  release:
-    name: Release
+  # Shared setup: determine the version and create the release objects all four
+  # platform jobs upload into. Runs on ubuntu with no OIDC so a branch
+  # workflow_dispatch can exercise the platform builds without the codesign
+  # AssumeRole wall that gates the arm64 job.
+  setup:
+    name: Setup
     if: github.repository == 'block/buzz'
-    runs-on: macos-latest
-    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
-      id-token: write # required by block/apple-codesign-action for OIDC
     outputs:
       version: ${{ steps.version.outputs.version }}
-      archive_name: ${{ steps.artifacts.outputs.archive_name }}
-      sig: ${{ steps.read-sig.outputs.sig }}
     steps:
       - name: Determine version
         id: version
@@ -50,6 +51,61 @@ jobs:
             exit 1
           fi
 
+      # Checkout at the same ref the platform jobs use so git rev-parse HEAD
+      # pins the release to the right commit via --target.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref || inputs.ref }}
+          persist-credentials: false
+
+      - name: Create versioned GitHub release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_SHA=$(git rev-parse HEAD)
+          NOTES=""
+          if [[ -f CHANGELOG.md ]]; then
+            NOTES=$(awk "/^## v${VERSION}$/,/^## v/" CHANGELOG.md | sed '$d')
+          fi
+          if [[ -z "$NOTES" ]]; then
+            NOTES="Buzz Desktop v${VERSION}"
+          fi
+          PRERELEASE_FLAGS=()
+          if [[ "$VERSION" =~ -(test|alpha|beta|rc)([.-]|$) ]]; then
+            PRERELEASE_FLAGS=(--prerelease --latest=false)
+          fi
+          gh release create "v${VERSION}" \
+            --target "$RELEASE_SHA" \
+            --title "Buzz Desktop v${VERSION}" \
+            --notes "$NOTES" \
+            "${PRERELEASE_FLAGS[@]}"
+
+      - name: Create rolling auto-update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create buzz-desktop-latest \
+            --prerelease \
+            --title "Buzz Desktop Auto-Update" \
+            --notes "Rolling release for the Tauri auto-updater. Do not download manually — use the versioned release instead." \
+            2>/dev/null || true
+
+  release:
+    name: Release
+    if: github.repository == 'block/buzz'
+    runs-on: macos-latest
+    needs: setup
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      id-token: write # required by block/apple-codesign-action for OIDC
+    outputs:
+      archive_name: ${{ steps.artifacts.outputs.archive_name }}
+      sig: ${{ steps.read-sig.outputs.sig }}
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+    steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.event_name == 'push' && github.ref || inputs.ref }}
@@ -61,8 +117,6 @@ jobs:
         run: just desktop-install-ci
 
       - name: Patch version
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
           cd desktop && node scripts/set-version-from-tag.mjs "$VERSION"
           cd src-tauri && cargo update --workspace
@@ -218,38 +272,15 @@ jobs:
         env:
           SIG_PATH: ${{ steps.artifacts.outputs.sig }}
 
-      - name: Create versioned GitHub release
+      - name: Upload arm64 DMG to versioned GitHub release
         env:
-          VERSION: ${{ steps.version.outputs.version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DMG_PATH: ${{ steps.artifacts.outputs.dmg }}
-        run: |
-          RELEASE_SHA=$(git rev-parse HEAD)
-          NOTES=""
-          if [[ -f CHANGELOG.md ]]; then
-            NOTES=$(awk "/^## v${VERSION}$/,/^## v/" CHANGELOG.md | sed '$d')
-          fi
-          if [[ -z "$NOTES" ]]; then
-            NOTES="Buzz Desktop v${VERSION}"
-          fi
-          PRERELEASE_FLAGS=()
-          if [[ "$VERSION" =~ -(test|alpha|beta|rc)([.-]|$) ]]; then
-            PRERELEASE_FLAGS=(--prerelease --latest=false)
-          fi
-          gh release create "v${VERSION}" \
-            --target "$RELEASE_SHA" \
-            --title "Buzz Desktop v${VERSION}" \
-            --notes "$NOTES" \
-            "${PRERELEASE_FLAGS[@]}" \
-            "$DMG_PATH"
+        run: gh release upload "v${VERSION}" "$DMG_PATH" --clobber
 
       - name: Upload updater archive to rolling release
+        if: github.event_name == 'push'
         run: |
-          gh release create buzz-desktop-latest \
-            --prerelease \
-            --title "Buzz Desktop Auto-Update" \
-            --notes "Rolling release for the Tauri auto-updater. Do not download manually — use the versioned release instead." \
-            2>/dev/null || true
           gh release upload buzz-desktop-latest \
             "$ARCHIVE_PATH" \
             "$SIG_PATH" \
@@ -263,7 +294,7 @@ jobs:
     name: Release macOS (Intel)
     if: github.repository == 'block/buzz'
     runs-on: macos-latest
-    needs: release
+    needs: setup
     timeout-minutes: 60
     permissions:
       contents: write
@@ -272,7 +303,7 @@ jobs:
       archive_name: ${{ steps.artifacts.outputs.archive_name }}
       sig: ${{ steps.read-sig.outputs.sig }}
     env:
-      VERSION: ${{ needs.release.outputs.version }}
+      VERSION: ${{ needs.setup.outputs.version }}
       TARGET: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -397,6 +428,7 @@ jobs:
           DMG_PATH: ${{ steps.unsigned.outputs.dmg }}
 
       - name: Upload updater archive to rolling release
+        if: github.event_name == 'push'
         run: |
           gh release upload buzz-desktop-latest \
             "$ARCHIVE_PATH" \
@@ -411,7 +443,7 @@ jobs:
     name: Release Linux
     if: github.repository == 'block/buzz'
     runs-on: ubuntu-latest
-    needs: release
+    needs: setup
     timeout-minutes: 60
     permissions:
       contents: write
@@ -462,7 +494,7 @@ jobs:
 
       - name: Patch version
         env:
-          VERSION: ${{ needs.release.outputs.version }}
+          VERSION: ${{ needs.setup.outputs.version }}
         run: |
           cd desktop && node scripts/set-version-from-tag.mjs "$VERSION"
           cd src-tauri && cargo update --workspace
@@ -531,7 +563,7 @@ jobs:
       # NOTE: .deb is NOT auto-updatable (Tauri updater constraint — only AppImage supports it on Linux)
       - name: Upload Linux artifacts to versioned GitHub release
         env:
-          VERSION: ${{ needs.release.outputs.version }}
+          VERSION: ${{ needs.setup.outputs.version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEB_PATH: ${{ steps.linux-artifacts.outputs.deb }}
           APPIMAGE_PATH: ${{ steps.linux-artifacts.outputs.appimage }}
@@ -542,6 +574,7 @@ jobs:
             --clobber
 
       - name: Upload updater archive to rolling release
+        if: github.event_name == 'push'
         run: |
           gh release upload buzz-desktop-latest \
             "$ARCHIVE_PATH" \
@@ -555,7 +588,7 @@ jobs:
   release-windows:
     name: Release Windows
     runs-on: windows-latest
-    needs: release
+    needs: setup
     timeout-minutes: 60
     permissions:
       contents: write
@@ -563,7 +596,7 @@ jobs:
       archive_name: ${{ steps.artifacts.outputs.archive_name }}
       sig: ${{ steps.read-sig.outputs.sig }}
     env:
-      VERSION: ${{ needs.release.outputs.version }}
+      VERSION: ${{ needs.setup.outputs.version }}
       TARGET: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -664,6 +697,7 @@ jobs:
           EXE_PATH: ${{ steps.artifacts.outputs.exe }}
 
       - name: Upload updater archive to rolling release
+        if: github.event_name == 'push'
         shell: bash
         run: |
           gh release upload buzz-desktop-latest \
@@ -677,13 +711,16 @@ jobs:
 
   assemble-manifest:
     name: Assemble multi-platform latest.json
+    # Only a real tag push assembles latest.json — a branch workflow_dispatch
+    # skips the rolling-release uploads, so its archive URLs never exist.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    needs: [release, release-macos-x64, release-linux, release-windows]
+    needs: [setup, release, release-macos-x64, release-linux, release-windows]
     timeout-minutes: 10
     permissions:
       contents: write
     env:
-      VERSION: ${{ needs.release.outputs.version }}
+      VERSION: ${{ needs.setup.outputs.version }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -745,9 +782,4 @@ jobs:
 
       - name: Upload latest.json to rolling release
         run: |
-          gh release create buzz-desktop-latest \
-            --prerelease \
-            --title "Buzz Desktop Auto-Update" \
-            --notes "Rolling release for the Tauri auto-updater. Do not download manually — use the versioned release instead." \
-            2>/dev/null || true
           gh release upload buzz-desktop-latest latest.json --clobber
