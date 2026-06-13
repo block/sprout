@@ -23,8 +23,26 @@ export function useLoadOlderOnScroll({
   sentinelRef,
 }: UseLoadOlderOnScrollOptions) {
   const restoreScrollPositionRef = React.useRef(restoreScrollPosition);
+  const pendingRestoreRef = React.useRef<{
+    scrollHeight: number;
+    scrollTop: number;
+  } | null>(null);
   React.useEffect(() => {
     restoreScrollPositionRef.current = restoreScrollPosition;
+  });
+
+  React.useLayoutEffect(() => {
+    const pendingRestore = pendingRestoreRef.current;
+    const container = scrollContainerRef.current;
+    if (!pendingRestore || !container) {
+      return;
+    }
+
+    pendingRestoreRef.current = null;
+    const delta = container.scrollHeight - pendingRestore.scrollHeight;
+    if (delta > 0) {
+      restoreScrollPositionRef.current(pendingRestore.scrollTop + delta);
+    }
   });
 
   React.useEffect(() => {
@@ -58,18 +76,16 @@ export function useLoadOlderOnScroll({
 
           const previousHeight = container.scrollHeight;
           const previousScrollTop = container.scrollTop;
-          void fetchOlder().then(() => {
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                const newHeight = container.scrollHeight;
-                const delta = newHeight - previousHeight;
-                if (delta > 0) {
-                  restoreScrollPositionRef.current(previousScrollTop + delta);
-                }
-                observe();
-              });
+          void fetchOlder()
+            .then(() => {
+              pendingRestoreRef.current = {
+                scrollHeight: previousHeight,
+                scrollTop: previousScrollTop,
+              };
+            })
+            .finally(() => {
+              observe();
             });
-          });
         },
         { root: container, rootMargin: "200px 0px 0px 0px" },
       );
