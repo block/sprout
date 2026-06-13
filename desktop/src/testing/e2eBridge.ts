@@ -452,6 +452,9 @@ type MockFilter = {
   "#h"?: string[];
   authors?: string[];
   kinds?: number[];
+  limit?: number;
+  since?: number;
+  until?: number;
 };
 
 type MockSocket = {
@@ -574,6 +577,9 @@ declare global {
       kind?: number;
       mentionPubkeys?: string[];
       extraTags?: string[][];
+      createdAt?: number;
+      id?: string;
+      emitLive?: boolean;
     }) => RelayEvent;
     __BUZZ_E2E_EMIT_MOCK_TYPING__?: (input: {
       channelName: string;
@@ -2163,9 +2169,29 @@ function getMockMessageStore(channelId: string): RelayEvent[] {
   return seeded;
 }
 
-function emitMockHistory(socket: MockSocket, subId: string, channelId: string) {
-  const events = getMockMessageStore(channelId);
-  for (const event of events) {
+function filterMockHistory(channelId: string, filter: MockFilter) {
+  return getMockMessageStore(channelId)
+    .filter((event) =>
+      filter.kinds ? filter.kinds.includes(event.kind) : true,
+    )
+    .filter((event) =>
+      filter.since !== undefined ? event.created_at >= filter.since : true,
+    )
+    .filter((event) =>
+      filter.until !== undefined ? event.created_at <= filter.until : true,
+    )
+    .sort((left, right) => right.created_at - left.created_at)
+    .slice(0, filter.limit ?? 50)
+    .sort((left, right) => left.created_at - right.created_at);
+}
+
+function emitMockHistory(
+  socket: MockSocket,
+  subId: string,
+  channelId: string,
+  filter: MockFilter,
+) {
+  for (const event of filterMockHistory(channelId, filter)) {
     sendWsText(socket.handler, ["EVENT", subId, event]);
   }
   sendWsText(socket.handler, ["EOSE", subId]);
@@ -2275,6 +2301,9 @@ function emitMockChannelMessage(
   kind?: number,
   mentionPubkeys?: string[],
   extraTags?: string[][],
+  createdAt?: number,
+  id?: string,
+  emitLive = true,
 ) {
   const eventKind = kind ?? 9;
   if (!parentEventId) {
@@ -2284,9 +2313,18 @@ function emitMockChannelMessage(
       pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey,
     );
     if (extraTags) tags.push(...extraTags);
-    const event = createMockEvent(eventKind, content, tags, pubkey);
+    const event = createMockEvent(
+      eventKind,
+      content,
+      tags,
+      pubkey,
+      createdAt,
+      id,
+    );
     recordMockMessage(channelId, event);
-    emitMockLiveEvent(channelId, event);
+    if (emitLive) {
+      emitMockLiveEvent(channelId, event);
+    }
     return event;
   }
 
@@ -2309,9 +2347,18 @@ function emitMockChannelMessage(
     mentionPubkeys,
   );
   if (extraTags) tags.push(...extraTags);
-  const event = createMockEvent(eventKind, content, tags, authorPubkey);
+  const event = createMockEvent(
+    eventKind,
+    content,
+    tags,
+    authorPubkey,
+    createdAt,
+    id,
+  );
   recordMockMessage(channelId, event);
-  emitMockLiveEvent(channelId, event);
+  if (emitLive) {
+    emitMockLiveEvent(channelId, event);
+  }
   return event;
 }
 
@@ -5644,7 +5691,7 @@ function sendToMockSocket(args: {
       return;
     }
 
-    emitMockHistory(socket, subId, channelId);
+    emitMockHistory(socket, subId, channelId, filter);
     return;
   }
 
@@ -5785,6 +5832,9 @@ export function maybeInstallE2eTauriMocks() {
     kind,
     mentionPubkeys,
     extraTags,
+    createdAt,
+    id,
+    emitLive = true,
   }) => {
     const channel = mockChannels.find(
       (candidate) => candidate.name === channelName,
@@ -5801,6 +5851,9 @@ export function maybeInstallE2eTauriMocks() {
       kind,
       mentionPubkeys,
       extraTags,
+      createdAt,
+      id,
+      emitLive,
     );
   };
   window.__BUZZ_E2E_EMIT_MOCK_TYPING__ = ({ channelName, pubkey }) => {

@@ -23,8 +23,34 @@ export function useLoadOlderOnScroll({
   sentinelRef,
 }: UseLoadOlderOnScrollOptions) {
   const restoreScrollPositionRef = React.useRef(restoreScrollPosition);
+  const [, scheduleRestore] = React.useReducer((count: number) => count + 1, 0);
+  const pendingRestoreRef = React.useRef<{
+    messageId: string;
+    top: number;
+  } | null>(null);
   React.useEffect(() => {
     restoreScrollPositionRef.current = restoreScrollPosition;
+  });
+
+  React.useLayoutEffect(() => {
+    const pendingRestore = pendingRestoreRef.current;
+    const container = scrollContainerRef.current;
+    if (!pendingRestore || !container) {
+      return;
+    }
+
+    pendingRestoreRef.current = null;
+    const anchor = container.querySelector<HTMLElement>(
+      `[data-message-id="${pendingRestore.messageId}"]`,
+    );
+    if (!anchor) {
+      return;
+    }
+
+    const delta = anchor.getBoundingClientRect().top - pendingRestore.top;
+    if (delta !== 0) {
+      restoreScrollPositionRef.current(container.scrollTop + delta);
+    }
   });
 
   React.useEffect(() => {
@@ -56,20 +82,20 @@ export function useLoadOlderOnScroll({
 
           currentObserver?.disconnect();
 
-          const previousHeight = container.scrollHeight;
-          const previousScrollTop = container.scrollTop;
-          void fetchOlder().then(() => {
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                const newHeight = container.scrollHeight;
-                const delta = newHeight - previousHeight;
-                if (delta > 0) {
-                  restoreScrollPositionRef.current(previousScrollTop + delta);
-                }
-                observe();
-              });
+          const anchor =
+            container.querySelector<HTMLElement>("[data-message-id]");
+          const messageId = anchor?.dataset.messageId;
+          const top = anchor?.getBoundingClientRect().top;
+          void fetchOlder()
+            .then(() => {
+              if (messageId && top !== undefined) {
+                pendingRestoreRef.current = { messageId, top };
+                scheduleRestore();
+              }
+            })
+            .finally(() => {
+              observe();
             });
-          });
         },
         { root: container, rootMargin: "200px 0px 0px 0px" },
       );
