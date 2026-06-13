@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.20
+
+c7dd4295b fix(release): resolve Windows sidecar path and Linux AppImage updater format (#1024)
+
+
 ## v0.3.19
 
 faf00724f fix(release): ignore prerelease tags in changelog generation (#1021)
