@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.23
+
+9b410325 fix(release): publish manifest from successful platforms (#1039)
+
+
 ## v0.3.22
 
 fix(release): publish rolling updater manifest for automated release tags
