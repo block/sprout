@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildMessageLink,
+  isBuzzUrl,
   isMessageLink,
   parseMessageLink,
 } from "./messageLink.ts";
@@ -117,4 +118,29 @@ test("isMessageLink matches buzz://message and legacy buzz://message", () => {
   assert.equal(isMessageLink("https://example.com"), false);
   assert.equal(isMessageLink(undefined), false);
   assert.equal(isMessageLink(""), false);
+});
+
+test("isBuzzUrl matches any well-formed buzz:// URL", () => {
+  // Message deep-links.
+  assert.equal(
+    isBuzzUrl(`buzz://message?channel=${CHANNEL}&id=${MESSAGE}`),
+    true,
+  );
+  // Non-message buzz:// URLs (tho wants ALL buzz:// links to wrap).
+  assert.equal(isBuzzUrl("buzz://connect?relay=wss://x"), true);
+  assert.equal(isBuzzUrl("buzz://channel?id=abc"), true);
+  // Surrounding whitespace is tolerated.
+  assert.equal(
+    isBuzzUrl(`  buzz://message?channel=${CHANNEL}&id=${MESSAGE}  `),
+    true,
+  );
+  // Standard URLs and non-buzz schemes are rejected.
+  assert.equal(isBuzzUrl("https://example.com"), false);
+  assert.equal(isBuzzUrl("mailto:x@example.com"), false);
+  // Malformed / empty input is rejected.
+  assert.equal(isBuzzUrl("buzz"), false);
+  assert.equal(isBuzzUrl("not a url at all"), false);
+  assert.equal(isBuzzUrl(undefined), false);
+  assert.equal(isBuzzUrl(null), false);
+  assert.equal(isBuzzUrl(""), false);
 });

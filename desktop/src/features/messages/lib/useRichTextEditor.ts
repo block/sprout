@@ -6,7 +6,12 @@ import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Link from "@tiptap/extension-link";
 import { Extension, type KeyboardShortcutCommand } from "@tiptap/core";
-import { Selection, TextSelection } from "@tiptap/pm/state";
+import {
+  Plugin,
+  PluginKey,
+  Selection,
+  TextSelection,
+} from "@tiptap/pm/state";
 
 import { isMacPlatform } from "@/shared/lib/platform";
 import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
@@ -23,6 +28,7 @@ import {
   handleCodeFenceEnter,
   insertNewlineInCodeBlock,
 } from "./codeBlockExtensions";
+import { isBuzzUrl } from "./messageLink";
 
 /**
  * Plain-text edit descriptor returned by autocomplete hooks
@@ -299,6 +305,44 @@ export function useRichTextEditor({
         Link.extend({
           inclusive() {
             return false;
+          },
+          // The built-in `linkOnPaste` handler detects URLs with linkifyjs,
+          // which only knows standard schemes (http/https/mailto) — so pasting
+          // a `buzz://` URL over a text selection clobbers it with raw text
+          // instead of wrapping it in a link. Prepend our own paste handler
+          // that recognises `buzz://` URLs and wraps the highlighted selection,
+          // matching the standard-URL UX. Runs before the parent plugins so it
+          // claims the paste first; otherwise we defer to TipTap's defaults.
+          addProseMirrorPlugins() {
+            const linkType = this.type;
+            const buzzLinkPaste = new Plugin({
+              key: new PluginKey("buzzLinkOnPaste"),
+              props: {
+                handlePaste: (view, _event, slice) => {
+                  const { selection } = view.state;
+                  // Only wrap when there's a selection to wrap — empty
+                  // selections fall through to TipTap's normal insert path.
+                  if (selection.empty) return false;
+
+                  let textContent = "";
+                  slice.content.forEach((node) => {
+                    textContent += node.textContent;
+                  });
+
+                  const href = textContent.trim();
+                  // The whole clipboard payload must be a single buzz:// URL —
+                  // same contract as the built-in handler (`value === text`).
+                  if (!isBuzzUrl(href)) return false;
+
+                  return this.editor
+                    .chain()
+                    .setMark(linkType, { href })
+                    .run();
+                },
+              },
+            });
+
+            return [buzzLinkPaste, ...(this.parent?.() ?? [])];
           },
         }).configure({
           openOnClick: false,

@@ -102,3 +102,22 @@ export function isMessageLink(href: string | undefined | null): boolean {
   if (!href) return false;
   return href.startsWith("buzz://message?") || href === "buzz://message";
 }
+
+/**
+ * Returns true if `text` is any `buzz://` URL (not just the message-link
+ * format). Used by the composer's wrap-on-paste handler: linkifyjs (which
+ * TipTap's built-in paste handler relies on) doesn't recognise the `buzz`
+ * scheme, so we detect it ourselves and wrap the highlighted selection.
+ *
+ * Validated via `URL` so we only treat genuinely well-formed `buzz://` URLs as
+ * links — a bare `buzz:` or malformed string won't match.
+ */
+export function isBuzzUrl(text: string | undefined | null): boolean {
+  if (!text) return false;
+  const trimmed = text.trim();
+  try {
+    return new URL(trimmed).protocol === MESSAGE_LINK_SCHEME;
+  } catch {
+    return false;
+  }
+}
