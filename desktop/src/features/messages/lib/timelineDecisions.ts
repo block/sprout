@@ -127,3 +127,33 @@ export function resolveDeepLinkTarget(
   const index = messages.findIndex((message) => message.id === targetMessageId);
   return { resolved: index !== -1, index };
 }
+
+/**
+ * Deferred-list render decision (Phase A.2): when a list render is gated behind
+ * `useDeferredValue`, the painted (deferred) snapshot lags the live one for a
+ * frame. During that lag the deferred list can be empty while the live list is
+ * not. This helper picks which of three states a deferred list should paint so
+ * we never flash an "empty" affordance over an incoming list:
+ *
+ *   - "list"  → paint the deferred rows (deferred snapshot has content)
+ *   - "empty" → paint the empty state (the LIVE list is genuinely empty)
+ *   - "pending" → paint nothing yet (deferred is empty but live has content —
+ *                 the rows are streaming in on the deferred commit)
+ *
+ * Keying the empty state off the live count (not the deferred one) is the
+ * analogue of the no-tearing guarantee for the empty affordance.
+ */
+export type DeferredListRenderState = "list" | "empty" | "pending";
+
+export function selectDeferredListRenderState(
+  deferredCount: number,
+  liveCount: number,
+): DeferredListRenderState {
+  if (deferredCount > 0) {
+    return "list";
+  }
+  if (liveCount === 0) {
+    return "empty";
+  }
+  return "pending";
+}

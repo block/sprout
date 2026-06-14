@@ -6,6 +6,7 @@ import {
   buildDayGroupBoundaries,
   isNearBottomMetrics,
   resolveDeepLinkTarget,
+  selectDeferredListRenderState,
   selectLatestMessageKey,
 } from "./timelineDecisions.ts";
 
@@ -249,4 +250,40 @@ test("no-tearing: stale snapshot keeps all three decisions internally consistent
   assert.equal(link.resolved, false);
   assert.equal(coveredCount, stale.length);
   assert.equal(latestKey, "b");
+});
+
+// --- Phase A.2: deferred reply-list render state (thread side pane) ---------
+//
+// When MessageThreadPanel gates its reply render behind useDeferredValue, the
+// painted (deferred) snapshot lags the live one for a frame. selectDeferredList
+// RenderState picks which of three states the reply region paints so we never
+// flash "No replies" over a list that's streaming in on the deferred commit.
+
+test("deferred-render: paints the list whenever the deferred snapshot has rows", () => {
+  // deferred caught up — normal steady state.
+  assert.equal(selectDeferredListRenderState(3, 3), "list");
+  // deferred still showing the OLD non-empty list while a new one streams in;
+  // we keep painting rows (no flash) — the dim-pending styling handles the lag.
+  assert.equal(selectDeferredListRenderState(2, 5), "list");
+});
+
+test("deferred-render: empty state only when the LIVE list is genuinely empty", () => {
+  // Both empty — the thread truly has no replies.
+  assert.equal(selectDeferredListRenderState(0, 0), "empty");
+});
+
+test("deferred-render: pending when deferred is empty but live has content", () => {
+  // The race Phase A.2 closes: deferred snapshot hasn't committed the rows yet
+  // but the live list is non-empty. Must NOT report "empty" — that would flash
+  // the "No replies" affordance for a frame on thread-open.
+  assert.equal(selectDeferredListRenderState(0, 4), "pending");
+  assert.notEqual(selectDeferredListRenderState(0, 4), "empty");
+});
+
+test("deferred-render: keys the empty decision off the live count, not deferred", () => {
+  // Same deferred count (0), opposite verdicts — proving the live count is the
+  // tie-breaker. This is the no-tearing guarantee for the empty affordance:
+  // the empty state is a function of the LIVE list, never the lagging one.
+  assert.equal(selectDeferredListRenderState(0, 0), "empty");
+  assert.equal(selectDeferredListRenderState(0, 1), "pending");
 });
