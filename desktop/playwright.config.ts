@@ -41,6 +41,8 @@ export default defineConfig({
         "**/identity-archive.spec.ts",
         "**/identity-archive-hide.spec.ts",
         "**/relay-connectivity-screenshots.spec.ts",
+        "**/unread-pill-screenshots.spec.ts",
+        "**/thread-unread-screenshots.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],

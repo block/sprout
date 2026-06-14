@@ -27,6 +27,7 @@ import { MessageComposer } from "./MessageComposer";
 import { MessageRow } from "./MessageRow";
 import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { TypingIndicatorRow } from "./TypingIndicatorRow";
+import { UnreadDivider } from "./UnreadDivider";
 import { useComposerHeightPadding } from "./useComposerHeightPadding";
 import { useTimelineScrollManager } from "./useTimelineScrollManager";
 
@@ -37,6 +38,8 @@ type MessageThreadPanelProps = {
   channelName: string;
   currentPubkey?: string;
   disabled?: boolean;
+  /** Event id of the first unread reply, or null/undefined if all read. */
+  firstUnreadReplyId?: string | null;
   layout?: "standalone" | "split";
   editTarget?: {
     author: string;
@@ -72,6 +75,8 @@ type MessageThreadPanelProps = {
   scrollTargetId: string | null;
   threadHead: TimelineMessage | null;
   threadReplies: MainTimelineEntry[];
+  /** Subtree unread counts for collapsed summary rows, keyed by reply id. */
+  threadReplyUnreadCounts?: ReadonlyMap<string, number>;
   threadTypingPubkeys: string[];
   toolbarExtraActions?: React.ReactNode;
   widthPx: number;
@@ -98,6 +103,7 @@ export function MessageThreadPanel({
   channelName,
   currentPubkey,
   disabled = false,
+  firstUnreadReplyId,
   layout = "standalone",
   editTarget,
   isSending,
@@ -123,6 +129,7 @@ export function MessageThreadPanel({
   scrollTargetId,
   threadHead,
   threadReplies,
+  threadReplyUnreadCounts,
   threadTypingPubkeys,
   toolbarExtraActions,
   widthPx,
@@ -221,7 +228,9 @@ export function MessageThreadPanel({
         <div className="px-3 pb-3 pt-1" data-testid="message-thread-replies">
           {threadReplies.length > 0 ? (
             <div className="space-y-2.5">
-              {threadReplies.map((entry) => {
+              {threadReplies.map((entry, index) => {
+                const showUnreadDivider =
+                  index > 0 && entry.message.id === firstUnreadReplyId;
                 return (
                   <div
                     className={cn(
@@ -231,6 +240,7 @@ export function MessageThreadPanel({
                     )}
                     key={entry.message.renderKey ?? entry.message.id}
                   >
+                    {showUnreadDivider ? <UnreadDivider /> : null}
                     <MessageRow
                       agentPubkeys={agentPubkeys}
                       channelId={channelId}
@@ -259,6 +269,9 @@ export function MessageThreadPanel({
                         message={entry.message}
                         onOpenThread={onExpandReplies}
                         summary={entry.summary}
+                        unreadCount={threadReplyUnreadCounts?.get(
+                          entry.message.id,
+                        )}
                       />
                     ) : null}
                   </div>

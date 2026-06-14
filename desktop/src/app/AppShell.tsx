@@ -376,24 +376,32 @@ export function AppShell() {
     mutedRootIds,
     muteThread,
     unmuteThread,
-  } = useUnreadChannels(
-    sidebarChannels,
-    activeChannel,
-    // Wait for ChannelScreen to report the latest loaded message before
-    // advancing unread state for the active channel.
-    null,
-    {
-      pubkey: identityQuery.data?.pubkey,
-      relayClient,
-      currentPubkey: identityQuery.data?.pubkey,
-      mutedChannelIds,
-      notifyForActiveChannel: notificationSettings.settings.notifyWhileViewing,
-      onChannelMessage: handleChannelNotification,
-      onDmMessage: handleDmNotification,
-      onLiveMention: refetchHomeFeedOnLiveMention,
-      onThreadReplyDesktopNotification: handleThreadReplyDesktopNotification,
-      followedRootIds,
+  } = useUnreadChannels(sidebarChannels, activeChannel, {
+    pubkey: identityQuery.data?.pubkey,
+    relayClient,
+    currentPubkey: identityQuery.data?.pubkey,
+    mutedChannelIds,
+    notifyForActiveChannel: notificationSettings.settings.notifyWhileViewing,
+    onChannelMessage: handleChannelNotification,
+    onDmMessage: handleDmNotification,
+    onLiveMention: refetchHomeFeedOnLiveMention,
+    onThreadReplyDesktopNotification: handleThreadReplyDesktopNotification,
+    followedRootIds,
+  });
+
+  const getThreadReadAt = React.useCallback(
+    (rootId: string) => getChannelReadAt(`thread:${rootId}`),
+    [getChannelReadAt],
+  );
+
+  const markThreadRead = React.useCallback(
+    (rootId: string, timestamp: number) => {
+      markChannelRead(
+        `thread:${rootId}`,
+        new Date(timestamp * 1_000).toISOString(),
+      );
     },
+    [markChannelRead],
   );
 
   // Badge count is computed here (rather than inside useHomeFeedNotifications)
@@ -740,6 +748,8 @@ export function AppShell() {
               setIsChannelManagementOpen(true);
             },
             getChannelReadAt,
+            getThreadReadAt,
+            markThreadRead,
             readStateVersion,
             followThread: handleFollowThread,
             unfollowThread: handleUnfollowThread,
