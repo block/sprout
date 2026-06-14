@@ -2,7 +2,7 @@ import * as React from "react";
 
 import { formatDayHeading } from "@/features/messages/lib/dateFormatters";
 import { buildMainTimelineEntries } from "@/features/messages/lib/threadPanel";
-import { buildDayGroupBoundaries } from "@/features/messages/lib/timelineDecisions";
+import { buildDayGroupBoundaries } from "@/features/messages/lib/timelineSnapshot";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { ChannelType } from "@/shared/api/types";

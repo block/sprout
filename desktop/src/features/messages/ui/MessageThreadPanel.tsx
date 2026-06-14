@@ -29,7 +29,7 @@ import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { TypingIndicatorRow } from "./TypingIndicatorRow";
 import { useComposerHeightPadding } from "./useComposerHeightPadding";
 import { useTimelineScrollManager } from "./useTimelineScrollManager";
-import { selectDeferredListRenderState } from "@/features/messages/lib/timelineDecisions";
+import { selectDeferredListRenderState } from "@/features/messages/lib/timelineSnapshot";
 
 type MessageThreadPanelProps = {
   agentPubkeys?: ReadonlySet<string>;
@@ -84,7 +84,7 @@ type MessageThreadPanelProps = {
 /** Stable empty reference used as the `useDeferredValue` initial value so the
  *  first render when a thread opens stays light instead of blocking on the full
  *  reply list. Must be module-level so its identity never changes. Mirrors
- *  `EMPTY_MESSAGES` in MessageTimeline (Phase A.1). */
+ *  `EMPTY_MESSAGES` in MessageTimeline. */
 const EMPTY_THREAD_REPLIES: MainTimelineEntry[] = [];
 
 function canManageMessage(
@@ -157,19 +157,18 @@ export function MessageThreadPanel({
         }
       : null;
 
-  // Phase A.2 perf: the thread side pane renders its reply list straight into
-  // heavy `react-markdown` rows (`MessageRow`) with no deferral, so opening a
-  // deep thread blocks the main thread and the OS shows the busy cursor —
-  // exactly the freeze Phase A.1 fixed on the main timeline. Gate the reply
-  // render behind the same React concurrency primitive. `initialValue: []`
-  // keeps even the FIRST render on thread-open light; the heavy list streams in
-  // on a deferred, interruptible commit. We deliberately drive BOTH the scroll
-  // manager and the rendered list off the SAME deferred value — sticky-bottom /
-  // deep-link logic reads the DOM (`scrollIntoView`), so it must stay consistent
-  // with what's actually painted. You can't scroll to a reply that hasn't
-  // committed yet. This is the shared-snapshot / no-tearing guarantee, here
-  // inherited for free: the thread pane routes through the same
-  // `useTimelineScrollManager` (and its `timelineDecisions` helpers) as A.1.
+  // The thread side pane renders its reply list straight into heavy
+  // `react-markdown` rows (`MessageRow`), so opening a deep thread would block
+  // the main thread and the OS would show the busy cursor. Gate the reply render
+  // behind `useDeferredValue`. `initialValue: []` keeps even the FIRST render on
+  // thread-open light; the heavy list streams in on a deferred, interruptible
+  // commit. We deliberately drive BOTH the scroll manager and the rendered list
+  // off the SAME deferred value — sticky-bottom / deep-link logic reads the DOM
+  // (`scrollIntoView`), so it must stay consistent with what's actually painted.
+  // You can't scroll to a reply that hasn't committed yet. The thread pane gets
+  // this no-tearing guarantee for free by routing through the same
+  // `useTimelineScrollManager` (and its `timelineSnapshot` helpers) as the main
+  // timeline.
   const deferredThreadReplies = React.useDeferredValue(
     threadReplies,
     EMPTY_THREAD_REPLIES,
@@ -257,10 +256,10 @@ export function MessageThreadPanel({
             <div
               className={cn(
                 "space-y-2.5",
-                // Phase A.2: while a deferred render is in flight the painted
-                // reply list lags the latest `threadReplies`. Dim it slightly so
-                // the streaming-in reads as intentional instead of frozen —
-                // mirrors the main timeline (A.1).
+                // While a deferred render is in flight the painted reply list
+                // lags the latest `threadReplies`. Dim it slightly so the
+                // streaming-in reads as intentional instead of frozen — mirrors
+                // the main timeline.
                 isRepliesPending && "opacity-60 transition-opacity",
               )}
               data-render-pending={isRepliesPending ? "true" : undefined}

@@ -133,7 +133,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   const scrollContainerRef = externalScrollRef ?? internalScrollRef;
   const topSentinelRef = React.useRef<HTMLDivElement>(null);
 
-  // Phase A perf: gate the heavy timeline render (each row runs a synchronous
+  // Gate the heavy timeline render (each row runs a synchronous
   // react-markdown parse) behind React concurrency. `useDeferredValue` lets the
   // commit that rebuilds the message list yield to higher-priority work, so the
   // main thread stops freezing and the OS no longer shows the busy cursor when
@@ -380,7 +380,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                 className={cn(
                   "flex flex-col gap-2",
                   !showIntro && "mt-auto",
-                  // Phase A: while a deferred render is in flight the painted
+                  // While a deferred render is in flight the painted
                   // list lags the latest `messages`. Dim it slightly so the
                   // streaming-in feels intentional instead of frozen.
                   isRenderPending && "opacity-60 transition-opacity",

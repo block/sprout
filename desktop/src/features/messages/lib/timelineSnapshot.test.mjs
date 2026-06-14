@@ -8,7 +8,7 @@ import {
   resolveDeepLinkTarget,
   selectDeferredListRenderState,
   selectLatestMessageKey,
-} from "./timelineDecisions.ts";
+} from "./timelineSnapshot.ts";
 
 // Local-midnight unix-second timestamps so isSameDay (local time) is stable
 // regardless of the machine's timezone.
@@ -188,10 +188,10 @@ test("resolveDeepLinkTarget: unresolved when the target is not in the snapshot",
 
 // --- shared-snapshot / no-tearing guarantee ----------------------------------
 //
-// This is the race Phase A closed: all three must-keep decisions must read off
-// the SAME deferred snapshot. If the deep-link decision reads a fresh snapshot
-// while the rendered list / scroll math still read a stale one, the jump fires
-// against a row that hasn't committed and silently fails.
+// All three must-keep decisions must read off the SAME snapshot. If the deep-link
+// decision reads a fresh snapshot while the rendered list / scroll math still
+// read a stale one, the jump fires against a row that hasn't committed and
+// silently fails.
 
 test("no-tearing: a target only in the fresh snapshot does NOT resolve against the stale one", () => {
   const stale = [message({ id: "a" }), message({ id: "b" })];
@@ -233,8 +233,8 @@ test("no-tearing: all three decisions agree when fed one shared snapshot", () =>
 });
 
 test("no-tearing: stale snapshot keeps all three decisions internally consistent", () => {
-  // Feeding the stale list everywhere (what Phase A guarantees) keeps the
-  // decisions consistent with each other — none of them see the uncommitted row.
+  // Feeding the stale list everywhere keeps the decisions consistent with each
+  // other — none of them see the uncommitted row.
   const stale = [
     message({ id: "a", createdAt: dayAt(2026, 6, 14, 9) }),
     message({ id: "b", createdAt: dayAt(2026, 6, 14, 10) }),
@@ -252,7 +252,7 @@ test("no-tearing: stale snapshot keeps all three decisions internally consistent
   assert.equal(latestKey, "b");
 });
 
-// --- Phase A.2: deferred reply-list render state (thread side pane) ---------
+// --- deferred reply-list render state (thread side pane) --------------------
 //
 // When MessageThreadPanel gates its reply render behind useDeferredValue, the
 // painted (deferred) snapshot lags the live one for a frame. selectDeferredList
@@ -273,9 +273,9 @@ test("deferred-render: empty state only when the LIVE list is genuinely empty", 
 });
 
 test("deferred-render: pending when deferred is empty but live has content", () => {
-  // The race Phase A.2 closes: deferred snapshot hasn't committed the rows yet
-  // but the live list is non-empty. Must NOT report "empty" — that would flash
-  // the "No replies" affordance for a frame on thread-open.
+  // Deferred snapshot hasn't committed the rows yet but the live list is
+  // non-empty. Must NOT report "empty" — that would flash the "No replies"
+  // affordance for a frame on thread-open.
   assert.equal(selectDeferredListRenderState(0, 4), "pending");
   assert.notEqual(selectDeferredListRenderState(0, 4), "empty");
 });

@@ -1,23 +1,13 @@
 /**
- * Pure decision helpers for the Phase A timeline concurrency work.
+ * Pure helpers that read a timeline message snapshot to compute the values the
+ * timeline render needs: sticky-bottom autoscroll, day dividers, jump-to-message
+ * deep links, and the deferred reply-list render state.
  *
- * Phase A gated the heavy `MessageTimeline` render behind React's
- * `useDeferredValue` so the main thread stops freezing. The *risk* in that
- * change is not React itself — it's the decision logic that reads the deferred
- * snapshot and the three must-keep behaviors that hang off it:
- *
- *   1. sticky-bottom autoscroll
- *   2. day dividers
- *   3. jump-to-message deep links
- *
- * …plus the shared-snapshot / no-tearing guarantee: all three must read off the
- * SAME snapshot, never a mix of stale and fresh lists. If they tear apart, a
- * deep-link jump can fire against a row that hasn't committed and silently fail.
- *
- * These functions lift those decisions out of the component's render body / the
- * scroll-manager effects so they can be covered by the lib-level `*.test.mjs`
- * suite. The component keeps its React wiring (the `useDeferredValue` call, the
- * effects, the DOM refs) and delegates the actual decisions here.
+ * Keeping these out of the component render body / scroll-manager effects lets
+ * them be covered by the lib-level `*.test.mjs` suite. It also enforces the key
+ * correctness property: every decision must read off the SAME snapshot. If the
+ * deep-link lookup reads a fresher list than the rows the DOM has actually
+ * committed, a jump fires against a row that isn't there yet and silently fails.
  */
 
 import type { TimelineMessage } from "@/features/messages/types";
@@ -34,15 +24,23 @@ export type ScrollMetrics = {
 };
 
 /**
- * Sticky-bottom decision: is the timeline scrolled close enough to the bottom
- * to count as "at bottom"? Pure version of the old `isNearBottom(el)` so the
- * threshold math is testable without a DOM.
+ * Is the timeline scrolled close enough to the bottom to count as "at bottom"?
+ * Pure over geometry so the threshold math is testable without a DOM.
  */
 export function isNearBottomMetrics(metrics: ScrollMetrics): boolean {
   return (
     metrics.scrollHeight - metrics.clientHeight - metrics.scrollTop <=
     BOTTOM_THRESHOLD_PX
   );
+}
+
+/** Reads live scroll geometry off a container and applies the bottom-threshold rule. */
+export function isNearBottom(container: HTMLDivElement): boolean {
+  return isNearBottomMetrics({
+    scrollHeight: container.scrollHeight,
+    clientHeight: container.clientHeight,
+    scrollTop: container.scrollTop,
+  });
 }
 
 /**
@@ -73,10 +71,9 @@ export type DayGroupBoundary = {
 };
 
 /**
- * Day-divider decision: walk a snapshot in order and produce the day-group
- * boundaries. A new group starts at index 0 and whenever a message falls on a
- * different calendar day than the one before it — exactly the rule the render
- * loop used inline, now pure and testable.
+ * Walks a snapshot in order and produces the day-group boundaries. A new group
+ * starts at index 0 and whenever a message falls on a different calendar day
+ * than the one before it.
  */
 export function buildDayGroupBoundaries(
   messages: readonly TimelineMessage[],
@@ -111,11 +108,10 @@ export type DeepLinkResolution = {
 };
 
 /**
- * Deep-link decision: does a jump-to-message target resolve against THIS
- * snapshot? The scroll-manager effect only does `querySelector` +
- * `scrollIntoView` once a target row is actually committed — so the jump must
- * read the same snapshot the list rendered, or it scrolls to a row that isn't
- * there yet. This is the tearing race Phase A closed.
+ * Does a jump-to-message target resolve against THIS snapshot? The scroll-manager
+ * effect only does `querySelector` + `scrollIntoView` once a target row is
+ * actually committed, so the jump must read the same snapshot the list rendered
+ * — otherwise it scrolls to a row that isn't there yet.
  */
 export function resolveDeepLinkTarget(
   messages: readonly TimelineMessage[],
@@ -129,19 +125,14 @@ export function resolveDeepLinkTarget(
 }
 
 /**
- * Deferred-list render decision (Phase A.2): when a list render is gated behind
- * `useDeferredValue`, the painted (deferred) snapshot lags the live one for a
- * frame. During that lag the deferred list can be empty while the live list is
- * not. This helper picks which of three states a deferred list should paint so
- * we never flash an "empty" affordance over an incoming list:
+ * Which of three states a deferred list should paint. A list gated behind
+ * `useDeferredValue` lags the live one for a frame, so the deferred snapshot can
+ * be empty while the live list is not. Keying the empty state off the LIVE count
+ * stops us flashing an "empty" affordance over a list that's streaming in:
  *
- *   - "list"  → paint the deferred rows (deferred snapshot has content)
- *   - "empty" → paint the empty state (the LIVE list is genuinely empty)
- *   - "pending" → paint nothing yet (deferred is empty but live has content —
- *                 the rows are streaming in on the deferred commit)
- *
- * Keying the empty state off the live count (not the deferred one) is the
- * analogue of the no-tearing guarantee for the empty affordance.
+ *   - "list"    → the deferred snapshot has rows; paint them
+ *   - "empty"   → the LIVE list is genuinely empty; paint the empty state
+ *   - "pending" → deferred is empty but live has content; paint nothing yet
  */
 export type DeferredListRenderState = "list" | "empty" | "pending";
 

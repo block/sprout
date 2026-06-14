@@ -1,11 +1,11 @@
 import * as React from "react";
 
 import {
+  isNearBottom,
   resolveDeepLinkTarget,
   selectLatestMessageKey,
-} from "@/features/messages/lib/timelineDecisions";
+} from "@/features/messages/lib/timelineSnapshot";
 import type { TimelineMessage } from "@/features/messages/types";
-import { isNearBottom } from "./messageTimelineUtils";
 
 type UseTimelineScrollManagerOptions = {
   channelId?: string | null;
@@ -362,7 +362,7 @@ export function useTimelineScrollManager({
     // jump once the target actually exists in THIS (deferred) snapshot. If it
     // doesn't, the row hasn't committed yet — bail and let the next snapshot that
     // includes it drive the jump. This reads the same `messages` snapshot the
-    // list rendered, which is the tearing race Phase A closed.
+    // list rendered, which closes the tearing race.
     if (!resolveDeepLinkTarget(messages, targetMessageId).resolved) {
       return;
     }
