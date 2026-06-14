@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.3.21
+
+4d19a590 fix(release): use signed NSIS installer for updates (#1036)
+fa1cade3 handoff: pass full session history to summarizer (#1033)
+6e4c8680 feat(emoji): latest-set-wins union for custom emoji across desktop, mobile, and CLI (#989)
+5f8ab33b Fix relay NIP-11 software URL (#1030)
+5c2f46e6 fix(desktop): make Windows release compile cleanly (#1029)
+6caa359d Add production Docker Compose bundle (#985)
+a32681fd feat(profile): show active turn badges on agent profile panel and popover (#1026)
+
+
 ## v0.3.20
 
 c7dd4295b fix(release): resolve Windows sidecar path and Linux AppImage updater format (#1024)
