@@ -8,64 +8,28 @@ type UseLoadOlderOnScrollOptions = {
   sentinelRef: React.RefObject<HTMLDivElement | null>;
 };
 
-type ScrollAnchor = {
-  id: string;
-  top: number;
-};
-
-type ActiveScrollAnchorLock = {
-  cleanup: () => void;
-  restore: () => void;
-  scheduleReleaseAfterQuietLayout: () => void;
-  trackPendingImages: () => void;
-};
-
-function captureScrollAnchor(container: HTMLDivElement): ScrollAnchor | null {
-  const containerRect = container.getBoundingClientRect();
-  const messages = Array.from(
-    container.querySelectorAll<HTMLElement>("[data-message-id]"),
-  );
-
-  for (const message of messages) {
-    const rect = message.getBoundingClientRect();
-    if (rect.bottom <= containerRect.top || rect.top >= containerRect.bottom) {
-      continue;
-    }
-
-    return {
-      id: message.dataset.messageId ?? "",
-      top: rect.top - containerRect.top,
-    };
-  }
-
-  return null;
-}
-
-function restoreScrollAnchor(
-  container: HTMLDivElement,
-  anchor: ScrollAnchor | null,
-): number | null {
-  if (!anchor?.id) {
-    return null;
-  }
-
-  const message = container.querySelector<HTMLElement>(
-    `[data-message-id="${CSS.escape(anchor.id)}"]`,
-  );
-  if (!message) {
-    return null;
-  }
-
-  const currentTop =
-    message.getBoundingClientRect().top - container.getBoundingClientRect().top;
-  container.scrollTop += currentTop - anchor.top;
-  return container.scrollTop;
-}
-
 /**
  * Triggers `fetchOlder` when a sentinel element near the top of the scroll
- * container enters the viewport, then keeps the viewport locked to the first
- * visible message until the prepended content and its media have settled.
+ * container enters the viewport, then restores the scroll position so the
+ * visible content doesn't jump.
+ *
+ * Uses the classical infinite-scroll-up algorithm: snapshot `scrollHeight`
+ * the moment `fetchOlder` resolves (before React commits the new messages),
+ * then in a `useLayoutEffect` after the prepend commits, advance the scroll
+ * position by the resulting `scrollHeight` delta. This is robust to:
+ *
+ *  - The user continuing to scroll during the fetch — `scrollTop` already
+ *    reflects whatever they did, we only add the prepended height on top.
+ *  - Inline loading chrome that appears during the fetch (e.g. a top
+ *    spinner gated on `isFetchingOlder`). The baseline `scrollHeight` is
+ *    captured *after* such chrome is mounted, so when it unmounts in the
+ *    same commit as the prepend, the delta still reflects the net change
+ *    in content above the viewport.
+ *
+ * A prior implementation snapshotted an anchor element's bounding-rect top
+ * *before* the fetch and tried to restore by anchor delta. That captured
+ * the user's in-flight scroll into the delta and snapped them back by
+ * hundreds-to-thousands of pixels per fetch.
  */
 export function useLoadOlderOnScroll({
   fetchOlder,
@@ -74,32 +38,47 @@ export function useLoadOlderOnScroll({
   scrollContainerRef,
   sentinelRef,
 }: UseLoadOlderOnScrollOptions) {
-  const activeLockRef = React.useRef<ActiveScrollAnchorLock | null>(null);
-  const loadStateRef = React.useRef({
-    fetchOlder,
-    hasOlderMessages,
-    isLoading,
-  });
-
-  React.useEffect(() => {
-    loadStateRef.current = { fetchOlder, hasOlderMessages, isLoading };
-  }, [fetchOlder, hasOlderMessages, isLoading]);
+  const [, scheduleRestore] = React.useReducer((count: number) => count + 1, 0);
+  const pendingPreviousScrollHeightRef = React.useRef<number | null>(null);
 
   React.useLayoutEffect(() => {
-    const lock = activeLockRef.current;
-    if (!lock) {
+    const previousScrollHeight = pendingPreviousScrollHeightRef.current;
+    const container = scrollContainerRef.current;
+    if (previousScrollHeight === null || !container) {
       return;
     }
 
-    lock.trackPendingImages();
-    lock.restore();
-    lock.scheduleReleaseAfterQuietLayout();
+    pendingPreviousScrollHeightRef.current = null;
+    const delta = container.scrollHeight - previousScrollHeight;
+    if (delta > 0) {
+      // Single synchronous pre-paint write. We deliberately do NOT route
+      // through useTimelineScrollManager.restoreScrollPosition: that helper
+      // schedules a 2-rAF locked-write loop (correct for
+      // ResizeObserver-driven resizes that may settle across frames, wrong
+      // for prepend), which fights live wheel input for 2–3 frames after
+      // every fetchOlder.
+      //
+      // Use `scrollBy` rather than `scrollTop = scrollTop + delta`: on
+      // WebKit/macOS (which Tauri uses for the desktop app) scrolling
+      // happens off the main thread, so a `scrollTop` *read* during active
+      // wheel input can be stale relative to what the user actually sees.
+      // `scrollBy` is delta-based — it doesn't read first — and avoids that
+      // class of stale-read bug. (Element/Matrix documents the same
+      // failure mode in element-web's docs/scrolling.md.)
+      container.scrollBy(0, delta);
+    }
   });
 
   React.useEffect(() => {
     const sentinel = sentinelRef.current;
     const container = scrollContainerRef.current;
-    if (!sentinel || !container) {
+    if (
+      !sentinel ||
+      !container ||
+      !fetchOlder ||
+      isLoading ||
+      !hasOlderMessages
+    ) {
       return;
     }
 
@@ -113,188 +92,31 @@ export function useLoadOlderOnScroll({
 
       currentObserver = new IntersectionObserver(
         ([entry]) => {
-          const { fetchOlder, hasOlderMessages, isLoading } =
-            loadStateRef.current;
-          if (
-            !entry.isIntersecting ||
-            disposed ||
-            activeLockRef.current ||
-            !fetchOlder ||
-            isLoading ||
-            !hasOlderMessages
-          ) {
+          if (!entry.isIntersecting || disposed) {
             return;
           }
 
           currentObserver?.disconnect();
 
-          let anchor = captureScrollAnchor(container);
-          let fetchSettled = false;
-          let pendingImages = 0;
-          let restoreFrame: number | null = null;
-          let releaseTimer: number | null = null;
-          let maxReleaseTimer: number | null = null;
-          let resizeObserver: ResizeObserver | null = null;
-          let mutationObserver: MutationObserver | null = null;
-          let isRestoringAnchor = false;
-          let lastRestoredScrollTop: number | null = null;
-          const trackedImages = new WeakSet<HTMLImageElement>();
-          const imageCleanups: Array<() => void> = [];
-
-          const restoreAcrossFrames = (remainingFrames: number) => {
-            isRestoringAnchor = true;
-            lastRestoredScrollTop = restoreScrollAnchor(container, anchor);
-
-            if (remainingFrames <= 0) {
-              requestAnimationFrame(() => {
-                isRestoringAnchor = false;
-              });
-              return;
-            }
-
-            restoreFrame = requestAnimationFrame(() => {
-              restoreFrame = null;
-              restoreAcrossFrames(remainingFrames - 1);
-            });
-          };
-
-          const scheduleRestore = () => {
-            if (restoreFrame !== null) {
-              return;
-            }
-
-            restoreFrame = requestAnimationFrame(() => {
-              restoreFrame = null;
-              restoreAcrossFrames(2);
-            });
-          };
-
-          const cleanupLock = () => {
-            container.removeEventListener("scroll", updateAnchor);
-            resizeObserver?.disconnect();
-            mutationObserver?.disconnect();
-            for (const cleanupImage of imageCleanups) {
-              cleanupImage();
-            }
-            imageCleanups.length = 0;
-            if (restoreFrame !== null) {
-              cancelAnimationFrame(restoreFrame);
-              restoreFrame = null;
-            }
-            if (releaseTimer !== null) {
-              window.clearTimeout(releaseTimer);
-              releaseTimer = null;
-            }
-            if (maxReleaseTimer !== null) {
-              window.clearTimeout(maxReleaseTimer);
-              maxReleaseTimer = null;
-            }
-            if (activeLockRef.current === lock) {
-              activeLockRef.current = null;
-            }
-          };
-
-          const releaseLock = () => {
-            cleanupLock();
-            observe();
-          };
-
-          const scheduleReleaseAfterQuietLayout = () => {
-            if (!fetchSettled || pendingImages > 0) {
-              return;
-            }
-            if (releaseTimer !== null) {
-              window.clearTimeout(releaseTimer);
-            }
-            releaseTimer = window.setTimeout(releaseLock, 250);
-          };
-
-          const settleImage = () => {
-            pendingImages = Math.max(0, pendingImages - 1);
-            scheduleRestore();
-            scheduleReleaseAfterQuietLayout();
-          };
-
-          const trackPendingImages = () => {
-            const images = Array.from(container.querySelectorAll("img"));
-            for (const image of images) {
-              if (trackedImages.has(image)) {
-                continue;
-              }
-              trackedImages.add(image);
-              if (image.complete) {
-                continue;
-              }
-
-              pendingImages += 1;
-              image.addEventListener("load", settleImage, { once: true });
-              image.addEventListener("error", settleImage, { once: true });
-              imageCleanups.push(() => {
-                image.removeEventListener("load", settleImage);
-                image.removeEventListener("error", settleImage);
-              });
-            }
-          };
-
-          const updateAnchor = () => {
-            if (
-              isRestoringAnchor &&
-              container.scrollTop === lastRestoredScrollTop
-            ) {
-              return;
-            }
-            anchor = captureScrollAnchor(container) ?? anchor;
-          };
-
-          const lock: ActiveScrollAnchorLock = {
-            cleanup: cleanupLock,
-            restore: () => {
-              restoreAcrossFrames(2);
-            },
-            scheduleReleaseAfterQuietLayout,
-            trackPendingImages,
-          };
-
-          container.addEventListener("scroll", updateAnchor, { passive: true });
-          activeLockRef.current = lock;
-
-          const content = container.firstElementChild;
-          if (content instanceof HTMLElement) {
-            if (typeof ResizeObserver !== "undefined") {
-              resizeObserver = new ResizeObserver(() => {
-                scheduleRestore();
-                scheduleReleaseAfterQuietLayout();
-              });
-              resizeObserver.observe(content);
-            }
-
-            if (typeof MutationObserver !== "undefined") {
-              mutationObserver = new MutationObserver(() => {
-                trackPendingImages();
-                scheduleRestore();
-                scheduleReleaseAfterQuietLayout();
-              });
-              mutationObserver.observe(content, {
-                childList: true,
-                subtree: true,
-              });
-            }
-          }
-
-          void fetchOlder().finally(() => {
-            fetchSettled = true;
-            requestAnimationFrame(() => {
+          void fetchOlder()
+            .then(() => {
               if (disposed) {
-                cleanupLock();
                 return;
               }
-
-              trackPendingImages();
+              // Capture scrollHeight in the resolved callback rather than at
+              // IO-fire time so that any chrome that appears *during* the
+              // fetch (e.g. an inline loading spinner gated on
+              // `isFetchingOlder`) is included in the baseline. The
+              // useLayoutEffect that runs after the prepended messages
+              // commit measures against this baseline; if the spinner is
+              // unmounted in the same React commit as the prepend, the
+              // delta still reflects net prepended content correctly.
+              pendingPreviousScrollHeightRef.current = container.scrollHeight;
               scheduleRestore();
-              scheduleReleaseAfterQuietLayout();
-              maxReleaseTimer = window.setTimeout(releaseLock, 10_000);
+            })
+            .finally(() => {
+              observe();
             });
-          });
         },
         { root: container, rootMargin: "200px 0px 0px 0px" },
       );
@@ -305,8 +127,13 @@ export function useLoadOlderOnScroll({
     observe();
     return () => {
       disposed = true;
-      activeLockRef.current?.cleanup();
       currentObserver?.disconnect();
     };
-  }, [scrollContainerRef, sentinelRef]);
+  }, [
+    fetchOlder,
+    hasOlderMessages,
+    isLoading,
+    scrollContainerRef,
+    sentinelRef,
+  ]);
 }
