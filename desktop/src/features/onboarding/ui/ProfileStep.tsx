@@ -64,10 +64,20 @@ function isBlockRelayUrl(relayUrl: string | null | undefined) {
   }
 }
 
-function shouldRefreshVpnAccess(errorMessage: string) {
+function shouldRefreshVpnAccess(
+  errorMessage: string,
+  relayUrl: string | null | undefined,
+) {
   const detail = relayErrorDetail(errorMessage).toLowerCase();
+  if (detail.includes("cloudflare")) {
+    return true;
+  }
+
+  if (!isBlockRelayUrl(relayUrl)) {
+    return false;
+  }
+
   return (
-    detail.includes("cloudflare") ||
     detail.includes("access") ||
     detail.includes("sign-in") ||
     detail.includes("re-authenticate") ||
@@ -80,7 +90,7 @@ function resolveOnboardingRelayCardVariant(
   errorMessage: string,
   relayUrl: string | null | undefined,
 ): OnboardingRelayCardVariant {
-  if (shouldRefreshVpnAccess(errorMessage)) {
+  if (shouldRefreshVpnAccess(errorMessage, relayUrl)) {
     return "refresh-access";
   }
 
@@ -92,9 +102,11 @@ function resolveOnboardingRelayCardVariant(
 }
 
 function OnboardingRelayConnectionErrorCard({
+  isSaving,
   message,
   relayUrl,
 }: {
+  isSaving: boolean;
   message: string;
   relayUrl?: string | null;
 }) {
@@ -109,6 +121,7 @@ function OnboardingRelayConnectionErrorCard({
   const connectivityActionRef =
     React.useRef<OnboardingConnectivityAction | null>(null);
   const successTimeoutRef = React.useRef<number | null>(null);
+  const wasSavingRef = React.useRef(isSaving);
   const cardVariant = resolveOnboardingRelayCardVariant(message, relayUrl);
   const isActionPending = connectivityAction !== null || isReconnectPending;
 
@@ -119,6 +132,18 @@ function OnboardingRelayConnectionErrorCard({
       }
     };
   }, []);
+
+  React.useEffect(() => {
+    if (isSaving && !wasSavingRef.current) {
+      if (successTimeoutRef.current !== null) {
+        window.clearTimeout(successTimeoutRef.current);
+        successTimeoutRef.current = null;
+      }
+      setDismissedErrorMessage(null);
+      setSuccessAction(null);
+    }
+    wasSavingRef.current = isSaving;
+  }, [isSaving]);
 
   const markSuccess = React.useCallback(
     (action: OnboardingConnectivityAction) => {
@@ -236,9 +261,11 @@ function OnboardingRelayConnectionErrorCard({
 }
 
 function ErrorBanner({
+  isSaving,
   message,
   relayUrl,
 }: {
+  isSaving: boolean;
   message: string | null;
   relayUrl?: string | null;
 }) {
@@ -249,6 +276,7 @@ function ErrorBanner({
   if (isRelayUnreachableError(message)) {
     return (
       <OnboardingRelayConnectionErrorCard
+        isSaving={isSaving}
         key={message}
         message={message}
         relayUrl={relayUrl}
@@ -351,7 +379,11 @@ export function ProfileStep({
       </label>
 
       {saveRecovery.errorMessage ? (
-        <ErrorBanner message={saveRecovery.errorMessage} relayUrl={relayUrl} />
+        <ErrorBanner
+          isSaving={isSaving}
+          message={saveRecovery.errorMessage}
+          relayUrl={relayUrl}
+        />
       ) : null}
 
       <div className="mt-12 flex w-full max-w-[500px] flex-col gap-3">

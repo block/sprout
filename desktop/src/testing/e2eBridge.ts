@@ -73,6 +73,7 @@ type E2eConfig = {
     profileReadDelayMs?: number;
     profileReadError?: string;
     profileUpdateError?: string;
+    profileUpdateErrors?: string[];
     searchProfiles?: MockSearchProfileSeed[];
     updateAvailable?: boolean;
     updateChannelDelayMs?: number;
@@ -2880,6 +2881,12 @@ async function handleUpdateProfile(
   const identity = getIdentity(config);
   if (!identity) {
     const profileUpdateError = config?.mock?.profileUpdateError;
+    const profileUpdateErrors = config?.mock?.profileUpdateErrors;
+    const nextProfileUpdateError = profileUpdateErrors?.shift();
+    if (nextProfileUpdateError) {
+      throw new Error(nextProfileUpdateError);
+    }
+
     if (profileUpdateError) {
       if (config?.mock) {
         config.mock.profileUpdateError = undefined;

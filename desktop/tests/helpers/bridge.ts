@@ -98,6 +98,7 @@ type MockBridgeOptions = {
   profileReadDelayMs?: number;
   profileReadError?: string;
   profileUpdateError?: string;
+  profileUpdateErrors?: string[];
   searchProfiles?: MockSearchProfileSeed[];
   updateAvailable?: boolean;
   updateChannelDelayMs?: number;
