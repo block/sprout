@@ -306,13 +306,9 @@ export function useRichTextEditor({
           inclusive() {
             return false;
           },
-          // The built-in `linkOnPaste` handler detects URLs with linkifyjs,
-          // which only knows standard schemes (http/https/mailto) — so pasting
-          // a `buzz://` URL over a text selection clobbers it with raw text
-          // instead of wrapping it in a link. Prepend our own paste handler
-          // that recognises `buzz://` URLs and wraps the highlighted selection,
-          // matching the standard-URL UX. Runs before the parent plugins so it
-          // claims the paste first; otherwise we defer to TipTap's defaults.
+          // linkifyjs (which TipTap's `linkOnPaste` uses) doesn't recognise
+          // `buzz://`, so wrap such links ourselves. Runs before the parent
+          // plugins; defers to TipTap's defaults otherwise.
           addProseMirrorPlugins() {
             const linkType = this.type;
             const buzzLinkPaste = new Plugin({
@@ -320,8 +316,6 @@ export function useRichTextEditor({
               props: {
                 handlePaste: (view, _event, slice) => {
                   const { selection } = view.state;
-                  // Only wrap when there's a selection to wrap — empty
-                  // selections fall through to TipTap's normal insert path.
                   if (selection.empty) return false;
 
                   let textContent = "";
@@ -329,9 +323,8 @@ export function useRichTextEditor({
                     textContent += node.textContent;
                   });
 
+                  // Only wrap when the whole payload is a single buzz:// URL.
                   const href = textContent.trim();
-                  // The whole clipboard payload must be a single buzz:// URL —
-                  // same contract as the built-in handler (`value === text`).
                   if (!isBuzzUrl(href)) return false;
 
                   return this.editor
