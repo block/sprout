@@ -10,7 +10,11 @@ import {
   hasMentionClipboardHtml,
   normalizeMentionClipboardHtml,
 } from "@/features/messages/lib/normalizeMentionClipboard";
-import { useRichTextEditor } from "@/features/messages/lib/useRichTextEditor";
+import {
+  type LinkSelectionInfo,
+  useRichTextEditor,
+} from "@/features/messages/lib/useRichTextEditor";
+import { useLinkEditor } from "@/features/messages/lib/useLinkEditor";
 import { DropZoneOverlay } from "@/features/messages/ui/ComposerAttachments";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
 import { MessageComposerToolbar } from "@/features/messages/ui/MessageComposerToolbar";
@@ -77,6 +81,12 @@ export function ForumComposer({
 
   const submitMessageRef = React.useRef<() => void>(() => {});
 
+  // Set after `useLinkEditor` exists; the editor's link-click handler
+  // delegates through this ref to break the hook ordering cycle.
+  const onEditLinkRef = React.useRef<
+    ((info: LinkSelectionInfo) => void) | null
+  >(null);
+
   const richText = useRichTextEditor({
     placeholder,
     editable: !disabled,
@@ -84,6 +94,7 @@ export function ForumComposer({
     channelNames: channelLinks.knownChannelNames,
     onSubmit: () => submitMessageRef.current(),
     isAutocompleteOpen: isAutocompleteOpenRef,
+    onEditLink: (info) => onEditLinkRef.current?.(info),
     onUpdate: ({ markdown, text }) => {
       setContent(markdown);
       contentRef.current = markdown;
@@ -93,6 +104,9 @@ export function ForumComposer({
       channelLinks.updateChannelQuery(text, cursor);
     },
   });
+
+  const linkEditor = useLinkEditor(richText);
+  onEditLinkRef.current = linkEditor.openFromClick;
 
   // ── Mention / channel autocomplete insertion ────────────────────────
   // Native ProseMirror transactions — no markdown round-trip.
@@ -379,6 +393,7 @@ export function ForumComposer({
   }, [compact, isCompactExpanded, richText.focus]);
   const autocompletePosition = autocompleteBelow ? "below" : "above";
   return (
+    <>
     <form
       className={cn(
         "relative rounded-2xl border border-input bg-card px-3 py-2 sm:px-4",
@@ -464,6 +479,7 @@ export function ForumComposer({
             onEmojiPickerOpenChange={setIsEmojiPickerOpen}
             onEmojiSelect={insertEmoji}
             onFormattingToggle={handleFormattingToggle}
+            onLinkButton={linkEditor.openFromToolbar}
             onOpenMentionPicker={openMentionPicker}
             onPaperclip={handlePaperclipClick}
             sendDisabled={sendDisabled}
@@ -471,5 +487,7 @@ export function ForumComposer({
         </>
       )}
     </form>
+      {linkEditor.dialog}
+    </>
   );
 }

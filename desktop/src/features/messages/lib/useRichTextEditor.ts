@@ -7,6 +7,7 @@ import Placeholder from "@tiptap/extension-placeholder";
 import Link from "@tiptap/extension-link";
 import { Extension, type KeyboardShortcutCommand } from "@tiptap/core";
 import { Selection, TextSelection } from "@tiptap/pm/state";
+import type { EditorState } from "@tiptap/pm/state";
 
 import { isMacPlatform } from "@/shared/lib/platform";
 import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
@@ -71,6 +72,22 @@ export type RichTextEditorOptions = {
   onEditLastOwnMessage?: () => boolean;
   /** When true, plain Enter is passed through (e.g. to select an autocomplete item). */
   isAutocompleteOpen?: React.RefObject<boolean>;
+  /**
+   * Called when the user clicks an existing link in the editor. The link
+   * extension runs with `openOnClick: false` (a chat composer must not
+   * navigate away on click), so we route the click here instead: the owner
+   * opens the link-edit modal to change or remove the URL. `from`/`to` bound
+   * the full link mark range so the owner can apply edits without re-selecting.
+   */
+  onEditLink?: (info: LinkSelectionInfo) => void;
+};
+
+/** A link mark range with its href and the text it covers. */
+export type LinkSelectionInfo = {
+  href: string;
+  text: string;
+  from: number;
+  to: number;
 };
 
 /**
@@ -93,6 +110,7 @@ export function useRichTextEditor({
   onSubmit,
   onEditLastOwnMessage,
   isAutocompleteOpen,
+  onEditLink,
 }: RichTextEditorOptions) {
   const onUpdateRef = React.useRef(onUpdate);
   onUpdateRef.current = onUpdate;
@@ -102,6 +120,9 @@ export function useRichTextEditor({
 
   const onEditLastOwnMessageRef = React.useRef(onEditLastOwnMessage);
   onEditLastOwnMessageRef.current = onEditLastOwnMessage;
+
+  const onEditLinkRef = React.useRef(onEditLink);
+  onEditLinkRef.current = onEditLink;
 
   const placeholderRef = React.useRef(placeholder);
   placeholderRef.current = placeholder;
@@ -363,6 +384,20 @@ export function useRichTextEditor({
           // otherwise let ArrowUp fall through to normal caret movement.
           return handler();
         },
+        // Click on an existing link → open the link-edit modal. The link
+        // extension is configured `openOnClick: false` (never navigate away
+        // from a chat composer), so without this hook a click on a link does
+        // nothing. We resolve the full link mark range under the cursor and
+        // hand it to the owner; returning false leaves caret placement to
+        // ProseMirror so the click still feels native.
+        handleClick: (view, pos) => {
+          const handler = onEditLinkRef.current;
+          if (!handler) return false;
+          const info = resolveLinkAt(view.state, pos);
+          if (!info) return false;
+          handler(info);
+          return false;
+        },
       },
       onUpdate: ({ editor: ed }) => {
         const markdown = getMarkdownFromEditor(ed);
@@ -579,6 +614,63 @@ export function useRichTextEditor({
     [editor, customEmojiWiring.resolveUrl],
   );
 
+  /**
+   * Link mark info for the current selection — its href and the covered
+   * text, expanded to the full link range when the caret merely sits inside
+   * a link. Returns `null` when there is no link. Used to prefill the
+   * link-edit modal when the user clicks the link toolbar button.
+   */
+  const getLinkSelectionInfo =
+    React.useCallback((): LinkSelectionInfo | null => {
+      if (!editor) return null;
+      const { from, to } = editor.state.selection;
+      const onLink = resolveLinkAt(editor.state, from);
+      if (onLink) return onLink;
+      if (from === to) return null;
+      // No existing link, but text is selected — seed the modal with the
+      // selected text as the display value and the selection range.
+      const text = editor.state.doc.textBetween(from, to, "\n", "\n");
+      return { href: "", text, from, to };
+    }, [editor]);
+
+  /**
+   * Apply a link to the given range, replacing the covered text with
+   * `text` and marking it with `href`. When `from === to` (no range), the
+   * linked text is inserted at the caret. Used by both the toolbar button
+   * and the click-to-edit modal.
+   */
+  const applyLink = React.useCallback(
+    ({ href, text, from, to }: LinkSelectionInfo) => {
+      if (!editor) return;
+      const label = text.trim().length > 0 ? text : href;
+      const linkMark = editor.schema.marks.link.create({ href });
+      const node = editor.schema.text(label, [linkMark]);
+      const tr = editor.state.tr.replaceRangeWith(from, to, node);
+      const cursorPM = tr.mapping.map(to);
+      tr.setSelection(TextSelection.create(tr.doc, cursorPM));
+      editor.view.dispatch(tr);
+      editor.view.focus();
+    },
+    [editor],
+  );
+
+  /**
+   * Remove the link mark across the given range, leaving the text in place.
+   */
+  const removeLink = React.useCallback(
+    ({ from, to }: { from: number; to: number }) => {
+      if (!editor) return;
+      editor
+        .chain()
+        .focus()
+        .setTextSelection({ from, to })
+        .unsetLink()
+        .setTextSelection(to)
+        .run();
+    },
+    [editor],
+  );
+
   return {
     editor,
     getMarkdown,
@@ -590,6 +682,9 @@ export function useRichTextEditor({
     focusPreserve,
     getPlainTextAndCursor,
     replacePlainTextRange,
+    getLinkSelectionInfo,
+    applyLink,
+    removeLink,
   };
 }
 
@@ -615,4 +710,51 @@ function getMarkdownFromEditor(editor: Editor): string {
   }
   // Fallback: plain text
   return editor.state.doc.textContent;
+}
+
+/**
+ * Resolve the link mark covering position `pos`, expanded to the full
+ * contiguous range of that same link. Returns the href, the covered text,
+ * and the `from`/`to` document positions, or `null` when `pos` is not
+ * inside a link.
+ *
+ * ProseMirror stores links as marks on text nodes, so a single visual link
+ * can span several adjacent text nodes. We walk outward from `pos` while the
+ * link mark (with the same href) stays present to recover the whole range.
+ */
+function resolveLinkAt(
+  state: EditorState,
+  pos: number,
+): LinkSelectionInfo | null {
+  const linkType = state.schema.marks.link;
+  if (!linkType) return null;
+
+  const $pos = state.doc.resolve(pos);
+  // The mark at the caret sits on the character *before* the position, with
+  // the character after as a fallback (caret at a link's left edge).
+  const mark =
+    linkType.isInSet($pos.marks()) ||
+    (pos < state.doc.content.size
+      ? linkType.isInSet(state.doc.resolve(pos + 1).marks())
+      : null);
+  if (!mark) return null;
+
+  const href = mark.attrs.href as string;
+  const parent = $pos.parent;
+  const parentStart = $pos.start();
+
+  // Scan the text block for the contiguous run carrying this same link.
+  let from = pos;
+  let to = pos;
+  parent.forEach((child, childOffset) => {
+    const childFrom = parentStart + childOffset;
+    const childTo = childFrom + child.nodeSize;
+    if (mark.isInSet(child.marks) && childFrom <= pos && pos <= childTo) {
+      from = Math.min(from, childFrom);
+      to = Math.max(to, childTo);
+    }
+  });
+
+  const text = state.doc.textBetween(from, to, "\n", "\n");
+  return { href, text, from, to };
 }
