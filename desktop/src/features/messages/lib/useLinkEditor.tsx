@@ -279,7 +279,7 @@ export function useLinkEditor(richText: UseRichTextEditorResult) {
       {cardState ? (
         <PopoverContent
           align="start"
-          className="max-w-96 rounded-xl pl-2 pr-1 py-1"
+          className="w-fit max-w-80 rounded-xl px-2 py-2"
           onCloseAutoFocus={(event) => event.preventDefault()}
           onInteractOutside={(event) => {
             const target = event.detail.originalEvent.target;
@@ -295,9 +295,9 @@ export function useLinkEditor(richText: UseRichTextEditorResult) {
           side="top"
           sideOffset={8}
         >
-          <div className="flex items-center gap-1">
+          <div className="flex max-w-full flex-col gap-1">
             <a
-              className="min-w-0 flex-1 truncate text-xs leading-5 text-primary underline underline-offset-4 outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+              className="block max-w-full truncate text-sm text-primary underline underline-offset-4 outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
               href={cardState.info.href}
               onClick={openCardUrl}
               rel="noreferrer noopener"
@@ -305,7 +305,7 @@ export function useLinkEditor(richText: UseRichTextEditorResult) {
             >
               {cardState.info.href}
             </a>
-            <div className="flex items-center gap-0.5">
+            <div className="flex items-center justify-end gap-0.5">
               <Button
                 aria-label="Edit link"
                 onClick={editFromCard}
