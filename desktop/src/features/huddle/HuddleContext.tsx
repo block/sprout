@@ -393,14 +393,13 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
 
   const leaveHuddle = React.useCallback(async (): Promise<boolean> => {
     await disconnectMedia();
-    if (rustActiveRef.current) {
-      try {
-        await invoke("leave_huddle");
-        rustActiveRef.current = false;
-      } catch {
-        // Leave rustActiveRef true so a subsequent leaveHuddle() retries Rust cleanup
-        return false; // Signal that backend cleanup failed
-      }
+    try {
+      // `leave_huddle` is idempotent in Rust. Always call it so a provider
+      // remount cannot leave Rust's huddle state active while this ref is false.
+      await invoke("leave_huddle");
+      rustActiveRef.current = false;
+    } catch {
+      return false; // Signal that backend cleanup failed
     }
     return true; // Backend cleanup succeeded (or was not needed)
   }, [disconnectMedia]);

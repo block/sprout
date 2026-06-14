@@ -150,6 +150,8 @@ export function HuddleBar({ className, onVisibilityChange }: HuddleBarProps) {
   const [renderedState, setRenderedState] = React.useState<HuddleState | null>(
     null,
   );
+  const stateGenerationRef = React.useRef(0);
+  const locallyLeavingChannelRef = React.useRef<string | null>(null);
   const [isMuted, setIsMuted] = React.useState(false);
   const [headphonesHintDismissed, setHeadphonesHintDismissed] =
     React.useState(false);
@@ -162,18 +164,36 @@ export function HuddleBar({ className, onVisibilityChange }: HuddleBarProps) {
     stt: string;
     tts: string;
   } | null>(null);
+  const applyIncomingState = React.useCallback((nextState: HuddleState) => {
+    const leavingChannelId = locallyLeavingChannelRef.current;
+    if (
+      leavingChannelId &&
+      nextState.ephemeral_channel_id === leavingChannelId &&
+      isVisibleHuddleState(nextState)
+    ) {
+      return;
+    }
+
+    if (!isVisibleHuddleState(nextState)) {
+      locallyLeavingChannelRef.current = null;
+    }
+    setState(nextState);
+  }, []);
   // Huddle state: event-driven + 10s fallback poll.
   React.useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
 
     async function fetchState() {
+      const generation = stateGenerationRef.current;
       try {
         const s = await invoke<HuddleState>("get_huddle_state");
-        if (!cancelled) setState(s);
+        if (!cancelled && generation === stateGenerationRef.current) {
+          applyIncomingState(s);
+        }
       } catch {
         // Only clear state if we never had an active huddle.
-        if (!cancelled) {
+        if (!cancelled && generation === stateGenerationRef.current) {
           setState((prev) =>
             prev?.phase === "active" || prev?.phase === "connected"
               ? prev
@@ -188,7 +208,7 @@ export function HuddleBar({ className, onVisibilityChange }: HuddleBarProps) {
 
     // Primary: listen for Rust-emitted state change events
     listen<HuddleState>("huddle-state-changed", (event) => {
-      if (!cancelled) setState(event.payload);
+      if (!cancelled) applyIncomingState(event.payload);
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;
@@ -202,7 +222,7 @@ export function HuddleBar({ className, onVisibilityChange }: HuddleBarProps) {
       unlisten?.();
       window.clearInterval(id);
     };
-  }, []);
+  }, [applyIncomingState]);
 
   const huddlePhase = state?.phase;
   React.useEffect(() => {
@@ -395,14 +415,22 @@ export function HuddleBar({ className, onVisibilityChange }: HuddleBarProps) {
 
   async function handleLeave() {
     if (isLeaving) return;
+    const leavingChannelId = barState?.ephemeral_channel_id ?? null;
+    stateGenerationRef.current += 1;
+    locallyLeavingChannelRef.current = leavingChannelId;
     setIsLeaving(true);
     try {
       const backendClean = await leaveHuddle();
       if (backendClean) {
         setState(null);
+      } else {
+        locallyLeavingChannelRef.current = null;
+        stateGenerationRef.current += 1;
       }
       // If cleanup failed, keep the bar visible so the user can retry.
     } catch (e) {
+      locallyLeavingChannelRef.current = null;
+      stateGenerationRef.current += 1;
       console.error("Failed to leave huddle:", e);
     } finally {
       setIsLeaving(false);
