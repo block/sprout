@@ -8,29 +8,74 @@ type UseLoadOlderOnScrollOptions = {
   sentinelRef: React.RefObject<HTMLDivElement | null>;
 };
 
+type ScrollAnchor = {
+  id: string;
+  top: number;
+};
+
+function getMessageTop(container: HTMLDivElement, message: HTMLElement) {
+  return (
+    message.getBoundingClientRect().top - container.getBoundingClientRect().top
+  );
+}
+
+function captureFirstVisibleMessage(
+  container: HTMLDivElement,
+): ScrollAnchor | null {
+  const containerRect = container.getBoundingClientRect();
+  const messages = Array.from(
+    container.querySelectorAll<HTMLElement>("[data-message-id]"),
+  );
+
+  for (const message of messages) {
+    const rect = message.getBoundingClientRect();
+    if (rect.bottom <= containerRect.top || rect.top >= containerRect.bottom) {
+      continue;
+    }
+
+    const id = message.dataset.messageId;
+    if (!id) {
+      continue;
+    }
+
+    return {
+      id,
+      top: rect.top - containerRect.top,
+    };
+  }
+
+  return null;
+}
+
+function restoreAnchor(container: HTMLDivElement, anchor: ScrollAnchor) {
+  const message = container.querySelector<HTMLElement>(
+    `[data-message-id="${CSS.escape(anchor.id)}"]`,
+  );
+  if (!message) {
+    return false;
+  }
+
+  const delta = getMessageTop(container, message) - anchor.top;
+  if (Math.abs(delta) > 0.5) {
+    // Use a relative write. On WebKit/macOS, reading scrollTop during active
+    // wheel input can be stale; scrollBy applies the measured DOM delta without
+    // deriving a new absolute scrollTop from that potentially stale value.
+    container.scrollBy(0, delta);
+  }
+
+  return true;
+}
+
 /**
- * Triggers `fetchOlder` when a sentinel element near the top of the scroll
- * container enters the viewport, then restores the scroll position so the
- * visible content doesn't jump.
+ * Triggers `fetchOlder` when a sentinel near the top of the scroll container
+ * enters the viewport, then preserves the user's visual position across the
+ * prepend by anchoring a stable message DOM node.
  *
- * Uses the classical infinite-scroll-up algorithm: while an older-history
- * request is in flight, each render compares the current `scrollHeight` to
- * the previous render's `scrollHeight` and advances the scroll position by
- * that delta. This keeps compensation aligned with the real React commit that
- * changed the DOM instead of assuming `fetchOlder().then(...)` runs before the
- * query cache update is rendered. This is robust to:
- *
- *  - The user continuing to scroll during the fetch — `scrollTop` already
- *    reflects whatever they did, we only add height changes on top.
- *  - Inline loading chrome that appears during the fetch (e.g. a top
- *    spinner gated on `isFetchingOlder`). Spinner mount is compensated one
- *    way; spinner removal in the prepend commit is compensated the other way,
- *    so the net viewport stays anchored to the same content.
- *
- * A prior implementation snapshotted after `fetchOlder` resolved, but the real
- * fetch path mutates the React Query cache before resolving the promise. That
- * can miss the actual prepend commit and leave the browser to apply its own
- * scroll-range adjustment.
+ * The important invariant is: do not infer the user's viewport from global
+ * `scrollHeight` changes. Capture the first visible `[data-message-id]`, keep
+ * that anchor fresh while the user continues scrolling during the fetch, and
+ * after React commits the prepended rows, move the scroll container by the
+ * anchor node's visual delta exactly once per layout change.
  */
 export function useLoadOlderOnScroll({
   fetchOlder,
@@ -39,47 +84,60 @@ export function useLoadOlderOnScroll({
   scrollContainerRef,
   sentinelRef,
 }: UseLoadOlderOnScrollOptions) {
-  const [, scheduleRestore] = React.useReducer((count: number) => count + 1, 0);
-  const pendingRestoreRef = React.useRef<"loading" | "settling" | null>(null);
-  const previousScrollHeightRef = React.useRef<number | null>(null);
+  const [, scheduleLayoutCheck] = React.useReducer(
+    (count: number) => count + 1,
+    0,
+  );
+  const activeAnchorRef = React.useRef<ScrollAnchor | null>(null);
+  const fetchSettledRef = React.useRef(false);
+  const isRestoringRef = React.useRef(false);
 
   React.useLayoutEffect(() => {
     const container = scrollContainerRef.current;
-    if (!container) {
-      previousScrollHeightRef.current = null;
+    const anchor = activeAnchorRef.current;
+    if (!container || !anchor) {
       return;
     }
 
-    const previousScrollHeight = previousScrollHeightRef.current;
-    const currentScrollHeight = container.scrollHeight;
+    isRestoringRef.current = true;
+    const restored = restoreAnchor(container, anchor);
+    requestAnimationFrame(() => {
+      isRestoringRef.current = false;
+    });
 
-    if (pendingRestoreRef.current !== null && previousScrollHeight !== null) {
-      const delta = currentScrollHeight - previousScrollHeight;
-      if (delta !== 0) {
-        // Single synchronous pre-paint delta write. We deliberately do NOT
-        // route through useTimelineScrollManager.restoreScrollPosition: that
-        // helper schedules a 2-rAF locked-write loop (correct for
-        // ResizeObserver-driven resizes that may settle across frames, wrong
-        // for prepend), which fights live wheel input for 2–3 frames after
-        // every fetchOlder.
-        //
-        // Use `scrollBy` rather than `scrollTop = scrollTop + delta`: on
-        // WebKit/macOS (which Tauri uses for the desktop app) scrolling
-        // happens off the main thread, so a `scrollTop` *read* during active
-        // wheel input can be stale relative to what the user actually sees.
-        // `scrollBy` is delta-based — it doesn't read first — and avoids that
-        // class of stale-read bug. (Element/Matrix documents the same
-        // failure mode in element-web's docs/scrolling.md.)
-        container.scrollBy(0, delta);
-      }
-
-      if (pendingRestoreRef.current === "settling") {
-        pendingRestoreRef.current = null;
-      }
+    if (!restored) {
+      activeAnchorRef.current = null;
+      fetchSettledRef.current = false;
+      return;
     }
 
-    previousScrollHeightRef.current = currentScrollHeight;
+    if (fetchSettledRef.current) {
+      activeAnchorRef.current = null;
+      fetchSettledRef.current = false;
+    }
   });
+
+  React.useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return;
+    }
+
+    const updateAnchorFromUserScroll = () => {
+      if (!activeAnchorRef.current || isRestoringRef.current) {
+        return;
+      }
+      activeAnchorRef.current = captureFirstVisibleMessage(container);
+    };
+
+    container.addEventListener("scroll", updateAnchorFromUserScroll, {
+      passive: true,
+    });
+
+    return () => {
+      container.removeEventListener("scroll", updateAnchorFromUserScroll);
+    };
+  }, [scrollContainerRef]);
 
   React.useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -109,19 +167,17 @@ export function useLoadOlderOnScroll({
           }
 
           currentObserver?.disconnect();
+          fetchSettledRef.current = false;
+          activeAnchorRef.current = captureFirstVisibleMessage(container);
 
-          pendingRestoreRef.current = "loading";
-          void fetchOlder()
-            .then(() => {
-              if (disposed) {
-                return;
-              }
-              pendingRestoreRef.current = "settling";
-              scheduleRestore();
-            })
-            .finally(() => {
-              observe();
-            });
+          void fetchOlder().finally(() => {
+            if (disposed) {
+              return;
+            }
+            fetchSettledRef.current = true;
+            scheduleLayoutCheck();
+            observe();
+          });
         },
         { root: container, rootMargin: "200px 0px 0px 0px" },
       );
