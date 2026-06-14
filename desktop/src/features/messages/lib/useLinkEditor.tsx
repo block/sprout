@@ -1,23 +1,15 @@
 import * as React from "react";
 
-import { openUrl } from "@tauri-apps/plugin-opener";
-
-import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
-import {
-  Popover,
-  PopoverAnchor,
-  PopoverContent,
-} from "@/shared/ui/popover";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 
-import { openPopoverLink } from "./openPopoverLink";
 import type {
   LinkSelectionInfo,
   UseRichTextEditorResult,
@@ -32,113 +24,45 @@ type DraftState = {
   isExistingLink: boolean;
 };
 
-type PopoverState = {
-  text: string;
-  url: string;
-  from: number;
-  to: number;
-  /** Viewport rect of the clicked link, used to anchor the popover. */
-  rect: DOMRect;
-};
-
 /**
- * Owns the link UX for a composer: an info popover shown when a set link is
- * clicked, plus the add/edit modal. Replaces the old `window.prompt` flow (a
- * no-op in the Tauri WebView).
- *
- * Clicking a set link surfaces an info-only popover (display text + URL, the
- * URL a real hyperlink that opens the link) with Edit and Remove — so a user
- * can tweak display text inline without a takeover modal. The modal is reached
- * via the popover's Edit button (focus on display text) and the toolbar's Add
- * flow (focus on URL).
+ * Owns the link-edit modal for a composer. Replaces the old `window.prompt`
+ * flow (a no-op in the Tauri WebView) with a shadcn dialog that edits both
+ * the display text and the URL, and offers a Remove action for existing
+ * links.
  *
  * Returns:
- * - `openFromToolbar` — wire to the formatting toolbar's link button. Opens
- *   the modal seeded from the current selection (existing link or selected
- *   text).
- * - `openFromClick` — wire to `useRichTextEditor`'s `onEditLink`. Opens the
- *   info popover anchored at the clicked link.
- * - `dialog` — render once inside the composer tree (popover + modal).
+ * - `openFromToolbar` — wire to the formatting toolbar's link button. Seeds
+ *   the modal from the current selection (existing link or selected text).
+ * - `openFromClick` — wire to `useRichTextEditor`'s `onEditLink`. Seeds the
+ *   modal from the clicked link's range.
+ * - `dialog` — render once inside the composer tree.
  */
 export function useLinkEditor(richText: UseRichTextEditorResult) {
   const { getLinkSelectionInfo, applyLink, removeLink } = richText;
-  const { goChannel } = useAppNavigation();
   const [draft, setDraft] = React.useState<DraftState | null>(null);
-  const [popover, setPopover] = React.useState<PopoverState | null>(null);
   const textId = React.useId();
   const urlId = React.useId();
 
-  // Clicking a set link → info popover anchored at the clicked link.
-  const openFromClick = React.useCallback(
-    (info: LinkSelectionInfo, rect: DOMRect) => {
-      setPopover({
-        text: info.text,
-        url: info.href,
-        from: info.from,
-        to: info.to,
-        rect,
-      });
-    },
-    [],
-  );
-
-  const closePopover = React.useCallback(() => setPopover(null), []);
-
-  // Opens the modal seeded from a link's range. `focusUrl` decides which input
-  // takes initial focus (URL for Add, display text for Edit).
-  const openModal = React.useCallback((state: DraftState) => {
-    setDraft(state);
+  const openFromClick = React.useCallback((info: LinkSelectionInfo) => {
+    setDraft({
+      text: info.text,
+      url: info.href,
+      from: info.from,
+      to: info.to,
+      isExistingLink: info.href.length > 0,
+    });
   }, []);
 
   const openFromToolbar = React.useCallback(() => {
     const info = getLinkSelectionInfo();
     if (info) {
-      openModal({
-        text: info.text,
-        url: info.href,
-        from: info.from,
-        to: info.to,
-        isExistingLink: info.href.length > 0,
-      });
+      openFromClick(info);
       return;
     }
     // No selection and no link under the caret — open an empty modal that
     // inserts a fresh link at the caret on save.
-    openModal({ text: "", url: "", from: 0, to: 0, isExistingLink: false });
-  }, [getLinkSelectionInfo, openModal]);
-
-  // Popover Edit → close the popover, open the modal on the same range.
-  const editFromPopover = React.useCallback(() => {
-    if (!popover) return;
-    openModal({
-      text: popover.text,
-      url: popover.url,
-      from: popover.from,
-      to: popover.to,
-      isExistingLink: true,
-    });
-    closePopover();
-  }, [popover, openModal, closePopover]);
-
-  const removeFromPopover = React.useCallback(() => {
-    if (!popover) return;
-    removeLink({ from: popover.from, to: popover.to });
-    closePopover();
-  }, [popover, removeLink, closePopover]);
-
-  // Popover URL click: route `buzz://message?…` deep-links in-app (matching
-  // the rendered-message link path), everything else to the OS opener.
-  const openLink = React.useCallback(() => {
-    if (!popover?.url) return;
-    openPopoverLink(popover.url, {
-      openExternal: (url) => void openUrl(url),
-      openMessageLink: (link) =>
-        void goChannel(link.channelId, {
-          messageId: link.messageId,
-          threadRootId: link.threadRootId,
-        }),
-    });
-  }, [popover, goChannel]);
+    setDraft({ text: "", url: "", from: 0, to: 0, isExistingLink: false });
+  }, [getLinkSelectionInfo, openFromClick]);
 
   const close = React.useCallback(() => setDraft(null), []);
 
@@ -167,67 +91,6 @@ export function useLinkEditor(richText: UseRichTextEditorResult) {
     close();
   }, [draft, removeLink, close]);
 
-  // Add link (no existing link) focuses the URL; Edit focuses display text.
-  const focusUrlFirst = draft ? !draft.isExistingLink : false;
-
-  const popoverCard = (
-    <Popover
-      open={popover !== null}
-      onOpenChange={(open) => {
-        if (!open) closePopover();
-      }}
-    >
-      <PopoverAnchor
-        style={{
-          position: "fixed",
-          left: popover?.rect.left ?? 0,
-          top: popover?.rect.top ?? 0,
-          width: 0,
-          height: popover?.rect.height ?? 0,
-        }}
-      />
-      <PopoverContent
-        align="start"
-        side="top"
-        className="flex w-72 flex-col gap-2"
-        // Keep editor focus on close — the caret already sits where the user
-        // clicked, so we don't want Radix to refocus the trigger.
-        onCloseAutoFocus={(event) => event.preventDefault()}
-      >
-        <div className="text-sm font-medium break-words">
-          {popover?.text}
-        </div>
-        <a
-          href={popover?.url}
-          className="text-primary text-xs underline underline-offset-4 break-all"
-          onClick={(event) => {
-            event.preventDefault();
-            openLink();
-          }}
-        >
-          {popover?.url}
-        </a>
-        <div className="mt-1 flex items-center justify-end gap-2">
-          <Button
-            type="button"
-            variant="destructive"
-            size="sm"
-            onClick={removeFromPopover}
-          >
-            Remove
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            onClick={editFromPopover}
-          >
-            Edit
-          </Button>
-        </div>
-      </PopoverContent>
-    </Popover>
-  );
-
   const dialog = (
     <Dialog
       open={draft !== null}
@@ -240,6 +103,9 @@ export function useLinkEditor(richText: UseRichTextEditorResult) {
           <DialogTitle>
             {draft?.isExistingLink ? "Edit link" : "Add link"}
           </DialogTitle>
+          <DialogDescription>
+            Set the text shown in the message and the URL it points to.
+          </DialogDescription>
         </DialogHeader>
         <form
           className="flex flex-col gap-3"
@@ -255,7 +121,7 @@ export function useLinkEditor(richText: UseRichTextEditorResult) {
             Display text
             <Input
               id={textId}
-              autoFocus={!focusUrlFirst}
+              autoFocus
               placeholder="Text to display"
               value={draft?.text ?? ""}
               onChange={(event) =>
@@ -272,7 +138,6 @@ export function useLinkEditor(richText: UseRichTextEditorResult) {
             URL
             <Input
               id={urlId}
-              autoFocus={focusUrlFirst}
               placeholder="https://example.com"
               value={draft?.url ?? ""}
               onChange={(event) =>
@@ -304,14 +169,5 @@ export function useLinkEditor(richText: UseRichTextEditorResult) {
     </Dialog>
   );
 
-  return {
-    openFromToolbar,
-    openFromClick,
-    dialog: (
-      <>
-        {popoverCard}
-        {dialog}
-      </>
-    ),
-  };
+  return { openFromToolbar, openFromClick, dialog };
 }

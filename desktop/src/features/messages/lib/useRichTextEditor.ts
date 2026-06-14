@@ -82,11 +82,10 @@ export type RichTextEditorOptions = {
    * Called when the user clicks an existing link in the editor. The link
    * extension runs with `openOnClick: false` (a chat composer must not
    * navigate away on click), so we route the click here instead: the owner
-   * shows an info popover (display text + URL, with Edit/Remove). `from`/`to`
-   * bound the full link mark range. `anchorRect` is the viewport rect of the
-   * clicked position so the owner can anchor the popover at the link.
+   * opens the link-edit modal to change or remove the URL. `from`/`to` bound
+   * the full link mark range so the owner can apply edits without re-selecting.
    */
-  onEditLink?: (info: LinkSelectionInfo, anchorRect: DOMRect) => void;
+  onEditLink?: (info: LinkSelectionInfo) => void;
 };
 
 /**
@@ -345,6 +344,34 @@ export function useRichTextEditor({
             "min-h-0 resize-none overflow-y-hidden border-0 bg-transparent px-0 py-0 text-sm leading-6 md:leading-6 shadow-none focus-visible:ring-0 caret-foreground outline-hidden prose-sm max-w-none",
           "data-testid": "message-input",
         },
+        handleDOMEvents: {
+          // Native anchor default can still win in the WebView before
+          // ProseMirror's semantic click hook runs, so intercept editor links
+          // at the DOM event layer and route them to the modal instead.
+          click: (view, event) => {
+            if (!(event instanceof MouseEvent)) return false;
+            const target = event.target;
+            if (!(target instanceof Element)) return false;
+            const anchor = target.closest("a[href]");
+            if (!anchor || !view.dom.contains(anchor)) return false;
+
+            const handler = onEditLinkRef.current;
+            if (!handler) return false;
+
+            event.preventDefault();
+            event.stopPropagation();
+
+            const position = view.posAtCoords({
+              left: event.clientX,
+              top: event.clientY,
+            });
+            const info = position
+              ? resolveLinkAt(view.state, position.pos)
+              : null;
+            if (info) handler(info);
+            return true;
+          },
+        },
         // ArrowUp in an empty composer → edit your last message (Slack
         // parity). Handled here in ProseMirror's own DOM `keydown` hook —
         // NOT via `addKeyboardShortcuts` (the keymap plugin) and NOT via a
@@ -383,29 +410,20 @@ export function useRichTextEditor({
           // otherwise let ArrowUp fall through to normal caret movement.
           return handler();
         },
-        // Click on an existing link → show the link-info popover. The link
+        // Click on an existing link → open the link-edit modal. The link
         // extension is configured `openOnClick: false` (never navigate away
         // from a chat composer), so without this hook a click on a link does
-        // nothing. We resolve the full link mark range under the cursor and
-        // hand it to the owner along with the clicked position's viewport rect
-        // (so the popover can anchor at the link). Returning false leaves
-        // caret placement to ProseMirror, so the click moves the caret to the
-        // clicked spot — letting the user tweak display text inline without
-        // being yanked out of the editor.
-        handleClick: (view, pos) => {
+        // nothing. We resolve the full link mark range under the cursor,
+        // cancel the anchor's default navigation, and hand it to the owner.
+        handleClick: (view, pos, event) => {
           const handler = onEditLinkRef.current;
           if (!handler) return false;
           const info = resolveLinkAt(view.state, pos);
           if (!info) return false;
-          const coords = view.coordsAtPos(pos);
-          const anchorRect = new DOMRect(
-            coords.left,
-            coords.top,
-            0,
-            coords.bottom - coords.top,
-          );
-          handler(info, anchorRect);
-          return false;
+          event.preventDefault();
+          event.stopPropagation();
+          handler(info);
+          return true;
         },
       },
       onUpdate: ({ editor: ed }) => {
