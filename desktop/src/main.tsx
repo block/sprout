@@ -6,6 +6,7 @@ import { UpdaterProvider } from "@/features/settings/hooks/UpdaterProvider";
 import { WorkspacesProvider } from "@/features/workspaces/useWorkspaces";
 import { ThemeProvider } from "@/shared/theme/ThemeProvider";
 import { EmojiBurstProvider } from "@/shared/ui/EmojiBurstProvider";
+import { PoofBurstProvider } from "@/shared/ui/PoofBurstProvider";
 import { Toaster } from "@/shared/ui/sonner";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 
@@ -52,10 +53,12 @@ function renderApp() {
         <ThemeProvider defaultTheme="houston">
           <TooltipProvider delayDuration={300}>
             <EmojiBurstProvider>
-              <UpdaterProvider>
-                <App />
-              </UpdaterProvider>
-              <Toaster />
+              <PoofBurstProvider>
+                <UpdaterProvider>
+                  <App />
+                </UpdaterProvider>
+                <Toaster />
+              </PoofBurstProvider>
             </EmojiBurstProvider>
           </TooltipProvider>
         </ThemeProvider>

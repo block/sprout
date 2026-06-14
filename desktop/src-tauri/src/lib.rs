@@ -835,6 +835,8 @@ pub fn run() {
             cancel_pairing,
             apply_workspace,
             get_active_workspace,
+            connect_warp_vpn,
+            refresh_warp_access,
             set_prevent_sleep_active,
             get_agent_memory,
         ])

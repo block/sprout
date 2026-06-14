@@ -82,6 +82,7 @@ test("shows a sidebar update card when an update is ready", async ({
       ...(testWindow.__BUZZ_E2E__ ?? {}),
       mock: {
         ...(testWindow.__BUZZ_E2E__?.mock ?? {}),
+        restartDelayMs: 500,
         updateAvailable: true,
       },
     };
@@ -99,11 +100,16 @@ test("shows a sidebar update card when an update is ready", async ({
 
   const updateCard = page.getByTestId("sidebar-update-card");
   await expect(updateCard).toBeVisible();
-  await expect(updateCard).toContainText("Update ready");
-  await expect(updateCard).toContainText("Restart to apply the update.");
+  await expect(updateCard).toContainText("Ready to update!");
+  await expect(updateCard).toContainText("Click to restart");
   await expect(page.getByTestId("sidebar-update-restart")).toBeVisible();
+  const reservedCardHeight = await updateCard.evaluate(
+    (element) => (element as HTMLElement).offsetHeight,
+  );
 
   await page.getByTestId("sidebar-update-restart").click();
+  await expect(updateCard).toContainText("Restarting");
+  await expect(page.getByTestId("sidebar-update-restart")).toBeDisabled();
 
   await expect
     .poll(() =>
@@ -118,7 +124,32 @@ test("shows a sidebar update card when an update is ready", async ({
     )
     .toContain("plugin:process|restart");
 
+  const dismissButton = page.getByTestId("sidebar-update-dismiss");
   await updateCard.hover();
-  await page.getByTestId("sidebar-update-dismiss").click();
+  const dismissButtonBox = await dismissButton.boundingBox();
+  expect(dismissButtonBox).not.toBeNull();
+  if (!dismissButtonBox) return;
+
+  await page.mouse.move(
+    dismissButtonBox.x + dismissButtonBox.width / 2,
+    dismissButtonBox.y + dismissButtonBox.height / 2,
+  );
+  await page.mouse.down();
+  await expect(page.locator(".buzz-poof-burst")).toHaveCount(1);
+  await expect(updateCard).toBeVisible();
+  await page.mouse.up();
+  await expect(updateCard).toHaveAttribute("data-dismissing", "true");
+  await expect
+    .poll(() =>
+      updateCard.evaluate((element) => (element as HTMLElement).offsetHeight),
+    )
+    .toBe(reservedCardHeight);
+  await expect
+    .poll(() =>
+      updateCard.evaluate((element) =>
+        Number.parseFloat(getComputedStyle(element).opacity),
+      ),
+    )
+    .toBeLessThan(0.05);
   await expect(updateCard).toBeHidden();
 });

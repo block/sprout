@@ -77,6 +77,7 @@ type E2eConfig = {
     updateAvailable?: boolean;
     updateChannelDelayMs?: number;
     updateDownloadDelayMs?: number;
+    restartDelayMs?: number;
     updateVersion?: string;
     stallWebsocketSends?: boolean;
     userSearchDelayMs?: number;
@@ -3653,6 +3654,16 @@ async function handleUpdaterDownloadAndInstall(
   return null;
 }
 
+async function handleRestart(config: E2eConfig | undefined) {
+  const delayMs = config?.mock?.restartDelayMs ?? 0;
+
+  if (delayMs > 0) {
+    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+  }
+
+  return null;
+}
+
 async function handleArchiveChannel(
   args: { channelId: string },
   config: E2eConfig | undefined,
@@ -5920,7 +5931,7 @@ export function maybeInstallE2eTauriMocks() {
   };
   window.__BUZZ_E2E_SET_RELAY_CONNECTION_STATE__ = (state) => {
     // Directly emit a connection state change on the relay client singleton,
-    // for tests that need to drive ConnectionBanner without waiting for the
+    // for tests that need to drive degraded relay UI without waiting for the
     // real auth-timeout + reconnect-debounce cycle (~10 s). Reaches the
     // TS-private emitter via a cast so the production class carries no
     // test-only seam.
@@ -6537,9 +6548,13 @@ export function maybeInstallE2eTauriMocks() {
         return handleUpdaterCheck(activeConfig);
       case "plugin:updater|download_and_install":
         return handleUpdaterDownloadAndInstall(payload, activeConfig);
-      case "plugin:resources|close":
-      case "plugin:process|restart":
+      case "connect_warp_vpn":
+      case "refresh_warp_access":
         return null;
+      case "plugin:resources|close":
+        return null;
+      case "plugin:process|restart":
+        return handleRestart(activeConfig);
       case "get_channel_workflows":
         return handleGetChannelWorkflows(
           payload as Parameters<typeof handleGetChannelWorkflows>[0],

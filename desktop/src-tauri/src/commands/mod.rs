@@ -23,6 +23,7 @@ mod profile;
 mod relay_members;
 mod social;
 mod teams;
+mod warp;
 mod workflows;
 mod workspace;
 
@@ -49,5 +50,6 @@ pub use profile::*;
 pub use relay_members::*;
 pub use social::*;
 pub use teams::*;
+pub use warp::*;
 pub use workflows::*;
 pub use workspace::*;
