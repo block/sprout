@@ -33,7 +33,6 @@ export function useTimelineScrollManager({
   const isProgrammaticBottomScrollRef = React.useRef(false);
   const previousTimelineHeightRef = React.useRef<number | null>(null);
   const previousScrollTopRef = React.useRef(0);
-  const lockedScrollTopRef = React.useRef<number | null>(null);
   const previousLastMessageKeyRef = React.useRef<string | undefined>(undefined);
   const previousMessageCountRef = React.useRef(0);
   const handledTargetMessageIdRef = React.useRef<string | null>(null);
@@ -50,7 +49,6 @@ export function useTimelineScrollManager({
     isProgrammaticBottomScrollRef.current = false;
     previousTimelineHeightRef.current = null;
     previousScrollTopRef.current = 0;
-    lockedScrollTopRef.current = null;
     previousLastMessageKeyRef.current = undefined;
     previousMessageCountRef.current = 0;
     handledTargetMessageIdRef.current = null;
@@ -108,7 +106,7 @@ export function useTimelineScrollManager({
       return;
     }
 
-    const scrollTop = lockedScrollTopRef.current ?? timeline.scrollTop;
+    const scrollTop = timeline.scrollTop;
     const atBottom = isNearBottom(timeline);
     const movedAwayFromBottom = scrollTop + 1 < previousScrollTopRef.current;
 
@@ -138,38 +136,6 @@ export function useTimelineScrollManager({
   }, [pinToBottom, setObservedBottomState]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: timelineRef is a stable React ref — its identity never changes
-  const restoreScrollPosition = React.useCallback(
-    (scrollTop: number) => {
-      const timeline = timelineRef.current;
-
-      if (!timeline) {
-        return;
-      }
-
-      isProgrammaticBottomScrollRef.current = false;
-      lockedScrollTopRef.current = scrollTop;
-
-      const restore = (remainingFrames: number) => {
-        timeline.scrollTop = scrollTop;
-
-        if (remainingFrames > 0) {
-          requestAnimationFrame(() => {
-            restore(remainingFrames - 1);
-          });
-          return;
-        }
-
-        lockedScrollTopRef.current = null;
-        previousScrollTopRef.current = timeline.scrollTop;
-        syncScrollState();
-      };
-
-      restore(2);
-    },
-    [syncScrollState],
-  );
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: timelineRef is a stable React ref — its identity never changes
   const scrollToBottom = React.useCallback(
     (behavior: ScrollBehavior) => {
       const timeline = timelineRef.current;
@@ -192,7 +158,6 @@ export function useTimelineScrollManager({
       };
 
       alignToBottom(behavior);
-      lockedScrollTopRef.current = null;
       previousScrollTopRef.current = timeline.scrollTop;
       pinToBottom({ clearNewMessageCount: true });
 
@@ -223,6 +188,11 @@ export function useTimelineScrollManager({
     [pinToBottom, syncScrollState],
   );
 
+  // Keep the timeline pinned only when its viewport size changes while the user
+  // is already at the bottom. When reading history, do not restore an old
+  // absolute scrollTop: prepends are handled by `useLoadOlderOnScroll` with a
+  // message anchor, and an absolute multi-frame restore can overwrite that
+  // correction on WebKit.
   // biome-ignore lint/correctness/useExhaustiveDependencies: timelineRef is a stable React ref — its identity never changes
   React.useEffect(() => {
     const timeline = timelineRef.current;
@@ -232,7 +202,6 @@ export function useTimelineScrollManager({
     }
 
     previousTimelineHeightRef.current = timeline.clientHeight;
-    previousScrollTopRef.current = timeline.scrollTop;
 
     const observer = new ResizeObserver(([entry]) => {
       const previousTimelineHeight = previousTimelineHeightRef.current;
@@ -248,10 +217,7 @@ export function useTimelineScrollManager({
 
       if (shouldStickToBottomRef.current || isAtBottomRef.current) {
         scrollToBottom("auto");
-        return;
       }
-
-      restoreScrollPosition(previousScrollTopRef.current);
     });
 
     observer.observe(timeline);
@@ -259,7 +225,7 @@ export function useTimelineScrollManager({
     return () => {
       observer.disconnect();
     };
-  }, [restoreScrollPosition, scrollToBottom]);
+  }, [scrollToBottom]);
 
   React.useEffect(() => {
     const content = contentRef.current;
@@ -409,7 +375,6 @@ export function useTimelineScrollManager({
     highlightedMessageId,
     isAtBottom,
     newMessageCount,
-    restoreScrollPosition,
     scrollToBottom,
     syncScrollState,
   };
