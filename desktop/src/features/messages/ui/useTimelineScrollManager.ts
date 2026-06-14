@@ -1,5 +1,9 @@
 import * as React from "react";
 
+import {
+  resolveDeepLinkTarget,
+  selectLatestMessageKey,
+} from "@/features/messages/lib/timelineDecisions";
 import type { TimelineMessage } from "@/features/messages/types";
 import { isNearBottom } from "./messageTimelineUtils";
 
@@ -97,9 +101,7 @@ export function useTimelineScrollManager({
 
   const latestMessage =
     messages.length > 0 ? messages[messages.length - 1] : undefined;
-  const latestMessageKey = latestMessage
-    ? (latestMessage.renderKey ?? latestMessage.id)
-    : undefined;
+  const latestMessageKey = selectLatestMessageKey(messages);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: timelineRef is a stable React ref passed from the parent — its identity never changes
   const syncScrollState = React.useCallback(() => {
@@ -353,6 +355,15 @@ export function useTimelineScrollManager({
     }
 
     if (handledTargetMessageIdRef.current === targetMessageId || isLoading) {
+      return;
+    }
+
+    // Deep-link decision delegated to a pure, lib-tested helper: only attempt the
+    // jump once the target actually exists in THIS (deferred) snapshot. If it
+    // doesn't, the row hasn't committed yet — bail and let the next snapshot that
+    // includes it drive the jump. This reads the same `messages` snapshot the
+    // list rendered, which is the tearing race Phase A closed.
+    if (!resolveDeepLinkTarget(messages, targetMessageId).resolved) {
       return;
     }
 

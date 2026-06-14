@@ -1,10 +1,8 @@
 import * as React from "react";
 
-import {
-  formatDayHeading,
-  isSameDay,
-} from "@/features/messages/lib/dateFormatters";
+import { formatDayHeading } from "@/features/messages/lib/dateFormatters";
 import { buildMainTimelineEntries } from "@/features/messages/lib/threadPanel";
+import { buildDayGroupBoundaries } from "@/features/messages/lib/timelineDecisions";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { ChannelType } from "@/shared/api/types";
@@ -191,12 +189,21 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   }> = [];
   let currentDayGroup: (typeof dayGroups)[number] | null = null;
 
+  // Day-divider decision delegated to a pure, lib-tested helper: a new group
+  // starts at index 0 and whenever a message falls on a different calendar day
+  // than the one before it. We index the boundary start positions so the render
+  // loop below stays a straight walk while the grouping logic lives in `lib/`.
+  const dayGroupStartIndices = new Set(
+    buildDayGroupBoundaries(entries.map((entry) => entry.message)).map(
+      (boundary) => boundary.startIndex,
+    ),
+  );
+
   for (let i = 0; i < entries.length; i++) {
     const { message, summary } = entries[i];
-    const prev = i > 0 ? entries[i - 1]?.message : null;
     const messageRenderKey = message.renderKey ?? message.id;
 
-    if (!prev || !isSameDay(prev.createdAt, message.createdAt)) {
+    if (dayGroupStartIndices.has(i)) {
       currentDayGroup = {
         key: `day-${message.createdAt}`,
         label: formatDayHeading(message.createdAt),
