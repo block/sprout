@@ -321,12 +321,10 @@ export function MessageThreadPanel({
                 Reply in the thread to continue this branch.
               </p>
             </div>
-          ) : (
-            // "pending": deferred list is empty but the live list has content —
-            // rows are streaming in on the deferred commit. Paint nothing rather
-            // than flashing the empty state.
-            null
-          )}
+          ) : // "pending": deferred list is empty but the live list has content —
+          // rows are streaming in on the deferred commit. Paint nothing rather
+          // than flashing the empty state.
+          null}
           <div aria-hidden className="h-px" ref={bottomAnchorRef} />
         </div>
       </div>
