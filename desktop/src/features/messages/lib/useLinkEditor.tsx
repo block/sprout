@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import {
   Dialog,
   DialogContent,
@@ -16,6 +17,7 @@ import {
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 
+import { openPopoverLink } from "./openPopoverLink";
 import type {
   LinkSelectionInfo,
   UseRichTextEditorResult,
@@ -60,6 +62,7 @@ type PopoverState = {
  */
 export function useLinkEditor(richText: UseRichTextEditorResult) {
   const { getLinkSelectionInfo, applyLink, removeLink } = richText;
+  const { goChannel } = useAppNavigation();
   const [draft, setDraft] = React.useState<DraftState | null>(null);
   const [popover, setPopover] = React.useState<PopoverState | null>(null);
   const textId = React.useId();
@@ -123,6 +126,20 @@ export function useLinkEditor(richText: UseRichTextEditorResult) {
     closePopover();
   }, [popover, removeLink, closePopover]);
 
+  // Popover URL click: route `buzz://message?…` deep-links in-app (matching
+  // the rendered-message link path), everything else to the OS opener.
+  const openLink = React.useCallback(() => {
+    if (!popover?.url) return;
+    openPopoverLink(popover.url, {
+      openExternal: (url) => void openUrl(url),
+      openMessageLink: (link) =>
+        void goChannel(link.channelId, {
+          messageId: link.messageId,
+          threadRootId: link.threadRootId,
+        }),
+    });
+  }, [popover, goChannel]);
+
   const close = React.useCallback(() => setDraft(null), []);
 
   const save = React.useCallback(() => {
@@ -185,7 +202,7 @@ export function useLinkEditor(richText: UseRichTextEditorResult) {
           className="text-primary text-xs underline underline-offset-4 break-all"
           onClick={(event) => {
             event.preventDefault();
-            if (popover?.url) void openUrl(popover.url);
+            openLink();
           }}
         >
           {popover?.url}
