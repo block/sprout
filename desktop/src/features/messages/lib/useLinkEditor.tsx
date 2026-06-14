@@ -3,7 +3,6 @@ import * as React from "react";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
@@ -14,6 +13,10 @@ import type {
   LinkSelectionInfo,
   UseRichTextEditorResult,
 } from "./useRichTextEditor";
+import {
+  getLinkEditorInitialFocus,
+  type LinkEditorInitialFocus,
+} from "./linkEditorFocus";
 
 type DraftState = {
   text: string;
@@ -22,6 +25,7 @@ type DraftState = {
   to: number;
   /** Whether the targeted range already carried a link (enables Remove). */
   isExistingLink: boolean;
+  initialFocus: LinkEditorInitialFocus;
 };
 
 /**
@@ -50,6 +54,7 @@ export function useLinkEditor(richText: UseRichTextEditorResult) {
       from: info.from,
       to: info.to,
       isExistingLink: info.href.length > 0,
+      initialFocus: getLinkEditorInitialFocus(info),
     });
   }, []);
 
@@ -61,7 +66,14 @@ export function useLinkEditor(richText: UseRichTextEditorResult) {
     }
     // No selection and no link under the caret — open an empty modal that
     // inserts a fresh link at the caret on save.
-    setDraft({ text: "", url: "", from: 0, to: 0, isExistingLink: false });
+    setDraft({
+      text: "",
+      url: "",
+      from: 0,
+      to: 0,
+      isExistingLink: false,
+      initialFocus: "text",
+    });
   }, [getLinkSelectionInfo, openFromClick]);
 
   const close = React.useCallback(() => setDraft(null), []);
@@ -80,7 +92,12 @@ export function useLinkEditor(richText: UseRichTextEditorResult) {
         to: info?.to ?? 0,
       });
     } else {
-      applyLink({ href: url, text: draft.text, from: draft.from, to: draft.to });
+      applyLink({
+        href: url,
+        text: draft.text,
+        from: draft.from,
+        to: draft.to,
+      });
     }
     close();
   }, [draft, applyLink, getLinkSelectionInfo, close]);
@@ -103,9 +120,6 @@ export function useLinkEditor(richText: UseRichTextEditorResult) {
           <DialogTitle>
             {draft?.isExistingLink ? "Edit link" : "Add link"}
           </DialogTitle>
-          <DialogDescription>
-            Set the text shown in the message and the URL it points to.
-          </DialogDescription>
         </DialogHeader>
         <form
           className="flex flex-col gap-3"
@@ -121,7 +135,7 @@ export function useLinkEditor(richText: UseRichTextEditorResult) {
             Display text
             <Input
               id={textId}
-              autoFocus
+              autoFocus={draft?.initialFocus === "text"}
               placeholder="Text to display"
               value={draft?.text ?? ""}
               onChange={(event) =>
@@ -138,6 +152,7 @@ export function useLinkEditor(richText: UseRichTextEditorResult) {
             URL
             <Input
               id={urlId}
+              autoFocus={draft?.initialFocus === "url"}
               placeholder="https://example.com"
               value={draft?.url ?? ""}
               onChange={(event) =>
