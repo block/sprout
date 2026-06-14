@@ -58,6 +58,7 @@ export function ProfileHero({
           {isBot ? (
             <BotIdenticon
               className="shrink-0 rounded"
+              data-testid="profile-bot-indicator"
               size={20}
               value={displayName}
             />
