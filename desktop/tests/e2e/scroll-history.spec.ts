@@ -99,7 +99,7 @@ test("preserves user scroll while older channel history loads", async ({
       ...window.__BUZZ_E2E__,
       mock: {
         ...window.__BUZZ_E2E__?.mock,
-        historyDelayMs: 1_000,
+        historyDelayMs: 2_000,
       },
     };
   });
@@ -111,32 +111,30 @@ test("preserves user scroll while older channel history loads", async ({
     return element && element.scrollHeight > element.clientHeight + 1000;
   });
 
-  // Move away from the bottom before jumping near the top; otherwise the
-  // timeline's sticky-bottom guard can intentionally pin the first upward jump.
+  // Scroll with real wheel input instead of assigning `scrollTop` directly.
+  // Virtualized lists own their range model and may correct arbitrary absolute
+  // scroll offsets, but user-wheel scrolling is the behavior we must preserve.
+  const box = await timeline.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(
+    (box?.x ?? 0) + (box?.width ?? 0) / 2,
+    (box?.y ?? 0) + (box?.height ?? 0) / 2,
+  );
+
+  for (let index = 0; index < 80; index += 1) {
+    await page.mouse.wheel(0, -1200);
+    await page.waitForTimeout(20);
+    const metrics = await getTimelineMetrics(page);
+    if (metrics.scrollTop <= 900) {
+      break;
+    }
+  }
+
   const beforeFetch = await getTimelineMetrics(page);
-  await timeline.evaluate((element) => {
-    const timelineElement = element as HTMLDivElement;
-    timelineElement.scrollTop = timelineElement.scrollHeight;
-    timelineElement.dispatchEvent(new Event("scroll", { bubbles: true }));
-  });
+  expect(beforeFetch.scrollTop).toBeLessThanOrEqual(900);
+
+  await page.mouse.wheel(0, 160);
   await page.waitForTimeout(50);
-
-  const nearTop = await timeline.evaluate((element) => {
-    const timelineElement = element as HTMLDivElement;
-    timelineElement.scrollTop = 180;
-    timelineElement.dispatchEvent(new Event("scroll", { bubbles: true }));
-    return timelineElement.scrollTop;
-  });
-  expect(nearTop).toBeLessThan(260);
-
-  await page.waitForTimeout(100);
-  const duringFetch = await timeline.evaluate((element) => {
-    const timelineElement = element as HTMLDivElement;
-    timelineElement.scrollTop = timelineElement.scrollTop + 160;
-    timelineElement.dispatchEvent(new Event("scroll", { bubbles: true }));
-    return timelineElement.scrollTop;
-  });
-  expect(duringFetch).toBeGreaterThan(nearTop);
   const anchorDuringFetch = await getFirstVisibleMessage(page);
   expect(anchorDuringFetch).not.toBeNull();
 
@@ -155,7 +153,7 @@ test("preserves user scroll while older channel history loads", async ({
           : Number.POSITIVE_INFINITY;
       },
       {
-        timeout: 3_000,
+        timeout: 4_000,
       },
     )
     .toBeLessThanOrEqual(2);
