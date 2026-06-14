@@ -22,6 +22,7 @@ import {
   useProfileQuery,
   useUnfollowMutation,
   useUserProfileQuery,
+  useUsersBatchQuery,
 } from "@/features/profile/hooks";
 import {
   ChannelsFocusedView,
@@ -156,6 +157,12 @@ export function UserProfilePanel({
 
   const relayAgentsQuery = useRelayAgentsQuery({ enabled: true });
   const managedAgentsQuery = useManagedAgentsQuery({ enabled: true });
+  // kind:0-derived agent flag (a verified NIP-OA `auth` tag on the target's
+  // profile) — the same authoritative signal the archive gate's OA-owner
+  // resolution trusts. The relay-agents registry + local managed-agents list
+  // below can both miss an owned agent that was deployed elsewhere, so we OR
+  // this in to keep `isBot` from drifting from the gate.
+  const usersBatchQuery = useUsersBatchQuery([pubkey]);
   const channelsQuery = useChannelsQuery();
   const presenceQuery = usePresenceQuery([pubkey]);
   const userStatusQuery = useUserStatusQuery([pubkey]);
@@ -176,7 +183,10 @@ export function UserProfilePanel({
   const managedAgent = managedAgentsQuery.data?.find(
     (agent) => agent.pubkey.toLowerCase() === pubkeyLower,
   );
-  const isBot = Boolean(relayAgent || managedAgent);
+  const isAgentByOaOwner = Boolean(
+    usersBatchQuery.data?.profiles[pubkeyLower]?.isAgent,
+  );
+  const isBot = Boolean(relayAgent || managedAgent) || isAgentByOaOwner;
   const isOwner = useIsManagedAgent(isBot ? pubkey : null);
 
   // Populate the active-turns store for this agent so useActiveAgentTurns works
