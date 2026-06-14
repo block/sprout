@@ -11,6 +11,7 @@ import {
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Popover, PopoverAnchor, PopoverContent } from "@/shared/ui/popover";
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 
 import type {
   LinkSelectionInfo,
@@ -20,6 +21,7 @@ import {
   getLinkEditorInitialFocus,
   type LinkEditorInitialFocus,
 } from "./linkEditorFocus";
+import { openPopoverLink } from "./openPopoverLink";
 
 type DraftState = {
   text: string;
@@ -58,6 +60,7 @@ type LinkCardState = {
  */
 export function useLinkEditor(richText: UseRichTextEditorResult) {
   const { getLinkSelectionInfo, applyLink, removeLink } = richText;
+  const { goChannel } = useAppNavigation();
   const [draft, setDraft] = React.useState<DraftState | null>(null);
   const [cardState, setCardState] = React.useState<LinkCardState | null>(null);
   const cardContentRef = React.useRef<HTMLDivElement>(null);
@@ -214,14 +217,23 @@ export function useLinkEditor(richText: UseRichTextEditorResult) {
     closeCard();
   }, [cardState, openDialogFromInfo, closeCard]);
 
+  // Card URL click: route `buzz://message?…` deep-links in-app (matching the
+  // rendered-message link path), everything else to the OS opener.
   const openCardUrl = React.useCallback(
     (event: React.MouseEvent<HTMLAnchorElement>) => {
       const href = cardState?.info.href.trim();
       if (!href) return;
       event.preventDefault();
-      void openUrl(href);
+      openPopoverLink(href, {
+        openExternal: (url) => void openUrl(url),
+        openMessageLink: (link) =>
+          void goChannel(link.channelId, {
+            messageId: link.messageId,
+            threadRootId: link.threadRootId,
+          }),
+      });
     },
-    [cardState],
+    [cardState, goChannel],
   );
 
   const refreshCardRect = React.useCallback(() => {
