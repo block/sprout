@@ -32,7 +32,7 @@ function ParticipantAvatar({
     >
       <UserAvatar
         avatarUrl={participant.avatarUrl}
-        className="h-7 w-7 text-[10px]"
+        className="h-7 w-7 text-[0.625rem]"
         displayName={participant.author}
         size="sm"
       />
