@@ -431,46 +431,28 @@ function ProfilePrimaryActions({
   pubkey: string;
   unfollowMutation: ReturnType<typeof useUnfollowMutation>;
 }) {
-  // The people-follow graph (kind:3) is only surfaced for consumption inside
-  // Pulse. When Pulse is off there's nowhere to consume the graph, so we hide
-  // the Follow affordance entirely rather than let users write follows that go
-  // nowhere. (Thread-following in features/messages is unrelated localStorage
-  // state and is not gated here.)
   const showFollowAction = useFeatureEnabled("pulse");
+  const followToggleMutation = isFollowing ? unfollowMutation : followMutation;
+
+  const handleFollowClick = () => {
+    followToggleMutation.mutate(pubkey, {
+      onError: (error) =>
+        toast.error(
+          `${isFollowing ? "Unfollow" : "Follow"} failed: ${error.message}`,
+        ),
+    });
+  };
 
   return (
     <div className="flex items-start justify-center gap-8">
       {showFollowAction ? (
-        isFollowing ? (
-          <ProfileQuickAction
-            active
-            disabled={unfollowMutation.isPending}
-            icon={UserMinus}
-            label="Unfollow"
-            onClick={() =>
-              unfollowMutation.mutate(pubkey, {
-                onError: (error) =>
-                  toast.error(
-                    `Unfollow failed: ${error instanceof Error ? error.message : String(error)}`,
-                  ),
-              })
-            }
-          />
-        ) : (
-          <ProfileQuickAction
-            disabled={followMutation.isPending}
-            icon={UserPlus}
-            label="Follow"
-            onClick={() =>
-              followMutation.mutate(pubkey, {
-                onError: (error) =>
-                  toast.error(
-                    `Follow failed: ${error instanceof Error ? error.message : String(error)}`,
-                  ),
-              })
-            }
-          />
-        )
+        <ProfileQuickAction
+          active={isFollowing}
+          disabled={followToggleMutation.isPending}
+          icon={isFollowing ? UserMinus : UserPlus}
+          label={isFollowing ? "Unfollow" : "Follow"}
+          onClick={handleFollowClick}
+        />
       ) : null}
       {onMessage ? (
         <ProfileQuickAction
