@@ -615,7 +615,7 @@
   border-radius: 4px;
   background: hsl(var(--primary) / 0.15);
   padding: 3px 4px 2px;
-  font-size: 15px;
+  font-size: 1rem;
   line-height: 1;
   color: hsl(var(--primary));
   font-weight: 500;
