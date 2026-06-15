@@ -308,27 +308,11 @@ export function buildThreadPanelData(
     };
   }
 
-  // ====================================================================
-  // LAYER 1 INSTRUMENTATION (dev-only, throwaway — RIP OUT THE WHOLE BLOCK)
-  // Measures the synchronous blocking compute in the thread-open commit
-  // path. tho's tell (whole-app freeze -> fully-loaded pane) says the cost
-  // is synchronous main-thread work, so we bracket each seam with
-  // performance.now() and emit one readable line per thread-open. The
-  // descendantStats seam self-diagnoses whether A.3.1 held (cache hit) or
-  // the memo flipped (RECOMPUTED). Gated on import.meta.env?.DEV: Vite
-  // strips it in prod (zero cost), and it is undefined under the node test
-  // loader so the microbench never pays for it.
-  const __dev = import.meta.env?.DEV === true;
-  const __t0 = __dev ? performance.now() : 0;
-
   const directChildrenByParentId = buildDirectChildrenByParentId(messages);
-  const __tDirectChildren = __dev ? performance.now() : 0;
 
-  const __statsWasShared = precomputedDescendantStatsByMessageId != null;
   const descendantStatsByMessageId =
     precomputedDescendantStatsByMessageId ??
     buildDescendantStatsByMessageId(messages);
-  const __tDescendantStats = __dev ? performance.now() : 0;
 
   const normalizedThreadHead = normalizeHeadMessage(threadHead);
   const visibleReplies = buildVisibleThreadReplies({
@@ -337,22 +321,6 @@ export function buildThreadPanelData(
     descendantStatsByMessageId,
     expandedReplyIds,
   });
-
-  if (__dev) {
-    const __tEnd = performance.now();
-    const ms = (a: number, b: number) => (b - a).toFixed(1);
-    const statsLabel = __statsWasShared
-      ? "cache hit"
-      : "RECOMPUTED — A.3.1 cache missed!";
-    console.log(
-      `[timeline] thread-open ${openThreadHeadId.slice(0, 8)}: ` +
-        `total=${ms(__t0, __tEnd)}ms | ` +
-        `directChildren=${ms(__t0, __tDirectChildren)}ms | ` +
-        `descendantStats=${ms(__tDirectChildren, __tDescendantStats)}ms (${statsLabel}) | ` +
-        `visibleReplies=${ms(__tDescendantStats, __tEnd)}ms`,
-    );
-  }
-  // ============ END LAYER 1 INSTRUMENTATION (RIP OUT ABOVE) ============
 
   const replyTargetInBranch =
     threadReplyTargetId === threadHead.id
