@@ -38,6 +38,7 @@ import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import { StatusEmoji } from "@/features/user-status/ui/StatusEmoji";
 import { BotIdenticon } from "@/features/messages/ui/BotIdenticon";
 import type { ManagedAgent, RelayAgent } from "@/shared/api/types";
+import { useFeatureEnabled } from "@/shared/features";
 import { cn } from "@/shared/lib/cn";
 import { useNow } from "@/shared/lib/useNow";
 import { Badge } from "@/shared/ui/badge";
@@ -88,7 +89,6 @@ export type ProfileSummaryViewProps = {
   profile: ReturnType<typeof useUserProfileQuery>["data"];
   pubkey: string;
   relayAgent: RelayAgent | undefined;
-  showFollowAction: boolean;
   unfollowMutation: ReturnType<typeof useUnfollowMutation>;
   userStatus: { text: string; emoji: string } | null | undefined;
 };
@@ -121,7 +121,6 @@ export function ProfileSummaryView({
   profile,
   pubkey,
   relayAgent,
-  showFollowAction,
   unfollowMutation,
   userStatus,
 }: ProfileSummaryViewProps) {
@@ -169,7 +168,6 @@ export function ProfileSummaryView({
           isFollowing={isFollowing}
           onMessage={onOpenDm ? handleMessage : undefined}
           pubkey={pubkey}
-          showFollowAction={showFollowAction}
           unfollowMutation={unfollowMutation}
         />
       ) : null}
@@ -423,7 +421,6 @@ function ProfilePrimaryActions({
   onEditAgent,
   onMessage,
   pubkey,
-  showFollowAction,
   unfollowMutation,
 }: {
   canEditAgent: boolean;
@@ -432,9 +429,15 @@ function ProfilePrimaryActions({
   onEditAgent: () => void;
   onMessage?: () => void;
   pubkey: string;
-  showFollowAction: boolean;
   unfollowMutation: ReturnType<typeof useUnfollowMutation>;
 }) {
+  // The people-follow graph (kind:3) is only surfaced for consumption inside
+  // Pulse. When Pulse is off there's nowhere to consume the graph, so we hide
+  // the Follow affordance entirely rather than let users write follows that go
+  // nowhere. (Thread-following in features/messages is unrelated localStorage
+  // state and is not gated here.)
+  const showFollowAction = useFeatureEnabled("pulse");
+
   return (
     <div className="flex items-start justify-center gap-8">
       {showFollowAction ? (
