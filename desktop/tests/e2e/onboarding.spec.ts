@@ -1162,6 +1162,158 @@ test("failed first profile saves can be skipped for the current session", async 
   await expectHomeView(page);
 });
 
+test("generic relay save failures use the generic reconnect card", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await installMockBridge(
+    page,
+    {
+      profileUpdateError: "relay unreachable: could not connect to relay",
+    },
+    { skipOnboardingSeed: true },
+  );
+  await page.goto("/");
+
+  await page.getByTestId("onboarding-display-name").fill("Morty QA");
+  await page.getByTestId("onboarding-next").click();
+
+  await expect(
+    page.getByTestId("onboarding-relay-reconnect-card"),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId("onboarding-relay-reconnect-card"),
+  ).toContainText("Can't reach the relay");
+  await expect(
+    page.getByTestId("onboarding-relay-reconnect-card"),
+  ).toContainText("Click to connect");
+  await expect(page.getByTestId("onboarding-vpn-off-card")).toHaveCount(0);
+  await expect(
+    page.getByTestId("onboarding-vpn-access-refresh-card"),
+  ).toHaveCount(0);
+});
+
+test("custom relay proxy sign-in failures use the generic reconnect card", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await installMockBridge(
+    page,
+    {
+      profileUpdateError:
+        "relay unreachable: relay returned an unexpected HTML page (VPN or proxy sign-in?)",
+    },
+    { skipOnboardingSeed: true },
+  );
+  await page.goto("/");
+
+  await page.getByTestId("onboarding-display-name").fill("Morty QA");
+  await page.getByTestId("onboarding-next").click();
+
+  await expect(
+    page.getByTestId("onboarding-relay-reconnect-card"),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId("onboarding-relay-reconnect-card"),
+  ).toContainText("Can't reach the relay");
+  await expect(
+    page.getByTestId("onboarding-vpn-access-refresh-card"),
+  ).toHaveCount(0);
+});
+
+test("Block relay save failures offer the VPN card", async ({ page }) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await installMockBridge(
+    page,
+    {
+      profileUpdateError: "relay unreachable: could not connect to relay",
+    },
+    {
+      relayWsUrl: "wss://buzz-oss.stage.blox.sqprod.co",
+      skipOnboardingSeed: true,
+    },
+  );
+  await page.goto("/");
+
+  await page.getByTestId("onboarding-display-name").fill("Morty QA");
+  await page.getByTestId("onboarding-next").click();
+
+  await expect(page.getByTestId("onboarding-vpn-off-card")).toBeVisible();
+  await expect(page.getByTestId("onboarding-vpn-off-card")).toContainText(
+    "Turn on VPN",
+  );
+  await expect(page.getByTestId("onboarding-vpn-off-card")).toContainText(
+    "Click to connect",
+  );
+  await expect(page.getByTestId("onboarding-relay-reconnect-card")).toHaveCount(
+    0,
+  );
+  await expect(
+    page.getByTestId("onboarding-vpn-access-refresh-card"),
+  ).toHaveCount(0);
+});
+
+test("Block relay proxy sign-in failures offer refresh access", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await installMockBridge(
+    page,
+    {
+      profileUpdateError:
+        "relay unreachable: relay returned an unexpected HTML page (VPN or proxy sign-in?)",
+    },
+    {
+      relayWsUrl: "wss://buzz-oss.stage.blox.sqprod.co",
+      skipOnboardingSeed: true,
+    },
+  );
+  await page.goto("/");
+
+  await page.getByTestId("onboarding-display-name").fill("Morty QA");
+  await page.getByTestId("onboarding-next").click();
+
+  await expect(
+    page.getByTestId("onboarding-vpn-access-refresh-card"),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId("onboarding-vpn-access-refresh-card"),
+  ).toContainText("Refresh VPN access");
+  await expect(page.getByTestId("onboarding-relay-reconnect-card")).toHaveCount(
+    0,
+  );
+});
+
+test("dismissed relay save failures reappear on retry", async ({ page }) => {
+  const relayError = "relay unreachable: could not connect to relay";
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await installMockBridge(
+    page,
+    {
+      profileUpdateErrors: [relayError, relayError],
+    },
+    { skipOnboardingSeed: true },
+  );
+  await page.goto("/");
+
+  await page.getByTestId("onboarding-display-name").fill("Morty QA");
+  await page.getByTestId("onboarding-next").click();
+  await expect(
+    page.getByTestId("onboarding-relay-reconnect-card"),
+  ).toBeVisible();
+
+  await page.getByTestId("onboarding-relay-reconnect-card").hover();
+  await page.getByTestId("onboarding-relay-reconnect-card-dismiss").click();
+  await expect(page.getByTestId("onboarding-relay-reconnect-card")).toHaveCount(
+    0,
+  );
+
+  await page.getByTestId("onboarding-next").click();
+  await expect(
+    page.getByTestId("onboarding-relay-reconnect-card"),
+  ).toBeVisible();
+});
+
 test("existing relay profile with display name auto-completes onboarding", async ({
   page,
 }) => {

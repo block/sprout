@@ -1,6 +1,18 @@
 import * as React from "react";
+import { toast } from "sonner";
 
+import {
+  SidebarBlockAccessRefreshCompactCard,
+  SidebarBlockVpnOffCompactCard,
+  SidebarRelayConnectionCompactCard,
+} from "@/features/sidebar/ui/SidebarRelayConnectionCard";
+import { connectWarpVpn, refreshWarpAccess } from "@/shared/api/warp";
+import { useReconnectRelay } from "@/shared/api/useReconnectRelay";
 import { cn } from "@/shared/lib/cn";
+import {
+  isRelayUnreachableError,
+  relayErrorDetail,
+} from "@/shared/lib/relayError";
 import { Button } from "@/shared/ui/button";
 import { Spinner } from "@/shared/ui/spinner";
 import {
@@ -13,13 +25,263 @@ import type { ProfileStepActions, ProfileStepState } from "./types";
 type ProfileStepProps = {
   actions: ProfileStepActions;
   direction: OnboardingTransitionDirection;
+  relayUrl?: string | null;
   transitionEffect?: OnboardingTransitionEffect;
   state: ProfileStepState;
 };
 
-function ErrorBanner({ message }: { message: string | null }) {
+type OnboardingConnectivityAction =
+  | "connect-vpn"
+  | "reconnect-relay"
+  | "refresh-access";
+type OnboardingRelayCardVariant =
+  | "connect-vpn"
+  | "reconnect-relay"
+  | "refresh-access";
+
+const ONBOARDING_CONNECTIVITY_SUCCESS_AUTO_DISMISS_MS = 2_500;
+
+function isBlockRelayUrl(relayUrl: string | null | undefined) {
+  if (!relayUrl) {
+    return false;
+  }
+
+  try {
+    const url = new URL(
+      relayUrl.replace("ws://", "http://").replace("wss://", "https://"),
+    );
+    const host = url.hostname.toLowerCase();
+    return (
+      host === "block.xyz" ||
+      host.endsWith(".block.xyz") ||
+      host === "sqprod.co" ||
+      host.endsWith(".sqprod.co") ||
+      host === "squareup.com" ||
+      host.endsWith(".squareup.com")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function shouldRefreshVpnAccess(
+  errorMessage: string,
+  relayUrl: string | null | undefined,
+) {
+  const detail = relayErrorDetail(errorMessage).toLowerCase();
+  if (detail.includes("cloudflare")) {
+    return true;
+  }
+
+  if (!isBlockRelayUrl(relayUrl)) {
+    return false;
+  }
+
+  return (
+    detail.includes("access") ||
+    detail.includes("sign-in") ||
+    detail.includes("re-authenticate") ||
+    detail.includes("reauth") ||
+    detail.includes("proxy")
+  );
+}
+
+function resolveOnboardingRelayCardVariant(
+  errorMessage: string,
+  relayUrl: string | null | undefined,
+): OnboardingRelayCardVariant {
+  if (shouldRefreshVpnAccess(errorMessage, relayUrl)) {
+    return "refresh-access";
+  }
+
+  if (isBlockRelayUrl(relayUrl)) {
+    return "connect-vpn";
+  }
+
+  return "reconnect-relay";
+}
+
+function OnboardingRelayConnectionErrorCard({
+  isSaving,
+  message,
+  relayUrl,
+}: {
+  isSaving: boolean;
+  message: string;
+  relayUrl?: string | null;
+}) {
+  const { isPending: isReconnectPending, reconnect } = useReconnectRelay();
+  const [dismissedErrorMessage, setDismissedErrorMessage] = React.useState<
+    string | null
+  >(null);
+  const [connectivityAction, setConnectivityAction] =
+    React.useState<OnboardingConnectivityAction | null>(null);
+  const [successAction, setSuccessAction] =
+    React.useState<OnboardingConnectivityAction | null>(null);
+  const connectivityActionRef =
+    React.useRef<OnboardingConnectivityAction | null>(null);
+  const successTimeoutRef = React.useRef<number | null>(null);
+  const wasSavingRef = React.useRef(isSaving);
+  const cardVariant = resolveOnboardingRelayCardVariant(message, relayUrl);
+  const isActionPending = connectivityAction !== null || isReconnectPending;
+
+  React.useEffect(() => {
+    return () => {
+      if (successTimeoutRef.current !== null) {
+        window.clearTimeout(successTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (isSaving && !wasSavingRef.current) {
+      if (successTimeoutRef.current !== null) {
+        window.clearTimeout(successTimeoutRef.current);
+        successTimeoutRef.current = null;
+      }
+      setDismissedErrorMessage(null);
+      setSuccessAction(null);
+    }
+    wasSavingRef.current = isSaving;
+  }, [isSaving]);
+
+  const markSuccess = React.useCallback(
+    (action: OnboardingConnectivityAction) => {
+      setSuccessAction(action);
+      if (successTimeoutRef.current !== null) {
+        window.clearTimeout(successTimeoutRef.current);
+      }
+      successTimeoutRef.current = window.setTimeout(() => {
+        successTimeoutRef.current = null;
+        setDismissedErrorMessage(message);
+      }, ONBOARDING_CONNECTIVITY_SUCCESS_AUTO_DISMISS_MS);
+    },
+    [message],
+  );
+
+  const runConnectivityAction = React.useCallback(
+    (
+      action: OnboardingConnectivityAction,
+      runAction: () => Promise<boolean | undefined>,
+    ) => {
+      if (connectivityActionRef.current !== null) {
+        return;
+      }
+
+      connectivityActionRef.current = action;
+      setConnectivityAction(action);
+      setSuccessAction(null);
+      void Promise.resolve()
+        .then(runAction)
+        .then((didReconnect) => {
+          if (didReconnect !== false) {
+            markSuccess(action);
+          }
+        })
+        .catch((error) => {
+          const detail = error instanceof Error ? error.message : String(error);
+          const label =
+            action === "refresh-access"
+              ? "Could not refresh VPN access."
+              : action === "connect-vpn"
+                ? "Could not turn on VPN."
+                : "Could not reconnect to the relay.";
+          toast.error(`${label} ${detail}`);
+        })
+        .finally(() => {
+          connectivityActionRef.current = null;
+          setConnectivityAction(null);
+        });
+    },
+    [markSuccess],
+  );
+
+  const handleConnectWarpVpn = React.useCallback(() => {
+    runConnectivityAction("connect-vpn", async () => {
+      await connectWarpVpn();
+      return reconnect();
+    });
+  }, [reconnect, runConnectivityAction]);
+
+  const handleReconnectRelay = React.useCallback(() => {
+    runConnectivityAction("reconnect-relay", reconnect);
+  }, [reconnect, runConnectivityAction]);
+
+  const handleRefreshWarpAccess = React.useCallback(() => {
+    runConnectivityAction("refresh-access", async () => {
+      await refreshWarpAccess();
+      return reconnect();
+    });
+  }, [reconnect, runConnectivityAction]);
+
+  if (dismissedErrorMessage === message) {
+    return null;
+  }
+
+  return (
+    <div className="fixed bottom-4 left-4 z-50 w-[calc(100vw-2rem)] text-left sm:bottom-6 sm:left-6 sm:w-[22rem]">
+      {cardVariant === "refresh-access" ? (
+        <SidebarBlockAccessRefreshCompactCard
+          actionTestId="onboarding-refresh-vpn-access"
+          isActionDisabled={isActionPending}
+          isActionPending={connectivityAction === "refresh-access"}
+          isActionSuccess={successAction === "refresh-access"}
+          onAction={handleRefreshWarpAccess}
+          onDismiss={() => setDismissedErrorMessage(message)}
+          surface="secondary"
+          testId="onboarding-vpn-access-refresh-card"
+        />
+      ) : cardVariant === "connect-vpn" ? (
+        <SidebarBlockVpnOffCompactCard
+          actionTestId="onboarding-connect-vpn"
+          isActionDisabled={isActionPending}
+          isActionPending={connectivityAction === "connect-vpn"}
+          isActionSuccess={successAction === "connect-vpn"}
+          onAction={handleConnectWarpVpn}
+          onDismiss={() => setDismissedErrorMessage(message)}
+          surface="secondary"
+          testId="onboarding-vpn-off-card"
+        />
+      ) : (
+        <SidebarRelayConnectionCompactCard
+          actionTestId="onboarding-reconnect-relay"
+          isActionDisabled={isActionPending}
+          isConnected={successAction === "reconnect-relay"}
+          isReconnectPending={
+            connectivityAction === "reconnect-relay" || isReconnectPending
+          }
+          onDismiss={() => setDismissedErrorMessage(message)}
+          onReconnect={handleReconnectRelay}
+          surface="secondary"
+          testId="onboarding-relay-reconnect-card"
+        />
+      )}
+    </div>
+  );
+}
+
+function ErrorBanner({
+  isSaving,
+  message,
+  relayUrl,
+}: {
+  isSaving: boolean;
+  message: string | null;
+  relayUrl?: string | null;
+}) {
   if (!message) {
     return null;
+  }
+
+  if (isRelayUnreachableError(message)) {
+    return (
+      <OnboardingRelayConnectionErrorCard
+        isSaving={isSaving}
+        key={message}
+        message={message}
+        relayUrl={relayUrl}
+      />
+    );
   }
 
   return (
@@ -32,6 +294,7 @@ function ErrorBanner({ message }: { message: string | null }) {
 export function ProfileStep({
   actions,
   direction,
+  relayUrl,
   transitionEffect = "line-slide",
   state,
 }: ProfileStepProps) {
@@ -116,7 +379,11 @@ export function ProfileStep({
       </label>
 
       {saveRecovery.errorMessage ? (
-        <ErrorBanner message={saveRecovery.errorMessage} />
+        <ErrorBanner
+          isSaving={isSaving}
+          message={saveRecovery.errorMessage}
+          relayUrl={relayUrl}
+        />
       ) : null}
 
       <div className="mt-12 flex w-full max-w-[500px] flex-col gap-3">
