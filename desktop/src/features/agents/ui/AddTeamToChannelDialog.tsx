@@ -178,7 +178,7 @@ export function AddTeamToChannelDialog({
                     >
                       <ProfileAvatar
                         avatarUrl={persona.avatarUrl}
-                        className="h-5 w-5 text-[9px]"
+                        className="h-5 w-5 text-[0.5625rem]"
                         label={persona.displayName}
                       />
                       <span className="text-xs font-medium">

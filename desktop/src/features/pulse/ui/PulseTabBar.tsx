@@ -103,7 +103,7 @@ export function PulseTabBar({
               >
                 Agents
                 {relayAgents.length > 0 ? (
-                  <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-medium text-muted-foreground">
+                  <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[0.625rem] font-medium text-muted-foreground">
                     {relayAgents.length}
                   </span>
                 ) : null}
